@@ -1,0 +1,429 @@
+<?php
+
+namespace App\Domain\Bookings;
+
+use App\Domain\Availability\InventoryService;
+use App\Domain\Availability\RoomConflict;
+use App\Domain\Pricing\PricingService;
+use App\Domain\Tasks\TurnoverService;
+use App\Models\Booking;
+use App\Models\BookingCharge;
+use App\Models\BookingNight;
+use App\Models\BookingRoom;
+use App\Models\BookingStatusEvent;
+use App\Models\PricingSnapshot;
+use App\Models\Room;
+use App\Support\Audit;
+use App\Support\Local;
+use App\Support\Settings;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+
+class BookingService
+{
+    public function __construct(
+        private InventoryService $inventory,
+        private PricingService $pricing,
+        private TurnoverService $turnover,
+    ) {
+    }
+
+    /** Creates an inquiry (non-blocking). $data holds guest_id, source, dates, party and room_ids. */
+    public function createInquiry(array $data): Booking
+    {
+        if (! empty($data['idempotency_key'])) {
+            $existing = Booking::where('idempotency_key', $data['idempotency_key'])->first();
+            if ($existing) {
+                return $existing;
+            }
+        }
+
+        $rooms = Room::whereIn('id', $data['room_ids'])->orderBy('id')->get();
+        if ($rooms->isEmpty()) {
+            throw new RoomConflict('Select at least one room.');
+        }
+        if ($data['check_in'] >= $data['check_out']) {
+            throw new RoomConflict('Check-out must be after check-in.');
+        }
+
+        $guestCount = (int) $data['adults'] + (int) ($data['children'] ?? 0);
+        $this->assertCapacity($rooms, $guestCount);
+
+        return DB::transaction(function () use ($data, $rooms, $guestCount) {
+            $booking = Booking::create([
+                'reference' => $this->newReference(),
+                'idempotency_key' => $data['idempotency_key'] ?? null,
+                'guest_id' => $data['guest_id'],
+                'property_id' => $rooms->first()->property_id,
+                'booking_source_id' => $data['booking_source_id'],
+                'source_reference' => $data['source_reference'] ?? null,
+                'referrer' => $data['referrer'] ?? null,
+                'status' => Booking::INQUIRY,
+                'check_in' => $data['check_in'],
+                'check_out' => $data['check_out'],
+                'approved_early_time' => $data['approved_early_time'] ?? null,
+                'adults' => $data['adults'],
+                'children' => $data['children'] ?? 0,
+                'guest_count' => $guestCount,
+                'special_requests' => $data['special_requests'] ?? null,
+                'internal_notes' => $data['internal_notes'] ?? null,
+                'created_by' => auth()->id(),
+            ]);
+
+            $this->writeRooms($booking, $rooms, $data['check_in'], $data['check_out'], $guestCount);
+            $this->event($booking, null, Booking::INQUIRY, 'Created');
+
+            return $booking;
+        });
+    }
+
+    /** Places a time-limited hold. Only an explicit hold blocks inventory; a quote never does. */
+    public function hold(Booking $booking, ?int $hours = null): Booking
+    {
+        $this->assertStatus($booking, [Booking::INQUIRY, Booking::TENTATIVE, Booking::EXPIRED], 'hold');
+        $hours ??= (int) Settings::get('holds.default_hours');
+
+        return $this->lockForBooking($booking, function ($fresh) use ($hours) {
+            $this->assertRoomsFree($fresh);
+            $from = $fresh->status;
+            $fresh->update(['status' => Booking::TENTATIVE, 'hold_expires_at' => now()->addHours($hours)]);
+            $this->event($fresh, $from, Booking::TENTATIVE, "Hold for {$hours}h");
+
+            return $fresh;
+        });
+    }
+
+    /** Confirms and writes the immutable price snapshot. Only one of two concurrent confirmations can succeed. */
+    public function confirm(Booking $booking, array $pricingOpts = []): Booking
+    {
+        return $this->lockForBooking($booking, function ($fresh) use ($pricingOpts) {
+            $this->assertStatus($fresh, [Booking::INQUIRY, Booking::TENTATIVE], 'confirm');
+            $this->assertRoomsFree($fresh);
+
+            if ($fresh->status === Booking::TENTATIVE && $fresh->hold_expires_at?->isPast()) {
+                $this->event($fresh, Booking::TENTATIVE, Booking::TENTATIVE, 'Confirmed after hold lapse; availability rechecked');
+            }
+
+            if (Settings::get('finance.require_verification_to_confirm')
+                && ! $fresh->receipts()->where('verification_status', 'verified')->exists()) {
+                throw new RoomConflict('Policy requires a verified payment before confirmation.');
+            }
+
+            $this->reprice($fresh, $pricingOpts, 'Confirmation');
+            $from = $fresh->status;
+            $fresh->update([
+                'status' => Booking::CONFIRMED,
+                'hold_expires_at' => null,
+                'confirmed_by' => auth()->id(),
+                'confirmed_at' => now(),
+            ]);
+            $this->event($fresh, $from, Booking::CONFIRMED, 'Confirmed by staff');
+
+            return $fresh;
+        });
+    }
+
+    /** Date, room or party change. Revalidates every conflict and writes a new pricing version. */
+    public function amend(Booking $booking, array $data, array $pricingOpts = []): Booking
+    {
+        $roomIds = $data['room_ids'] ?? $booking->activeRooms()->pluck('room_id')->all();
+        $locks = array_merge($roomIds, $booking->activeRooms()->pluck('room_id')->all());
+
+        return $this->inventory->withRoomLocks($locks, function () use ($booking, $data, $roomIds, $pricingOpts) {
+            $fresh = Booking::lockForUpdate()->findOrFail($booking->id);
+            $this->assertStatus($fresh, [Booking::INQUIRY, Booking::TENTATIVE, Booking::CONFIRMED, Booking::CHECKED_IN], 'amend');
+
+            $checkIn = $data['check_in'] ?? $fresh->check_in->toDateString();
+            $checkOut = $data['check_out'] ?? $fresh->check_out->toDateString();
+            $adults = (int) ($data['adults'] ?? $fresh->adults);
+            $children = (int) ($data['children'] ?? $fresh->children);
+            $rooms = Room::whereIn('id', $roomIds)->orderBy('id')->get();
+            if ($rooms->isEmpty()) {
+                throw new RoomConflict('Select at least one room.');
+            }
+            $this->assertCapacity($rooms, $adults + $children);
+
+            if (in_array($fresh->status, [Booking::TENTATIVE, Booking::CONFIRMED, Booking::CHECKED_IN], true)) {
+                foreach ($rooms as $room) {
+                    $this->inventory->assertFree($room, $checkIn, $checkOut, $fresh->id);
+                }
+            }
+
+            $fresh->update([
+                'check_in' => $checkIn,
+                'check_out' => $checkOut,
+                'adults' => $adults,
+                'children' => $children,
+                'guest_count' => $adults + $children,
+                'property_id' => $rooms->first()->property_id,
+                'approved_early_time' => array_key_exists('approved_early_time', $data) ? $data['approved_early_time'] : $fresh->approved_early_time,
+            ]);
+            $fresh->activeRooms()->update(['released_at' => now()]);
+            $this->writeRooms($fresh, $rooms, $checkIn, $checkOut, $adults + $children);
+
+            if (in_array($fresh->status, [Booking::CONFIRMED, Booking::CHECKED_IN], true)) {
+                $this->reprice($fresh, $pricingOpts, $data['reason'] ?? 'Amendment');
+            }
+            $this->event($fresh, $fresh->status, $fresh->status, 'Amended: '.($data['reason'] ?? 'dates, rooms or party'));
+            Audit::log('booking.amended', $fresh, ['check_in' => $checkIn, 'check_out' => $checkOut, 'room_ids' => $roomIds]);
+
+            return $fresh;
+        });
+    }
+
+    public function cancel(Booking $booking, string $reason): Booking
+    {
+        return $this->lockForBooking($booking, function ($fresh) use ($reason) {
+            $this->assertStatus($fresh, [Booking::INQUIRY, Booking::TENTATIVE, Booking::CONFIRMED], 'cancel');
+            $from = $fresh->status;
+            $fresh->update(['status' => Booking::CANCELLED, 'cancellation_reason' => $reason, 'hold_expires_at' => null]);
+            $fresh->activeRooms()->update(['released_at' => now()]);
+            $this->event($fresh, $from, Booking::CANCELLED, $reason);
+
+            return $fresh;
+        });
+    }
+
+    public function markNoShow(Booking $booking, ?string $note = null): Booking
+    {
+        return $this->lockForBooking($booking, function ($fresh) use ($note) {
+            $this->assertStatus($fresh, [Booking::CONFIRMED], 'mark as no-show');
+            if ($fresh->check_in->toDateString() > Local::today()) {
+                throw new RoomConflict('A booking cannot be a no-show before its check-in date.');
+            }
+            $fresh->update(['status' => Booking::NO_SHOW]);
+            $fresh->activeRooms()->update(['released_at' => now()]);
+            $this->event($fresh, Booking::CONFIRMED, Booking::NO_SHOW, $note ?? 'No show');
+
+            return $fresh;
+        });
+    }
+
+    /** A vacant but dirty room blocks check-in: availability and readiness are separate. */
+    public function checkIn(Booking $booking, bool $overrideReadiness = false, ?string $overrideNote = null): Booking
+    {
+        return $this->lockForBooking($booking, function ($fresh, $rooms) use ($overrideReadiness, $overrideNote) {
+            $this->assertStatus($fresh, [Booking::CONFIRMED], 'check in');
+            foreach ($rooms as $room) {
+                if ($room->hasOpenSafetyBlock()) {
+                    throw new RoomConflict("{$room->name} has an unresolved safety-critical work order.");
+                }
+                if ($room->housekeeping_status !== 'ready' && ! $overrideReadiness) {
+                    throw new RoomConflict("{$room->name} is vacant but not ready (housekeeping: {$room->housekeeping_status}). Complete turnover and inspection first.");
+                }
+            }
+            $fresh->update(['status' => Booking::CHECKED_IN, 'actual_check_in_at' => now()]);
+            $note = $overrideReadiness ? 'Checked in with readiness override: '.$overrideNote : 'Checked in';
+            $this->event($fresh, Booking::CONFIRMED, Booking::CHECKED_IN, $note);
+            if ($overrideReadiness) {
+                Audit::log('booking.readiness_override', $fresh, ['note' => $overrideNote]);
+            }
+
+            return $fresh;
+        });
+    }
+
+    /** Safe to retry: a repeated checkout returns without duplicating turnover work. */
+    public function checkOut(Booking $booking): Booking
+    {
+        return $this->lockForBooking($booking, function ($fresh, $rooms) {
+            if ($fresh->status === Booking::CHECKED_OUT) {
+                return $fresh;
+            }
+            $this->assertStatus($fresh, [Booking::CHECKED_IN], 'check out');
+            $fresh->update(['status' => Booking::CHECKED_OUT, 'actual_check_out_at' => now()]);
+            $this->event($fresh, Booking::CHECKED_IN, Booking::CHECKED_OUT, 'Checked out');
+
+            foreach ($rooms as $room) {
+                $this->turnover->onCheckout($fresh, $room);
+            }
+
+            return $fresh;
+        });
+    }
+
+    /** Idempotent; a confirmed booking is never touched because the status guard is in the WHERE clause. */
+    public function expireHolds(): int
+    {
+        $count = 0;
+        $due = Booking::where('status', Booking::TENTATIVE)
+            ->whereNotNull('hold_expires_at')
+            ->where('hold_expires_at', '<=', now())
+            ->pluck('id');
+
+        foreach ($due as $id) {
+            DB::transaction(function () use ($id, &$count) {
+                $updated = Booking::where('id', $id)
+                    ->where('status', Booking::TENTATIVE)
+                    ->where('hold_expires_at', '<=', now())
+                    ->update(['status' => Booking::EXPIRED]);
+                if ($updated) {
+                    $count++;
+                    BookingStatusEvent::create([
+                        'booking_id' => $id,
+                        'from_status' => Booking::TENTATIVE,
+                        'to_status' => Booking::EXPIRED,
+                        'note' => 'Hold expired automatically',
+                        'created_at' => now(),
+                    ]);
+                }
+            });
+        }
+
+        return $count;
+    }
+
+    /** Runs $work with booking rooms locked first, then the booking row, always in that order. */
+    private function lockForBooking(Booking $booking, callable $work): mixed
+    {
+        $roomIds = $booking->activeRooms()->pluck('room_id')->all();
+
+        return $this->inventory->withRoomLocks($roomIds, function ($rooms) use ($booking, $work) {
+            $fresh = Booking::lockForUpdate()->findOrFail($booking->id);
+
+            // A concurrent move could have changed the rooms between reading and locking them.
+            $current = $fresh->activeRooms()->pluck('room_id')->sort()->values()->all();
+            if ($current !== $rooms->keys()->sort()->values()->all()) {
+                throw new RoomConflict('This booking was just changed by someone else. Reload and try again.');
+            }
+
+            return $work($fresh, $rooms);
+        });
+    }
+
+    private function assertRoomsFree(Booking $booking): void
+    {
+        foreach ($booking->activeRooms()->with('room')->get() as $br) {
+            $this->inventory->assertFree($br->room, $br->check_in->toDateString(), $br->check_out->toDateString(), $booking->id);
+        }
+    }
+
+    private function assertStatus(Booking $booking, array $allowed, string $action): void
+    {
+        if (! in_array($booking->status, $allowed, true)) {
+            throw new RoomConflict("Cannot {$action} a booking in status {$booking->status}.");
+        }
+    }
+
+    private function assertCapacity($rooms, int $guests): void
+    {
+        $capacity = $rooms->sum('max_guests');
+        if ($guests > $capacity) {
+            $names = $rooms->pluck('name')->join(', ');
+            throw new RoomConflict("{$names} allows at most {$capacity} guests; {$guests} requested.");
+        }
+    }
+
+    private function writeRooms(Booking $booking, $rooms, string $in, string $out, int $guests): void
+    {
+        $remaining = $guests;
+        foreach ($rooms as $room) {
+            $here = min($remaining, $room->max_guests);
+            $remaining -= $here;
+            BookingRoom::create([
+                'booking_id' => $booking->id,
+                'room_id' => $room->id,
+                'check_in' => $in,
+                'check_out' => $out,
+                'guest_count' => $here,
+            ]);
+        }
+    }
+
+    /**
+     * Replaces the priced lines with a new immutable version. Manually added charges
+     * (damage, parking, adjustments) survive repricing because only engine types are voided.
+     */
+    private function reprice(Booking $booking, array $opts, string $reason): void
+    {
+        $version = $booking->pricing_version + 1;
+        $engineTypes = ['accommodation', 'extra_guest', 'early_check_in'];
+        $opts = array_merge(['source_id' => $booking->booking_source_id], $opts);
+        if ($booking->approved_early_time) {
+            $opts['early_time'] = substr($booking->approved_early_time, 0, 5);
+        }
+
+        $booking->charges()->whereIn('type', $engineTypes)->whereNull('voided_at')
+            ->update(['voided_at' => now(), 'void_reason' => "Superseded by pricing v{$version}"]);
+        $booking->nights()->where('is_current', true)->update(['is_current' => false]);
+
+        $all = [];
+        $earlyApplied = false;
+        foreach ($booking->activeRooms()->with('room')->orderBy('room_id')->get() as $br) {
+            $roomOpts = $opts;
+            if ($earlyApplied) {
+                unset($roomOpts['early_time']);
+            }
+            $roomOpts['parking_cents'] = $earlyApplied ? 0 : ($opts['parking_cents'] ?? 0);
+            $roomOpts['discount_cents'] = $earlyApplied ? 0 : ($opts['discount_cents'] ?? 0);
+            $earlyApplied = true;
+
+            $quote = $this->pricing->quote($br->room, $br->check_in->toDateString(), $br->check_out->toDateString(), max(1, $br->guest_count), $roomOpts);
+            $all[] = ['room' => $br->room->name, 'unit_code' => $br->room->unit_code] + $quote;
+
+            foreach ($quote['lines'] as $line) {
+                BookingCharge::create($line + [
+                    'booking_id' => $booking->id,
+                    'pricing_version' => $version,
+                    'approved_by' => $line['type'] === 'discount' ? auth()->id() : null,
+                    'created_by' => auth()->id(),
+                ]);
+            }
+            foreach ($quote['nights'] as $n) {
+                BookingNight::create([
+                    'booking_id' => $booking->id,
+                    'room_id' => $br->room_id,
+                    'stay_date' => $n['date'],
+                    'rate_cents' => $n['cents'],
+                    'rate_source' => $n['source'],
+                    'pricing_version' => $version,
+                ]);
+            }
+        }
+
+        $total = (int) $booking->activeCharges()->sum('amount_cents');
+        PricingSnapshot::create([
+            'booking_id' => $booking->id,
+            'version' => $version,
+            'snapshot' => ['rooms' => $all, 'settings' => [
+                'weekend_days' => Settings::get('pricing.weekend_days'),
+                'extra_guest_unit' => Settings::get('pricing.extra_guest_unit'),
+                'extra_guest_cents' => Settings::get('pricing.extra_guest_cents'),
+                'early_fee_cents_per_hour' => Settings::get('pricing.early_fee_cents_per_hour'),
+            ]],
+            'total_cents' => $total,
+            'reason' => $reason,
+            'created_by' => auth()->id(),
+            'created_at' => now(),
+        ]);
+        $booking->update(['pricing_version' => $version, 'total_cents' => $total]);
+    }
+
+    /** Recalculates the stored total after a non-engine charge is added or voided. */
+    public function syncTotal(Booking $booking): void
+    {
+        $booking->update(['total_cents' => (int) $booking->activeCharges()->sum('amount_cents')]);
+    }
+
+    private function event(Booking $booking, ?string $from, string $to, ?string $note): void
+    {
+        BookingStatusEvent::create([
+            'booking_id' => $booking->id,
+            'from_status' => $from,
+            'to_status' => $to,
+            'note' => $note,
+            'user_id' => auth()->id(),
+            'created_at' => now(),
+        ]);
+        Audit::log('booking.'.$to, $booking, ['from' => $from, 'note' => $note]);
+    }
+
+    private function newReference(): string
+    {
+        do {
+            $ref = 'UQ-'.Local::now()->format('ym').'-'.Str::upper(Str::random(5));
+        } while (Booking::where('reference', $ref)->exists());
+
+        return $ref;
+    }
+}

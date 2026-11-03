@@ -1,0 +1,209 @@
+<?php
+
+namespace App\Domain\Finance;
+
+use App\Domain\Availability\RoomConflict;
+use App\Models\Booking;
+use App\Models\ExternalSettlement;
+use App\Models\PeriodLock;
+use App\Models\Receipt;
+use App\Models\Refund;
+use App\Support\Audit;
+use App\Support\Local;
+use Carbon\CarbonImmutable;
+use Illuminate\Support\Str;
+
+class FinanceService
+{
+    /** A receipt counts toward the balance only after verification; a screenshot is not cleared funds. */
+    public function recordReceipt(array $data): Receipt
+    {
+        $receivedAt = CarbonImmutable::parse($data['received_at'], Local::tz());
+        $this->assertOpen($receivedAt->toDateString());
+
+        $receipt = Receipt::create([
+            'reference' => 'RC-'.Local::now()->format('ym').'-'.Str::upper(Str::random(6)),
+            'booking_id' => $data['booking_id'] ?? null,
+            'received_at' => $receivedAt->utc(),
+            'receipt_date' => $receivedAt->toDateString(),
+            'amount_cents' => $data['amount_cents'],
+            'method' => $data['method'],
+            'payment_account_id' => $data['payment_account_id'] ?? null,
+            'external_reference' => $data['external_reference'] ?? null,
+            'evidence_path' => $data['evidence_path'] ?? null,
+            'verification_status' => 'pending',
+            'entered_by' => auth()->id(),
+        ]);
+        Audit::log('receipt.recorded', $receipt, ['amount_cents' => $receipt->amount_cents, 'method' => $receipt->method]);
+
+        return $receipt;
+    }
+
+    public function review(Receipt $receipt, bool $verified, ?string $note = null): void
+    {
+        $this->assertOpen($receipt->receipt_date->toDateString());
+        if ($receipt->verification_status !== 'pending') {
+            throw new RoomConflict("Receipt is already {$receipt->verification_status}.");
+        }
+        $receipt->update([
+            'verification_status' => $verified ? 'verified' : 'rejected',
+            'reviewed_by' => auth()->id(),
+            'reviewed_at' => now(),
+            'review_note' => $note,
+        ]);
+        Audit::log('receipt.'.($verified ? 'verified' : 'rejected'), $receipt, ['note' => $note]);
+    }
+
+    /** Other receipts or payouts carrying the same reference, for the reconciliation queue. */
+    public function duplicateReferences(): array
+    {
+        return Receipt::whereNotNull('external_reference')
+            ->where('verification_status', '!=', 'rejected')
+            ->selectRaw('external_reference, COUNT(*) as n')
+            ->groupBy('external_reference')
+            ->having('n', '>', 1)
+            ->pluck('n', 'external_reference')
+            ->all();
+    }
+
+    public function balance(Booking $booking): array
+    {
+        $charges = (int) $booking->activeCharges()->sum('amount_cents');
+        $verified = (int) $booking->receipts()->where('verification_status', 'verified')->sum('amount_cents');
+        $pending = (int) $booking->receipts()->where('verification_status', 'pending')->sum('amount_cents');
+        $refunded = (int) $booking->refunds()->where('status', 'executed')->sum('amount_cents');
+        // A settled channel booking was paid by the guest on the platform. Gross clears the guest
+        // balance; fees and payout differences stay on the settlement, so cash is not double counted.
+        $settled = (int) $booking->settlements()->whereNotNull('actual_payout_cents')->sum('gross_cents');
+
+        $applied = $verified + $settled - $refunded;
+        $due = $charges - $applied;
+
+        return [
+            'charges_cents' => $charges,
+            'verified_cents' => $verified,
+            'pending_cents' => $pending,
+            'refunded_cents' => $refunded,
+            'settled_gross_cents' => $settled,
+            'balance_cents' => $due,
+            'status' => $this->balanceStatus($charges, $applied, $pending, $refunded),
+        ];
+    }
+
+    private function balanceStatus(int $charges, int $applied, int $pending, int $refunded): string
+    {
+        if ($refunded > 0 && $applied <= 0) {
+            return 'Refunded';
+        }
+        if ($pending > 0 && $applied < $charges) {
+            return 'Payment Under Review';
+        }
+        if ($applied > $charges) {
+            return 'Overpaid';
+        }
+        if ($charges > 0 && $applied === $charges) {
+            return 'Paid';
+        }
+
+        return $applied > 0 ? 'Partially Paid' : 'Unpaid';
+    }
+
+    public function requestRefund(Booking $booking, int $cents, string $reason, ?int $receiptId = null): Refund
+    {
+        return Refund::create([
+            'booking_id' => $booking->id,
+            'receipt_id' => $receiptId,
+            'amount_cents' => $cents,
+            'reason' => $reason,
+            'status' => 'requested',
+            'requested_by' => auth()->id(),
+        ]);
+    }
+
+    /** Execution is a manual record of money already sent; nothing is paid out by the system. */
+    public function decideRefund(Refund $refund, string $action, ?string $executedOn = null): void
+    {
+        $next = match ($action) {
+            'approve' => $refund->status === 'requested' ? 'approved' : null,
+            'reject' => $refund->status === 'requested' ? 'rejected' : null,
+            'execute' => $refund->status === 'approved' ? 'executed' : null,
+            default => null,
+        };
+        if (! $next) {
+            throw new RoomConflict("Cannot {$action} a refund in status {$refund->status}.");
+        }
+        $changes = ['status' => $next];
+        if ($action === 'approve') {
+            $changes['approved_by'] = auth()->id();
+        }
+        if ($action === 'execute') {
+            $date = $executedOn ?? Local::today();
+            $this->assertOpen($date);
+            $changes['executed_on'] = $date;
+        }
+        $refund->update($changes);
+        Audit::log('refund.'.$next, $refund, ['amount_cents' => $refund->amount_cents]);
+    }
+
+    public function recordSettlement(array $data): ExternalSettlement
+    {
+        if (! empty($data['payout_date'])) {
+            $this->assertOpen($data['payout_date']);
+        }
+        if (! empty($data['payout_reference'])) {
+            $dupe = ExternalSettlement::where('provider', $data['provider'])
+                ->where('payout_reference', $data['payout_reference'])
+                ->where('booking_id', $data['booking_id'] ?? null)
+                ->exists();
+            if ($dupe) {
+                throw new RoomConflict('This payout reference is already recorded for this booking.');
+            }
+        }
+        $gross = (int) $data['gross_cents'];
+        $fees = (int) ($data['fees_cents'] ?? 0);
+        $adj = (int) ($data['adjustments_cents'] ?? 0);
+
+        $row = ExternalSettlement::create([
+            'booking_id' => $data['booking_id'] ?? null,
+            'provider' => $data['provider'],
+            'payout_reference' => $data['payout_reference'] ?? null,
+            'gross_cents' => $gross,
+            'fees_cents' => $fees,
+            'adjustments_cents' => $adj,
+            'expected_net_cents' => $gross - $fees + $adj,
+            'actual_payout_cents' => $data['actual_payout_cents'] ?? null,
+            'payout_date' => $data['payout_date'] ?? null,
+            'payment_account_id' => $data['payment_account_id'] ?? null,
+            'notes' => $data['notes'] ?? null,
+            'created_by' => auth()->id(),
+        ]);
+        Audit::log('settlement.recorded', $row, ['expected_net_cents' => $row->expected_net_cents]);
+
+        return $row;
+    }
+
+    /** Closed months accept no silent edits; corrections are dated in an open period. */
+    public function assertOpen(string $date): void
+    {
+        $period = substr($date, 0, 7);
+        if (PeriodLock::where('period', $period)->exists()) {
+            throw new RoomConflict("{$period} is locked. Record an adjustment dated in an open period.");
+        }
+    }
+
+    public function lockPeriod(string $period, ?string $notes = null): PeriodLock
+    {
+        if (PeriodLock::where('period', $period)->exists()) {
+            throw new RoomConflict("{$period} is already locked.");
+        }
+        $lock = PeriodLock::create([
+            'period' => $period,
+            'locked_by' => auth()->id(),
+            'locked_at' => now(),
+            'notes' => $notes,
+        ]);
+        Audit::log('period.locked', $lock, ['period' => $period]);
+
+        return $lock;
+    }
+}

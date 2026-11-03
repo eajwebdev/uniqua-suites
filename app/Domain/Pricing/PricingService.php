@@ -1,0 +1,185 @@
+<?php
+
+namespace App\Domain\Pricing;
+
+use App\Domain\Availability\RoomConflict;
+use App\Models\RateOverride;
+use App\Models\RateRule;
+use App\Models\Room;
+use App\Support\Settings;
+use Carbon\CarbonImmutable;
+
+class PricingService
+{
+    /**
+     * Calculates a stay. All money is integer centavos.
+     *
+     * @param  array{source_id?:?int, early_time?:?string, discount_cents?:int, discount_reason?:?string, parking_cents?:int, service_cents?:int}  $opts
+     * @return array{lines: list<array>, nights: list<array>, total_cents: int, warnings: list<string>}
+     */
+    public function quote(Room $room, string $checkIn, string $checkOut, int $guests, array $opts = []): array
+    {
+        if ($checkIn >= $checkOut) {
+            throw new RoomConflict('Check-out must be after check-in.');
+        }
+        if ($guests < 1) {
+            throw new RoomConflict('At least one guest is required.');
+        }
+        if ($guests > $room->max_guests) {
+            throw new RoomConflict("{$room->name} allows at most {$room->max_guests} guests; {$guests} requested.");
+        }
+
+        $warnings = [];
+        $nights = $this->nightly($room, $checkIn, $checkOut, $opts['source_id'] ?? null);
+        $lines = [];
+
+        foreach ($nights as $n) {
+            $lines[] = [
+                'type' => 'accommodation',
+                'description' => $n['date'].' · '.$n['label'],
+                'quantity' => 1,
+                'unit_cents' => $n['cents'],
+                'amount_cents' => $n['cents'],
+                'charge_date' => $n['date'],
+            ];
+        }
+
+        $extra = max(0, $guests - $room->included_guests);
+        if ($extra > 0) {
+            $unit = Settings::get('pricing.extra_guest_unit');
+            $fee = (int) Settings::get('pricing.extra_guest_cents');
+            if ($unit === null) {
+                $warnings[] = "{$extra} guest(s) above the included {$room->included_guests}: extra-guest fee not applied because the owner has not yet approved per-night or per-stay billing.";
+            } else {
+                $qty = $unit === 'per_night' ? $extra * count($nights) : $extra;
+                $lines[] = [
+                    'type' => 'extra_guest',
+                    'description' => "{$extra} extra guest(s), ".str_replace('_', ' ', $unit),
+                    'quantity' => $qty,
+                    'unit_cents' => $fee,
+                    'amount_cents' => $qty * $fee,
+                    'charge_date' => $checkIn,
+                ];
+            }
+        }
+
+        if (! empty($opts['early_time'])) {
+            $early = $this->earlyFee($opts['early_time']);
+            if ($early['hours'] > 0) {
+                $lines[] = [
+                    'type' => 'early_check_in',
+                    'description' => "Early check-in {$opts['early_time']} ({$early['hours']} hour(s) before {$early['standard']})",
+                    'quantity' => $early['hours'],
+                    'unit_cents' => $early['unit_cents'],
+                    'amount_cents' => $early['cents'],
+                    'charge_date' => $checkIn,
+                ];
+                $warnings[] = 'Early check-in is subject to availability, room readiness and staff approval.';
+            }
+        }
+
+        if (($opts['parking_cents'] ?? 0) > 0) {
+            $lines[] = ['type' => 'parking', 'description' => 'Parking', 'quantity' => 1, 'unit_cents' => $opts['parking_cents'], 'amount_cents' => $opts['parking_cents'], 'charge_date' => $checkIn];
+        }
+        if (($opts['service_cents'] ?? 0) > 0) {
+            $lines[] = ['type' => 'service', 'description' => 'Other services', 'quantity' => 1, 'unit_cents' => $opts['service_cents'], 'amount_cents' => $opts['service_cents'], 'charge_date' => $checkIn];
+        }
+        if (($opts['discount_cents'] ?? 0) > 0) {
+            $lines[] = [
+                'type' => 'discount',
+                'description' => 'Discount: '.($opts['discount_reason'] ?? 'authorized'),
+                'quantity' => 1,
+                'unit_cents' => -$opts['discount_cents'],
+                'amount_cents' => -$opts['discount_cents'],
+                'charge_date' => $checkIn,
+            ];
+        }
+
+        return [
+            'lines' => $lines,
+            'nights' => $nights,
+            'total_cents' => array_sum(array_column($lines, 'amount_cents')),
+            'warnings' => $warnings,
+        ];
+    }
+
+    /** One entry per occupied night, priced from that night's date and effective rule. */
+    public function nightly(Room $room, string $checkIn, string $checkOut, ?int $sourceId = null): array
+    {
+        $weekendDays = Settings::get('pricing.weekend_days');
+        if ($weekendDays === null) {
+            throw new PricingPolicyPending('Weekend days are not configured. Set them in Settings before quoting; the source workbook does not define them.');
+        }
+
+        $nights = [];
+        $day = CarbonImmutable::parse($checkIn);
+        $end = CarbonImmutable::parse($checkOut);
+
+        while ($day->lt($end)) {
+            $date = $day->toDateString();
+            $override = $this->override($room->id, $date, $sourceId);
+
+            if ($override) {
+                $nights[] = ['date' => $date, 'room_id' => $room->id, 'cents' => (int) $override->nightly_cents, 'label' => $override->label, 'source' => 'override:'.$override->id];
+            } else {
+                $rule = $this->rule($room->id, $date);
+                if (! $rule) {
+                    throw new RoomConflict("No rate is configured for {$room->name} on {$date}.");
+                }
+                $isWeekend = in_array($day->dayOfWeekIso, $weekendDays, true);
+                $nights[] = [
+                    'date' => $date,
+                    'room_id' => $room->id,
+                    'cents' => (int) ($isWeekend ? $rule->weekend_cents : $rule->weekday_cents),
+                    'label' => $isWeekend ? 'Weekend rate' : 'Weekday rate',
+                    'source' => 'rule:'.$rule->id,
+                ];
+            }
+            $day = $day->addDay();
+        }
+
+        return $nights;
+    }
+
+    /** ₱ per started hour before the standard check-in time. */
+    public function earlyFee(string $time): array
+    {
+        $standard = (string) Settings::get('pricing.standard_check_in');
+        $unit = (int) Settings::get('pricing.early_fee_cents_per_hour');
+        $base = CarbonImmutable::parse('2000-01-01 '.$standard);
+        $req = CarbonImmutable::parse('2000-01-01 '.$time);
+        $minutes = max(0, (int) $req->diffInMinutes($base, false));
+        $hours = (int) ceil($minutes / 60);
+
+        return ['hours' => $hours, 'unit_cents' => $unit, 'cents' => $hours * $unit, 'standard' => $standard];
+    }
+
+    /** Lowest and highest posted nightly rate today, for public "from" display when weekend days are pending. */
+    public function currentRange(Room $room, string $date): ?array
+    {
+        $rule = $this->rule($room->id, $date);
+
+        return $rule ? ['weekday_cents' => (int) $rule->weekday_cents, 'weekend_cents' => (int) $rule->weekend_cents] : null;
+    }
+
+    private function rule(int $roomId, string $date): ?RateRule
+    {
+        return RateRule::where('room_id', $roomId)
+            ->where('effective_from', '<=', $date)
+            ->where(fn ($q) => $q->whereNull('effective_to')->orWhere('effective_to', '>=', $date))
+            ->orderByDesc('effective_from')
+            ->first();
+    }
+
+    /** A channel-specific override beats a general one. */
+    private function override(int $roomId, string $date, ?int $sourceId): ?RateOverride
+    {
+        return RateOverride::where('room_id', $roomId)
+            ->where('date_from', '<=', $date)
+            ->where('date_to', '>=', $date)
+            ->where(fn ($q) => $q->whereNull('booking_source_id')->when($sourceId, fn ($s) => $s->orWhere('booking_source_id', $sourceId)))
+            ->orderByRaw('booking_source_id IS NULL')
+            ->orderByDesc('id')
+            ->first();
+    }
+}

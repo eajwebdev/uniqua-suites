@@ -1,0 +1,47 @@
+@import 'tailwindcss';
+
+@source '../views';
+@source '../js';
+
+@theme {
+    --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+    --font-serif: 'Cormorant Garamond', Georgia, serif;
+
+    /* Chocolate is sampled from the supplied logo background so the mark sits seamlessly. */
+    --color-chocolate: #241a15;
+    --color-espresso: #46362d;
+    --color-gold: #c6a675;
+    --color-gold-dark: #8a6d3f;
+    --color-ivory: #f8f4ec;
+    --color-beige: #ede4d8;
+    --color-line: #e3d9cb;
+    --color-muted: #6b5b4e;
+}
+
+html {
+    -webkit-text-size-adjust: 100%;
+}
+
+body {
+    @apply bg-ivory font-sans text-chocolate antialiased;
+}
+
+h1, h2, h3 {
+    text-wrap: balance;
+}
+
+:focus-visible {
+    outline: 2px solid var(--color-gold-dark);
+    outline-offset: 2px;
+}
+
+dialog::backdrop {
+    background: rgb(36 26 21 / 0.55);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    * {
+        transition: none !important;
+        animation: none !important;
+    }
+}
