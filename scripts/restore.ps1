@@ -9,11 +9,18 @@ param(
     [string]$DbHost = '127.0.0.1',
     [int]$Port = 3306,
     [string]$User = 'root',
-    [string]$MysqlBin = 'C:\xampp\mysql\bin',
+    [string]$MysqlBin = '',
     [switch]$RestoreFiles
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $MysqlBin) {
+    # XAMPP is not always on C:. Prefer a client on PATH, then look at the usual install folders.
+    $found = Get-Command mysql.exe -ErrorAction SilentlyContinue
+    $candidates = @(if ($found) { Split-Path -Parent $found.Source }) + (Get-PSDrive -PSProvider FileSystem | ForEach-Object { "$($_.Root)xampp\mysql\bin" })
+    $MysqlBin = $candidates | Where-Object { Test-Path (Join-Path $_ 'mysql.exe') } | Select-Object -First 1
+    if (-not $MysqlBin) { throw 'Could not find mysql.exe. Pass its folder with -MysqlBin.' }
+}
 if ($Database -notmatch '^[A-Za-z0-9_]+$') { throw 'Invalid database name.' }
 $mysql = "$MysqlBin\mysql.exe"
 $connection = @("--host=$DbHost", "--port=$Port", "--user=$User")

@@ -4,10 +4,12 @@ namespace App\Http\Controllers\Admin;
 
 use App\Domain\Availability\RoomConflict;
 use App\Domain\Bookings\BookingService;
+use App\Domain\Finance\FinanceService;
 use App\Http\Controllers\Controller;
 use App\Models\Booking;
 use App\Models\BookingCharge;
 use App\Models\Incident;
+use App\Models\IncidentNote;
 use App\Models\IncidentEvidence;
 use App\Models\Room;
 use App\Models\User;
@@ -127,7 +129,7 @@ class MaintenanceController extends Controller
             'subtitle' => 'A report never charges a guest. Only an owner decision can create a charge, and it can still be reversed.',
             'tabs' => [['label' => 'Work orders', 'href' => '/admin/work-orders'], ['label' => 'Damage & incidents', 'href' => '/admin/incidents']],
             'columns' => [
-                ['key' => 'discovered_on', 'label' => 'Discovered', 'type' => 'date'], ['key' => 'room', 'label' => 'Room'], ['key' => 'booking', 'label' => 'Booking', 'type' => 'link'],
+                ['key' => 'discovered_on', 'label' => 'Discovered', 'type' => 'date'], ['key' => 'room', 'label' => 'Room'], ['key' => 'timeline', 'label' => 'History', 'type' => 'link'], ['key' => 'booking', 'label' => 'Booking', 'type' => 'link'],
                 ['key' => 'guest', 'label' => 'Guest'], ['key' => 'item', 'label' => 'Item'], ['key' => 'estimated_cents', 'label' => 'Estimated', 'type' => 'money'],
                 ['key' => 'approved_cents', 'label' => 'Approved', 'type' => 'money'], ['key' => 'status', 'label' => 'Status', 'type' => 'status'], ['key' => 'evidence', 'label' => 'Evidence'],
             ],
@@ -155,6 +157,7 @@ class MaintenanceController extends Controller
                     'id' => $i->id,
                     'discovered_on' => $i->discovered_on->toDateString(),
                     'room' => $i->room->name,
+                    'timeline' => ['label' => 'Open', 'href' => "/admin/incidents/{$i->id}"],
                     'booking' => $i->booking ? ['label' => $i->booking->reference, 'href' => "/admin/bookings/{$i->booking_id}"] : ['label' => 'None'],
                     'guest' => $i->guest?->full_name,
                     'item' => $i->item,
@@ -176,6 +179,47 @@ class MaintenanceController extends Controller
                 ['name' => 'safety_block', 'label' => 'Create a safety-block work order for this room', 'type' => 'checkbox'],
             ]] : null,
         ]);
+    }
+
+    /** One chronological record: logged communications, status changes and evidence. */
+    public function showIncident(Request $request, Incident $incident)
+    {
+        $incident->load(['room:id,name', 'guest:id,full_name', 'booking:id,reference', 'evidence']);
+
+        $notes = IncidentNote::where('incident_id', $incident->id)->with('user:id,name')->get()->map(fn ($n) => [
+            'at' => $n->created_at, 'kind' => ucfirst(str_replace('_', ' ', $n->channel)), 'by' => $n->user?->name, 'detail' => $n->body, 'file' => ['label' => '—'],
+        ]);
+        $evidence = $incident->evidence->map(fn ($e) => [
+            'at' => $e->created_at, 'kind' => 'Evidence added', 'by' => null, 'detail' => null, 'file' => ['label' => 'View', 'href' => "/admin/files/incident/{$e->id}", 'external' => true],
+        ]);
+        $history = DB::table('activity_logs as a')->leftJoin('users as u', 'u.id', '=', 'a.user_id')
+            ->where('a.subject_type', Incident::class)->where('a.subject_id', $incident->id)
+            ->get(['a.created_at', 'a.action', 'a.meta', 'u.name'])->map(function ($a) {
+                $meta = json_decode((string) $a->meta, true) ?? [];
+
+                return ['at' => $a->created_at, 'kind' => ucfirst(str_replace(['incident.', '_'], ['', ' '], $a->action)), 'by' => $a->name, 'detail' => $meta['resolution'] ?? (isset($meta['status']) ? 'Status: '.str_replace('_', ' ', $meta['status']) : null), 'file' => ['label' => '—']];
+            });
+
+        return Inertia::render('Admin/Resource', [
+            'title' => "Incident: {$incident->item}",
+            'subtitle' => implode(' · ', array_filter([$incident->room->name, $incident->guest?->full_name, $incident->booking?->reference, 'Status: '.str_replace('_', ' ', $incident->status)])),
+            'note' => $incident->description,
+            'backHref' => '/admin/incidents',
+            'columns' => [['key' => 'at', 'label' => 'When', 'type' => 'datetime'], ['key' => 'kind', 'label' => 'What'], ['key' => 'by', 'label' => 'By'], ['key' => 'detail', 'label' => 'Detail'], ['key' => 'file', 'label' => 'File', 'type' => 'link']],
+            'rows' => collect($notes)->concat($evidence)->concat($history)->sortBy(fn ($r) => (string) $r['at'])->values()->map(fn ($r, $i) => $r + ['id' => $i]),
+            'create' => $request->user()->can('incidents.manage') ? ['label' => 'Log communication', 'url' => "/admin/incidents/{$incident->id}/notes", 'fields' => [
+                ['name' => 'channel', 'label' => 'How', 'type' => 'select', 'required' => true, 'options' => $this->opts(['internal', 'messenger', 'instagram', 'phone', 'email', 'in_person'])],
+                ['name' => 'body', 'label' => 'What was said or agreed', 'type' => 'textarea', 'required' => true],
+            ]] : null,
+        ]);
+    }
+
+    public function storeIncidentNote(Request $request, Incident $incident)
+    {
+        $data = $request->validate(['channel' => 'required|in:internal,messenger,instagram,phone,email,in_person', 'body' => 'required|string|max:2000']);
+        IncidentNote::create($data + ['incident_id' => $incident->id, 'user_id' => $request->user()->id, 'created_at' => now()]);
+
+        return back()->with('success', 'Communication logged.');
     }
 
     public function storeIncident(Request $request)
@@ -211,7 +255,7 @@ class MaintenanceController extends Controller
             $this->saveEvidence($request, $incident);
             Audit::log('incident.reported', $incident);
         });
-        SystemNotice::toPermission('incidents.approve', "Incident reported: {$data['item']}", '/admin/incidents');
+        SystemNotice::toPermission('incidents.approve', "Incident reported: {$data['item']}", '/admin/incidents', 'incidents');
 
         return back()->with('success', 'Incident recorded. No charge has been made.');
     }
@@ -234,6 +278,8 @@ class MaintenanceController extends Controller
     public function decideIncident(Request $request, Incident $incident, BookingService $bookings)
     {
         $data = $request->validate(['decision' => 'required|in:approve,reverse', 'approved' => ['required_if:decision,approve', 'nullable', Money::RULE], 'owner_resolution' => 'required|string|max:2000']);
+
+        app(FinanceService::class)->assertOpen(Local::today());
 
         DB::transaction(function () use ($data, $incident, $request, $bookings) {
             $booking = $incident->booking;

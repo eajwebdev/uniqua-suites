@@ -3,8 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Domain\Availability\InventoryService;
-use App\Domain\Availability\RoomConflict;
-use App\Domain\Pricing\PricingService;
+use App\Domain\Availability\StayRules;
 use App\Models\Property;
 use App\Models\Room;
 use App\Models\RoomType;
@@ -14,24 +13,29 @@ use Illuminate\Http\Request;
 use Inertia\Inertia;
 
 /**
- * Public, read-only. Serializes an explicit allow-list per room: no unit codes, operational
- * notes, secrets, guest data or booking references can reach a public page. Nothing here
- * writes anything, so a guest can only ever inquire.
+ * Public, read-only. Guests browse suites, see which dates are taken, and open Facebook Messenger
+ * with free dates they chose. Staff then send the quotation and make the booking. By owner decision
+ * no price or estimate reaches a public page, so no pricing service is used here. Each room is
+ * serialized from an explicit allow-list: no rates, unit codes, notes, secrets or guest data, and
+ * taken dates carry no hint of who has them or why.
  */
 class PublicSiteController extends Controller
 {
-    public function __construct(private InventoryService $inventory, private PricingService $pricing)
+    private const DAYS_SHOWN = 365;
+
+    public function __construct(private InventoryService $inventory, private StayRules $stayRules)
     {
     }
 
     public function home()
     {
-        $rooms = Room::published()->with(['property', 'type', 'images'])->orderBy('id')->get();
+        $rooms = Room::published()->with(['property', 'type', 'images', 'amenities'])->orderBy('id')->get();
 
         return Inertia::render('Public/Home', [
             'rooms' => $rooms->map(fn ($r) => $this->card($r)),
+            // Shown as "in every suite", so only what all of them really have.
+            'amenities' => $rooms->isEmpty() ? [] : array_values(array_intersect(...$rooms->map(fn ($r) => $r->amenities->pluck('name')->all())->all())),
             'properties' => Property::orderBy('id')->get(['name', 'slug', 'location_label']),
-            'types' => RoomType::orderBy('id')->get(['name', 'slug']),
         ]);
     }
 
@@ -41,13 +45,9 @@ class PublicSiteController extends Controller
             'location' => 'nullable|string|max:40',
             'type' => 'nullable|string|max:40',
             'guests' => 'nullable|integer|min:1|max:20',
-            'check_in' => 'nullable|date_format:Y-m-d',
-            'check_out' => 'nullable|date_format:Y-m-d',
             'balcony' => 'nullable|boolean',
             'bathrooms' => 'nullable|integer|min:1|max:5',
-            'max_price' => 'nullable|integer|min:0|max:1000000',
         ]);
-        $hasDates = ! empty($f['check_in']) && ! empty($f['check_out']) && $f['check_in'] < $f['check_out'];
 
         $rooms = Room::published()->with(['property', 'type', 'images'])
             ->when($f['location'] ?? null, fn ($q, $v) => $q->whereHas('property', fn ($p) => $p->where('slug', $v)))
@@ -57,62 +57,52 @@ class PublicSiteController extends Controller
             ->when($f['bathrooms'] ?? null, fn ($q, $v) => $q->where('bathrooms', '>=', $v))
             ->orderBy('id')->get();
 
-        $cards = $rooms->map(function ($room) use ($f, $hasDates) {
-            $card = $this->card($room);
-            $card['availability'] = $hasDates
-                ? ($this->inventory->isFree($room->id, $f['check_in'], $f['check_out']) && $room->operational_status === 'active' ? 'indicative' : 'unavailable')
-                : 'unknown';
-            $card['estimate_cents'] = $hasDates ? $this->estimate($room, $f['check_in'], $f['check_out'], (int) ($f['guests'] ?? 1)) : null;
-
-            return $card;
-        })->when(isset($f['max_price']), fn ($c) => $c->filter(fn ($r) => ($r['weekday_cents'] ?? 0) <= $f['max_price'] * 100)->values());
-
         return Inertia::render('Public/Suites', [
-            'rooms' => $cards,
+            'rooms' => $rooms->map(fn ($r) => $this->card($r)),
             'filters' => $f,
             'properties' => Property::orderBy('id')->get(['name', 'slug']),
             'types' => RoomType::orderBy('id')->get(['name', 'slug']),
         ]);
     }
 
-    public function show(Request $request, string $slug)
+    public function show(string $slug)
     {
         $room = Room::published()->where('slug', $slug)->with(['property', 'type', 'images', 'amenities'])->firstOrFail();
-        $f = $request->validate([
-            'check_in' => 'nullable|date_format:Y-m-d',
-            'check_out' => 'nullable|date_format:Y-m-d',
-            'guests' => 'nullable|integer|min:1|max:20',
-            'early' => 'nullable|date_format:H:i',
-        ]);
-        $hasDates = ! empty($f['check_in']) && ! empty($f['check_out']) && $f['check_in'] < $f['check_out'];
-        $guests = (int) ($f['guests'] ?? 1);
-
-        $estimate = null;
-        if ($hasDates) {
-            try {
-                $quote = $this->pricing->quote($room, $f['check_in'], $f['check_out'], $guests, ['early_time' => $f['early'] ?? null]);
-                $estimate = [
-                    'lines' => array_map(fn ($l) => ['description' => $l['description'], 'amount_cents' => $l['amount_cents']], $quote['lines']),
-                    'total_cents' => $quote['total_cents'],
-                    'notes' => $quote['warnings'],
-                ];
-            } catch (RoomConflict $e) {
-                $estimate = ['error' => $e->getMessage()];
-            }
-        }
 
         return Inertia::render('Public/Suite', [
             'room' => $this->card($room) + [
-                'description' => $room->description,
                 'inclusions' => $room->inclusions,
                 'policies' => $room->policies,
                 'amenities' => $room->amenities->pluck('name'),
             ],
-            'filters' => $f,
-            'availability' => $hasDates ? ($this->inventory->isFree($room->id, $f['check_in'], $f['check_out']) && $room->operational_status === 'active' ? 'indicative' : 'unavailable') : 'unknown',
-            'estimate' => $estimate,
             'policy' => $this->policy(),
         ]);
+    }
+
+    /** The final word before Book Now unlocks. The page's list could be minutes old; this reads the live inventory. */
+    public function checkDates(Request $request, string $slug)
+    {
+        $room = Room::published()->where('slug', $slug)->firstOrFail();
+        $dates = $request->validate(['check_in' => 'required|date_format:Y-m-d', 'check_out' => 'required|date_format:Y-m-d|after:check_in']);
+
+        $problem = $this->datesProblem($room, $dates['check_in'], $dates['check_out']);
+
+        return response()->json(['available' => $problem === null, 'message' => $problem])->header('Cache-Control', 'no-store');
+    }
+
+    private function datesProblem(Room $room, string $checkIn, string $checkOut): ?string
+    {
+        return match (true) {
+            $checkIn < Local::today() => 'Those dates have passed. Please choose new dates.',
+            $this->isClosed($room) => "{$room->name} is not available right now.",
+            ! $this->inventory->isFree($room->id, $checkIn, $checkOut) => "{$room->name} was just taken for some of those dates. Please choose other dates.",
+            default => $this->stayRules->violation($room, $checkIn, $checkOut),
+        };
+    }
+
+    private function isClosed(Room $room): bool
+    {
+        return $room->operational_status !== 'active' || $room->hasOpenSafetyBlock();
     }
 
     public function policies()
@@ -125,37 +115,26 @@ class PublicSiteController extends Controller
         return [
             'standard_check_in' => Settings::get('pricing.standard_check_in'),
             'standard_check_out' => Settings::get('pricing.standard_check_out'),
-            'early_fee_cents_per_hour' => Settings::get('pricing.early_fee_cents_per_hour'),
+            'house_rules' => Settings::get('policy.house_rules'),
+            'cancellation' => Settings::get('policy.cancellation'),
         ];
-    }
-
-    private function estimate(Room $room, string $in, string $out, int $guests): ?int
-    {
-        try {
-            return $this->pricing->quote($room, $in, $out, $guests)['total_cents'];
-        } catch (RoomConflict) {
-            return null;
-        }
     }
 
     private function card(Room $room): array
     {
-        $range = $this->pricing->currentRange($room, Local::today());
-
         return [
             'name' => $room->name,
             'slug' => $room->slug,
             'location' => $room->property->location_label,
-            'location_slug' => $room->property->slug,
             'type' => $room->type->name,
+            'description' => $room->description,
+            'closed' => $this->isClosed($room),
+            'unavailable' => $this->inventory->takenRanges($room->id, Local::today(), Local::now()->addDays(self::DAYS_SHOWN)->toDateString()),
             'bedrooms' => $room->bedrooms,
             'bathrooms' => $room->bathrooms,
             'ac_count' => $room->ac_count,
             'has_balcony' => $room->has_balcony,
-            'included_guests' => $room->included_guests,
             'max_guests' => $room->max_guests,
-            'weekday_cents' => $range['weekday_cents'] ?? null,
-            'weekend_cents' => $range['weekend_cents'] ?? null,
             'images' => $room->images->map(fn ($i) => ['url' => '/storage/'.$i->path, 'alt' => $i->alt_text]),
         ];
     }

@@ -10,7 +10,7 @@ export default function Forgot() {
             <form onSubmit={(ev) => { ev.preventDefault(); form.post('/forgot-password'); }} className="space-y-3">
                 <Field label="Email" error={(form.errors as any).email}><Input type="email" required value={form.data.email} onChange={(ev) => form.setData('email', ev.target.value)} /></Field>
                 <Button type="submit" variant="primary" className="w-full" disabled={form.processing}>Send reset link</Button>
-                <Link href="/login" className="block text-center text-sm underline">Back to sign in</Link>
+                <Link href="/login" className="block text-center text-sm underline pointer-coarse:py-3">Back to sign in</Link>
             </form>
         </AuthLayout>
     );

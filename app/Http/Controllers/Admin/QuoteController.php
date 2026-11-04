@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Domain\Availability\InventoryService;
 use App\Domain\Bookings\MessageService;
+use App\Domain\Bookings\VacancySearch;
 use App\Domain\Pricing\PricingService;
 use App\Http\Controllers\Controller;
 use App\Models\Booking;
@@ -16,6 +17,8 @@ use App\Support\Local;
 use App\Support\Money;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
+use Carbon\CarbonImmutable;
+use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
@@ -23,7 +26,7 @@ use Inertia\Inertia;
 /** A quotation never reserves inventory on its own. */
 class QuoteController extends Controller
 {
-    public function __construct(private PricingService $pricing, private InventoryService $inventory, private MessageService $messages)
+    public function __construct(private PricingService $pricing, private InventoryService $inventory, private MessageService $messages, private VacancySearch $vacancies)
     {
     }
 
@@ -60,6 +63,8 @@ class QuoteController extends Controller
     public function create(Request $request)
     {
         $f = $request->validate([
+            'reference' => 'nullable|string|exists:quotes,reference',
+            'guest_name' => 'nullable|string|max:120',
             'room_id' => 'nullable|integer|exists:rooms,id',
             'check_in' => 'nullable|date_format:Y-m-d',
             'check_out' => 'nullable|date_format:Y-m-d',
@@ -74,18 +79,27 @@ class QuoteController extends Controller
         if (! empty($f['room_id']) && ! empty($f['check_in']) && ! empty($f['check_out'])) {
             $room = Room::findOrFail($f['room_id']);
             try {
+                $problem = $this->cannotQuote($room, $f['check_in'], $f['check_out'], (int) ($f['guests'] ?? 1), $request->integer('booking_id') ?: null);
+                if ($problem) {
+                    throw new \App\Domain\Availability\RoomConflict($problem);
+                }
                 $preview = $this->calculate($room, $f, $f['guests'] ?? 1);
-                $preview['conflicts'] = $f['check_in'] < $f['check_out'] ? $this->inventory->conflicts($room->id, $f['check_in'], $f['check_out'])->pluck('label') : [];
+                $preview['copyText'] = $this->message($room->name, $f['check_in'], $f['check_out'], (int) ($f['guests'] ?? 1), '{{guest}}', $preview['total_cents'], collect($preview['lines']));
             } catch (\App\Domain\Availability\RoomConflict $e) {
                 $preview = ['error' => $e->getMessage()];
             }
         }
+
+        $vacancy = ! empty($f['check_in']) && ! empty($f['check_out']) && $f['check_in'] < $f['check_out']
+            ? $this->vacancies->find($f['check_in'], $f['check_out'], (int) ($f['guests'] ?? 1), $this->pricingOptions($f))
+            : null;
 
         return Inertia::render('Admin/QuoteForm', [
             'rooms' => Room::where('operational_status', '!=', 'retired')->orderBy('id')->get()->map(fn ($r) => ['id' => $r->id, 'label' => "{$r->name} ({$r->unit_code})", 'max' => $r->max_guests, 'included' => $r->included_guests]),
             'sources' => BookingSource::where('is_active', true)->orderBy('id')->get(['id', 'name']),
             'filters' => $f,
             'preview' => $preview,
+            'vacancy' => $vacancy,
             'bookingId' => $request->integer('booking_id') ?: null,
         ]);
     }
@@ -110,6 +124,10 @@ class QuoteController extends Controller
         }
 
         $room = Room::findOrFail($data['room_id']);
+        $problem = $this->cannotQuote($room, $data['check_in'], $data['check_out'], (int) $data['guests'], $data['booking_id'] ?? null);
+        if ($problem) {
+            throw ValidationException::withMessages(['room_id' => $problem]);
+        }
         $calc = $this->calculate($room, $data, (int) $data['guests']);
 
         $quote = DB::transaction(function () use ($data, $calc, $request) {
@@ -141,6 +159,29 @@ class QuoteController extends Controller
         return redirect("/admin/quotes/{$quote->id}")->with('success', 'Quote saved. Copy or download it below; it has not been sent.');
     }
 
+    /** Read just before copying, because the screen may have been open while someone else took the dates. */
+    public function check(Request $request)
+    {
+        $data = $request->validate(['room_id' => 'required|exists:rooms,id', 'check_in' => 'required|date_format:Y-m-d', 'check_out' => 'required|date_format:Y-m-d|after:check_in', 'guests' => 'required|integer|min:1|max:30', 'booking_id' => 'nullable|exists:bookings,id']);
+        $problem = $this->cannotQuote(Room::findOrFail($data['room_id']), $data['check_in'], $data['check_out'], (int) $data['guests'], $data['booking_id'] ?? null);
+
+        return response()->json(['available' => $problem === null, 'message' => $problem])->header('Cache-Control', 'no-store');
+    }
+
+    /** A guest must never be quoted dates they cannot have. */
+    private function cannotQuote(Room $room, string $checkIn, string $checkOut, int $guests, ?int $bookingId): ?string
+    {
+        if ($checkIn >= $checkOut) {
+            return 'Check-out must be after check-in.';
+        }
+        if ($checkIn < Local::today()) {
+            return 'Those dates have passed.';
+        }
+        $reason = $this->vacancies->reasonUnavailable($room, $checkIn, $checkOut, $guests, $bookingId);
+
+        return $reason ? "{$room->name} is not available for these dates. {$reason} Please choose a vacant unit." : null;
+    }
+
     public function show(Quote $quote)
     {
         $quote->load(['items', 'room.property']);
@@ -149,6 +190,7 @@ class QuoteController extends Controller
         return Inertia::render('Admin/QuoteShow', [
             'quote' => [
                 'id' => $quote->id,
+                'booking_id' => $quote->booking_id,
                 'reference' => $quote->reference,
                 'version' => $quote->version,
                 'guest_name' => $quote->guest_name,
@@ -158,6 +200,7 @@ class QuoteController extends Controller
                 'check_in' => $quote->check_in->toDateString(),
                 'check_out' => $quote->check_out->toDateString(),
                 'guest_count' => $quote->guest_count,
+                'source_id' => $quote->booking_source_id,
                 'early_time' => $quote->early_time ? substr($quote->early_time, 0, 5) : null,
                 'total_cents' => (int) $quote->total_cents,
                 'warnings' => $quote->warnings ?? [],
@@ -178,28 +221,44 @@ class QuoteController extends Controller
 
     private function calculate(Room $room, array $f, int $guests): array
     {
-        return $this->pricing->quote($room, $f['check_in'], $f['check_out'], $guests, [
+        return $this->pricing->quote($room, $f['check_in'], $f['check_out'], $guests, $this->pricingOptions($f));
+    }
+
+    private function pricingOptions(array $f): array
+    {
+        return [
             'source_id' => $f['source_id'] ?? null,
             'early_time' => $f['early_time'] ?? null,
             'discount_cents' => Money::cents($f['discount'] ?? null) ?? 0,
-            'discount_reason' => 'approved',
             'parking_cents' => Money::cents($f['parking'] ?? null) ?? 0,
-        ]);
+        ];
     }
 
     private function copyText(Quote $quote): string
     {
-        $template = MessageTemplate::where('key', 'quote')->value('body') ?? '';
-        $text = $this->messages->render($template, [
-            'guest' => $quote->guest_name ?: 'there',
-            'room' => $quote->room->name,
-            'check_in' => $quote->check_in->format('M j, Y'),
-            'check_out' => $quote->check_out->format('M j, Y'),
-            'guests' => (string) $quote->guest_count,
-            'total' => Money::format((int) $quote->total_cents),
-        ]);
-        $lines = $quote->items->map(fn ($i) => '- '.$i->description.': '.Money::format((int) $i->amount_cents))->join("\n");
+        return $this->message($quote->room->name, $quote->check_in->toDateString(), $quote->check_out->toDateString(), (int) $quote->guest_count, $quote->guest_name ?: 'there', (int) $quote->total_cents, $quote->items);
+    }
 
-        return $text."\n\nBreakdown:\n".$lines;
+    /** What the guest reads: the owner's template, then each charge in plain words. */
+    private function message(string $room, string $checkIn, string $checkOut, int $guests, string $guest, int $totalCents, $lines): string
+    {
+        $text = $this->messages->render(MessageTemplate::where('key', 'quote')->value('body') ?? '', [
+            'guest' => $guest,
+            'room' => $room,
+            'check_in' => CarbonImmutable::parse($checkIn)->format('M j, Y'),
+            'check_out' => CarbonImmutable::parse($checkOut)->format('M j, Y'),
+            'guests' => (string) $guests,
+            'total' => Money::format($totalCents),
+        ]);
+        $breakdown = collect($lines)->map(function ($line) {
+            $description = data_get($line, 'description');
+            if (preg_match('/^(\d{4}-\d{2}-\d{2}) · (.+)$/u', $description, $night)) {
+                $description = CarbonImmutable::parse($night[1])->format('M j (D)').', '.mb_strtolower($night[2]);
+            }
+
+            return '- '.$description.': '.Money::format((int) data_get($line, 'amount_cents'));
+        })->join("\n");
+
+        return $text."\n\nBreakdown:\n".$breakdown;
     }
 }

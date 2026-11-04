@@ -47,16 +47,16 @@ function SecretCard({ room, secret, can }: any) {
     );
 }
 
-export default function RoomEdit({ room, images, rates, overrides, blocks, sources, secret, can, amenities }: any) {
+export default function RoomEdit({ room, images, rates, overrides, blocks, sources, secret, can, amenities, listings }: any) {
     const selectedNames = amenities.filter((a: any) => room.amenity_ids.includes(a.id)).map((a: any) => a.name).join(', ');
     const form = useForm<any>({
         floor: room.floor ?? '', bedrooms: room.bedrooms, ac_count: room.ac_count, bathrooms: room.bathrooms, has_balcony: room.has_balcony,
-        included_guests: room.included_guests, max_guests: room.max_guests, description: room.description ?? '', inclusions: room.inclusions ?? '', policies: room.policies ?? '',
+        included_guests: room.included_guests, max_guests: room.max_guests, min_nights: room.min_nights ?? '', max_advance_days: room.max_advance_days ?? '', description: room.description ?? '', inclusions: room.inclusions ?? '', policies: room.policies ?? '',
         operational_notes: room.operational_notes ?? '', operational_status: room.operational_status, parking_eligible: room.parking_eligible, amenities_text: selectedNames,
     });
     const e = form.errors as any;
     const set = (k: string) => (ev: any) => form.setData(k, ev.target.value);
-    const area = 'w-full rounded-md border border-line px-3 py-2 text-sm';
+    const area = 'w-full rounded-md border border-line px-3 py-2 text-sm pointer-coarse:text-base';
 
     return (
         <AdminLayout title={`${room.name} · ${room.unit_code}`}>
@@ -77,6 +77,8 @@ export default function RoomEdit({ room, images, rates, overrides, blocks, sourc
                                 <Field label="Included guests" error={e.included_guests}><Input type="number" min={1} value={form.data.included_guests} onChange={set('included_guests')} /></Field>
                                 <Field label="Maximum guests" error={e.max_guests}><Input type="number" min={1} value={form.data.max_guests} onChange={set('max_guests')} /></Field>
                                 <Field label="Floor" error={e.floor}><Input value={form.data.floor} onChange={set('floor')} /></Field>
+                                <Field label="Minimum stay (nights)" error={e.min_nights} help="Blank uses the Settings value."><Input type="number" min={1} value={form.data.min_nights} onChange={set('min_nights')} /></Field>
+                                <Field label="Book at most (days ahead)" error={e.max_advance_days} help="Blank uses the Settings value."><Input type="number" min={1} value={form.data.max_advance_days} onChange={set('max_advance_days')} /></Field>
                             </div>
                             <div className="flex flex-wrap gap-4 text-sm">
                                 <label className="flex items-center gap-2"><input type="checkbox" checked={form.data.has_balcony} onChange={(ev) => form.setData('has_balcony', ev.target.checked)} /> Balcony</label>
@@ -167,6 +169,26 @@ export default function RoomEdit({ room, images, rates, overrides, blocks, sourc
                                 ))}
                             </div>
                         )}
+                    </Card>
+
+                    <Card title="Platform listing IDs" action={
+                        <ActionButton action={{ label: 'Add listing', url: `/admin/rooms/${room.id}/listings`, fields: [
+                            { name: 'provider', label: 'Platform', type: 'text', required: true, default: 'Airbnb' },
+                            { name: 'listing_id', label: 'Listing ID', type: 'text', required: true },
+                            { name: 'url', label: 'Listing URL', type: 'text', help: 'Optional. Must start with https://.' },
+                        ] }} />
+                    }>
+                        {listings.length === 0 ? <Empty>No listing IDs recorded.</Empty> : (
+                            <ul className="space-y-2 text-sm">
+                                {listings.map((l: any) => (
+                                    <li key={l.id} className="flex items-start justify-between gap-2">
+                                        <span className="min-w-0 break-words">{l.provider}: {l.url ? <a href={l.url} target="_blank" rel="noreferrer" className="underline">{l.listing_id}</a> : l.listing_id}</span>
+                                        <ActionButton action={{ label: 'Remove', url: `/admin/room-listings/${l.id}/delete`, confirm: 'Remove this listing ID?' }} />
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                        <p className="mt-2 text-xs text-muted">For staff reference. This does not connect the room to the platform.</p>
                     </Card>
 
                     {(can.secretsReveal || can.secretsManage) && <SecretCard room={room} secret={secret} can={can} />}

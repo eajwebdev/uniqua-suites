@@ -20,6 +20,30 @@ use Inertia\Inertia;
 
 class ParkingController extends Controller
 {
+    private const TABS = [['label' => 'Spaces', 'href' => '/admin/parking'], ['label' => 'Calendar', 'href' => '/admin/parking/calendar']];
+
+    /** A month per space. Bars end at the exclusive end date, so the next holder can start that day. */
+    public function calendar(Request $request)
+    {
+        $data = $request->validate(['month' => ['nullable', 'regex:/^\d{4}-(0[1-9]|1[0-2])$/']]);
+        $start = CarbonImmutable::parse(($data['month'] ?? Local::now()->format('Y-m')).'-01');
+        $end = $start->addMonth();
+        $spaces = ParkingSpace::with('property:id,name')->orderBy('property_id')->orderBy('id')->get();
+
+        return Inertia::render('Admin/ParkingCalendar', [
+            'month' => $start->format('Y-m'),
+            'label' => $start->format('F Y'),
+            'prev' => $start->subMonth()->format('Y-m'),
+            'next' => $end->format('Y-m'),
+            'days' => $start->daysInMonth,
+            'today' => Local::today(),
+            'tabs' => self::TABS,
+            'spaces' => $spaces->map(fn ($s) => ['id' => $s->id, 'code' => $s->code, 'property' => $s->property->name]),
+            'assignments' => ParkingAssignment::where('status', 'active')->where('start_date', '<', $end->toDateString())->where('end_date', '>', $start->toDateString())->with('booking:id,reference')->orderBy('start_date')->get()
+                ->map(fn ($a) => ['id' => $a->id, 'space_id' => $a->parking_space_id, 'holder' => $a->holder_name, 'vehicle' => $a->vehicle, 'start' => $a->start_date->toDateString(), 'end' => $a->end_date->toDateString(), 'booking' => $a->booking?->reference, 'booking_id' => $a->booking_id]),
+        ]);
+    }
+
     public function index(Request $request)
     {
         $user = $request->user();
@@ -44,6 +68,7 @@ class ParkingController extends Controller
 
         return Inertia::render('Admin/Resource', [
             'title' => 'Parking',
+            'tabs' => self::TABS,
             'subtitle' => 'Separate inventory from rooms. Source rates (₱350 The Loop, ₱300 Mesaverte) are proposed until confirmed per space and vendor. Add the real stalls here; vendor contacts stay staff-only.',
             'columns' => [
                 ['key' => 'space', 'label' => 'Space'], ['key' => 'property', 'label' => 'Property'], ['key' => 'vendor', 'label' => 'Vendor'], ['key' => 'contact', 'label' => 'Contact'],

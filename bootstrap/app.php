@@ -2,7 +2,9 @@
 
 use App\Domain\Availability\RoomConflict;
 use App\Http\Middleware\EnsureActiveUser;
+use App\Http\Middleware\EnsureTwoFactorEnrolled;
 use App\Http\Middleware\HandleInertiaRequests;
+use App\Http\Middleware\SecurityHeaders;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -17,10 +19,11 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        $middleware->web(append: [HandleInertiaRequests::class]);
+        $middleware->web(append: [HandleInertiaRequests::class, SecurityHeaders::class]);
         $middleware->alias([
             'perm' => PermissionMiddleware::class,
             'active' => EnsureActiveUser::class,
+            'mfa.enrolled' => EnsureTwoFactorEnrolled::class,
         ]);
         $middleware->redirectGuestsTo('/login');
         $middleware->redirectUsersTo('/admin');

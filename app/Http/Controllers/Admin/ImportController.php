@@ -11,6 +11,8 @@ use App\Models\ImportMapping;
 use App\Models\LegacyRow;
 use App\Models\Room;
 use App\Support\Audit;
+use App\Models\RoomBlock;
+use App\Support\Local;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -28,7 +30,7 @@ class ImportController extends Controller
 
         return Inertia::render('Admin/Resource', [
             'title' => 'Import & Data Quality',
-            'subtitle' => 'Upload the sales workbook to stage it for review. Nothing affects bookings or live reports. The original file is kept privately with its checksum.',
+            'subtitle' => 'Upload the sales workbook to stage it for review. Past rows appear in the Sales recording report, and future stays are held on the calendar when you commit. No bookings or receipts are created. The original file is kept privately with its checksum.',
             'columns' => [
                 ['key' => 'file', 'label' => 'File', 'type' => 'link'], ['key' => 'status', 'label' => 'Status', 'type' => 'status'], ['key' => 'rows_count', 'label' => 'Rows'],
                 ['key' => 'anomalies_count', 'label' => 'Flags'], ['key' => 'checksum', 'label' => 'Checksum'], ['key' => 'created_at', 'label' => 'Uploaded', 'type' => 'datetime'],
@@ -72,6 +74,11 @@ class ImportController extends Controller
         return Inertia::render('Admin/ImportShow', [
             'batch' => $batch->only(['id', 'file_name', 'status', 'checksum', 'transformation_version', 'created_at', 'committed_at']),
             'summary' => $batch->summary,
+            'future' => [
+                'nights' => $this->futureRows($batch)->count(),
+                'unmatched' => $this->futureRows($batch)->whereNull('room_id')->count(),
+                'held' => RoomBlock::where('kind', WorkbookImporter::HOLD_KIND)->where('external_uid', 'like', "workbook:{$batch->id}:%")->whereNull('released_at')->where('end_date', '>', Local::today())->count(),
+            ],
             'counts' => [
                 'pending' => LegacyRow::where('import_batch_id', $batch->id)->where('review_status', 'pending')->count(),
                 'approved' => LegacyRow::where('import_batch_id', $batch->id)->where('review_status', 'approved')->count(),
@@ -107,35 +114,50 @@ class ImportController extends Controller
         ]);
     }
 
+    private function futureRows(ImportBatch $batch)
+    {
+        return LegacyRow::where('import_batch_id', $batch->id)->where('record_type', 'daily_sale')->where('record_date', '>=', Local::today())->whereNotNull('guest_name')->where('guest_name', '!=', '');
+    }
+
     /** Marks reviewed rows as accepted history. Still provisional and still outside live reporting. */
-    public function commit(Request $request, ImportBatch $batch)
+    public function commit(Request $request, ImportBatch $batch, WorkbookImporter $importer)
     {
         if ($batch->status !== 'staged') {
             throw new RoomConflict("This batch is already {$batch->status}.");
         }
-        DB::transaction(function () use ($batch, $request) {
-            LegacyRow::where('import_batch_id', $batch->id)->where('review_status', 'pending')->whereNotNull('room_id')
-                ->where('record_type', '!=', 'no_booking')
-                ->whereDoesntHave('anomalies', fn ($q) => $q->whereIn('category', ['unknown_or_conflicting_room', 'historical_unlisted_room', 'future_or_unconfirmed_record']))
-                ->update(['review_status' => 'approved', 'reviewed_by' => $request->user()->id]);
-            $batch->update(['status' => 'committed', 'committed_by' => $request->user()->id, 'committed_at' => now()]);
-            Audit::log('import.committed', $batch);
-        });
+        $held = $importer->commit($batch, $request->user()->id);
 
-        return back()->with('success', 'Clean rows accepted as Unverified Historical. Flagged rows remain pending for review.');
+        return back()->with('success', "Clean rows accepted as Unverified Historical. {$this->heldMessage($held)}");
+    }
+
+    public function holdFutureDates(ImportBatch $batch, WorkbookImporter $importer)
+    {
+        if ($batch->status === 'rolled_back') {
+            throw new RoomConflict('This import was rolled back.');
+        }
+
+        return back()->with('success', $this->heldMessage($importer->holdFutureDates($batch)));
+    }
+
+    private function heldMessage(array $held): string
+    {
+        $message = "{$held['held_nights']} future night(s) from the workbook are now held on the calendar, and {$held['already_taken']} were already taken.";
+
+        return $held['unmatched_nights'] ? "{$message} {$held['unmatched_nights']} are NOT held because their room label is not matched yet: match it, then press Hold future dates." : $message;
     }
 
     /** Removes the batch's rows so a corrected workbook can be staged again. Keeps the batch record and file. */
-    public function rollback(ImportBatch $batch)
+    public function rollback(ImportBatch $batch, WorkbookImporter $importer)
     {
-        DB::transaction(function () use ($batch) {
+        DB::transaction(function () use ($batch, $importer) {
+            $importer->releaseHolds($batch);
             ImportAnomaly::where('import_batch_id', $batch->id)->delete();
             LegacyRow::where('import_batch_id', $batch->id)->delete();
             $batch->update(['status' => 'rolled_back']);
             Audit::log('import.rolled_back', $batch);
         });
 
-        return back()->with('success', 'Import rolled back. Bookings and live reports were never affected.');
+        return back()->with('success', 'Import rolled back, and its holds on the calendar were released. Bookings were never affected.');
     }
 
     public function decideMapping(Request $request, ImportMapping $mapping)

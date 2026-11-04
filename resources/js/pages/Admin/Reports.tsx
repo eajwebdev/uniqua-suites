@@ -1,16 +1,18 @@
 import { router } from '@inertiajs/react';
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { CHART, SERIES } from '@/components/charts';
 import { buttonClass, Card, Empty, Input, Select, Stat } from '@/components/ui';
-import { peso } from '@/lib/format';
+import { chartsAnimate, peso } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
 
-export default function Reports({ from, to, property, type, properties, types, kpis, channels, topRooms, trend, definitions, table, canExport }: any) {
-    const go = (changes: any) => router.get('/admin/reports', { from, to, property: property ?? undefined, type, ...changes }, { preserveState: true, preserveScroll: true, replace: true });
-    const exportQuery = `?from=${from}&to=${to}`;
+export default function Reports({ from, to, property, type, basis, bases, filters, rooms, sources, properties, types, kpis, channels, topRooms, trend, definitions, table, canExport }: any) {
+    const go = (changes: any) => router.get('/admin/reports', { from, to, property: property ?? undefined, type, basis: type === 'by_basis' ? basis : undefined, source: filters.source, room: filters.room, method: filters.method, ...changes }, { preserveState: true, preserveScroll: true, replace: true });
+    const query = new URLSearchParams({ from, to, ...(property ? { property: String(property) } : {}), ...(type === 'by_basis' ? { basis } : {}), ...(type === 'room_ledger' && filters.source ? { source: String(filters.source) } : {}), ...(type === 'room_ledger' && filters.room ? { room: String(filters.room) } : {}), ...(type === 'collections' && filters.method ? { method: filters.method } : {}) });
+    const exportQuery = `?${query}`;
 
     return (
         <AdminLayout title="Reports & Analytics">
-            <div className="sticky top-12 z-20 -mx-4 mb-4 flex flex-wrap items-end gap-2 border-b border-line bg-ivory px-4 py-2 sm:-mx-6 sm:px-6">
+            <div className="sticky top-14 z-20 lg:top-16 -mx-4 mb-4 flex flex-wrap items-end gap-2 border-b border-line bg-ivory px-4 py-2 sm:-mx-6 sm:px-6">
                 <label className="text-xs">From<Input type="date" value={from} onChange={(e) => e.target.value && go({ from: e.target.value })} /></label>
                 <label className="text-xs">To<Input type="date" value={to} onChange={(e) => e.target.value && go({ to: e.target.value })} /></label>
                 <label className="text-xs">Property<Select placeholder="All" options={properties.map((p: any) => ({ value: p.id, label: p.name }))} value={property ?? ''} onChange={(e) => go({ property: e.target.value || undefined })} /></label>
@@ -18,7 +20,7 @@ export default function Reports({ from, to, property, type, properties, types, k
 
             {kpis && (
                 <>
-                    <p className="mb-3 max-w-3xl rounded-md bg-beige px-3 py-2 text-sm">Each figure uses its own date basis (stay, receipt, payout, created or expense date), so they do not add up across cards. Legacy spreadsheet data is excluded; it stays provisional under Import &amp; Data Quality.</p>
+                    <p className="mb-3 max-w-3xl rounded-md bg-beige px-3 py-2 text-sm">Each figure uses its own date basis (stay, receipt, payout, created or expense date), so they do not add up across cards. Workbook history is excluded from these figures. It appears, labelled unverified, in the Sales recording report below.</p>
                     <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
                         <Stat label="Earned accommodation (stay date)" value={peso(kpis.earned_cents)} hint={definitions.earned} />
                         <Stat label="Gross operating revenue" value={peso(kpis.gross_operating_cents)} hint={definitions.gross_operating} />
@@ -32,17 +34,17 @@ export default function Reports({ from, to, property, type, properties, types, k
 
                     <div className="mb-5 grid gap-4 lg:grid-cols-2">
                         <Card title="12-month trend">
-                            <div className="h-64">
+                            <div className="h-64" role="img" aria-label="Bar chart of earned accommodation, collected cash and expenses for each of the last 12 months. Exact figures are in the report below.">
                                 <ResponsiveContainer width="100%" height="100%">
                                     <BarChart data={trend}>
-                                        <CartesianGrid stroke="#e3d9cb" vertical={false} />
+                                        <CartesianGrid stroke={CHART.grid} vertical={false} />
                                         <XAxis dataKey="month" tick={{ fontSize: 10 }} />
                                         <YAxis tick={{ fontSize: 10 }} />
                                         <Tooltip formatter={(v: any) => `₱${Number(v).toLocaleString('en-PH')}`} />
                                         <Legend />
-                                        <Bar dataKey="earned" name="Earned" fill="#241a15" />
-                                        <Bar dataKey="collected" name="Collected" fill="#c6a675" />
-                                        <Bar dataKey="expenses" name="Expenses" fill="#a85a4a" />
+                                        <Bar dataKey="earned" name="Earned" fill={SERIES.earned} radius={[4, 4, 0, 0]} isAnimationActive={chartsAnimate} />
+                                        <Bar dataKey="collected" name="Collected" fill={SERIES.collected} radius={[4, 4, 0, 0]} isAnimationActive={chartsAnimate} />
+                                        <Bar dataKey="expenses" name="Expenses" fill={SERIES.expenses} radius={[4, 4, 0, 0]} isAnimationActive={chartsAnimate} />
                                     </BarChart>
                                 </ResponsiveContainer>
                             </div>
@@ -67,17 +69,21 @@ export default function Reports({ from, to, property, type, properties, types, k
                 title="Report"
                 action={
                     <div className="flex flex-wrap items-center gap-2">
-                        <Select aria-label="Report type" className="w-auto" options={types.map((t: any) => ({ value: t.key, label: t.label }))} value={type} onChange={(e) => go({ type: e.target.value })} />
+                        <Select aria-label="Report type" className="w-auto" options={types.map((t: any) => ({ value: t.key, label: t.label }))} value={type} onChange={(e) => go({ type: e.target.value, basis: e.target.value === 'by_basis' ? basis : undefined, source: undefined, room: undefined, method: undefined })} />
+                        {type === 'room_ledger' && <Select aria-label="Booking source" className="w-auto" placeholder="All sources" options={sources.map((s: any) => ({ value: s.id, label: s.name }))} value={filters.source ?? ''} onChange={(e) => go({ source: e.target.value || undefined })} />}
+                        {type === 'room_ledger' && <Select aria-label="Room" className="w-auto" placeholder="All rooms" options={rooms.map((r: any) => ({ value: r.id, label: r.name }))} value={filters.room ?? ''} onChange={(e) => go({ room: e.target.value || undefined })} />}
+                        {type === 'collections' && <Select aria-label="Payment method" className="w-auto" placeholder="All methods" options={[{ value: 'cash', label: 'Cash' }, { value: 'gcash', label: 'GCash' }, { value: 'bank_transfer', label: 'Bank transfer' }, { value: 'other', label: 'Other' }]} value={filters.method ?? ''} onChange={(e) => go({ method: e.target.value || undefined })} />}
+                        {type === 'by_basis' && <Select aria-label="Date basis" className="w-auto" options={bases} value={basis} onChange={(e) => go({ basis: e.target.value })} />}
                         {canExport && ['csv', 'xlsx', 'pdf'].map((f) => <a key={f} href={`/admin/reports/export/${type}/${f}${exportQuery}`} className={buttonClass('secondary', true)}>{f.toUpperCase()}</a>)}
                     </div>
                 }
             >
-                <p className="mb-2 text-xs text-muted">{table.definition}</p>
+                <p className="mb-2 text-xs text-muted">{table.definition}{type === 'collections' && filters.method ? ' Filtered by method, so channel payouts and refunds are not shown.' : ''}</p>
                 {table.rows.length === 0 ? <Empty>No records in this period.</Empty> : (
-                    <div className="overflow-x-auto">
+                    <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Report table, scrolls sideways">
                         <table className="w-full text-left text-sm">
-                            <thead className="text-xs text-muted"><tr>{table.headers.map((h: string) => <th key={h} scope="col" className="py-1 pr-3 font-medium whitespace-nowrap">{h}</th>)}</tr></thead>
-                            <tbody>{table.rows.map((row: any[], i: number) => <tr key={i} className="border-t border-line">{row.map((v, j) => <td key={j} className="py-1.5 pr-3">{v}</td>)}</tr>)}</tbody>
+                            <thead className="text-xs text-muted"><tr>{table.headers.map((h: string, j: number) => <th key={h} scope="col" className={j === 0 ? 'sticky left-0 z-10 bg-white py-1 pr-3 font-medium whitespace-nowrap' : 'py-1 pr-3 font-medium whitespace-nowrap'}>{h}</th>)}</tr></thead>
+                            <tbody>{table.rows.map((row: any[], i: number) => <tr key={i} className="border-t border-line">{row.map((v, j) => <td key={j} className={j === 0 ? 'sticky left-0 bg-white py-1.5 pr-3 whitespace-nowrap tabular-nums' : 'py-1.5 pr-3 whitespace-nowrap tabular-nums'}>{v}</td>)}</tr>)}</tbody>
                         </table>
                     </div>
                 )}

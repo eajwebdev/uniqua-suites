@@ -1,5 +1,5 @@
 import { Link, router, useForm } from '@inertiajs/react';
-import { Check, Copy, X } from 'lucide-react';
+import { Check, Copy, Eye, EyeOff, Inbox, X } from 'lucide-react';
 import { ButtonHTMLAttributes, FormEvent, ReactNode, useEffect, useRef, useState } from 'react';
 import { humanize } from '@/lib/format';
 
@@ -10,14 +10,14 @@ export function cn(...parts: (string | false | null | undefined)[]) {
 type Variant = 'primary' | 'secondary' | 'danger' | 'ghost';
 
 const variants: Record<Variant, string> = {
-    primary: 'bg-chocolate text-ivory hover:bg-espresso',
-    secondary: 'border border-line bg-white text-chocolate hover:bg-beige',
+    primary: 'bg-chocolate text-ivory shadow-sm hover:bg-espresso',
+    secondary: 'border border-line bg-white text-chocolate shadow-xs hover:bg-beige',
     danger: 'border border-red-300 bg-white text-red-800 hover:bg-red-50',
     ghost: 'text-chocolate hover:bg-beige',
 };
 
 export function buttonClass(variant: Variant = 'secondary', small = false) {
-    return cn('inline-flex items-center justify-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-50', small ? 'px-2.5 py-1 text-xs' : 'px-3.5 py-2 text-sm', variants[variant]);
+    return cn('inline-flex items-center justify-center gap-1.5 rounded-lg font-medium whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-50 active:opacity-80 pointer-coarse:min-h-11', small ? 'px-2.5 py-1 text-xs pointer-coarse:px-3.5 pointer-coarse:text-sm' : 'px-3.5 py-2 text-sm', variants[variant]);
 }
 
 export function Button({ variant = 'secondary', small, className, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; small?: boolean }) {
@@ -26,14 +26,14 @@ export function Button({ variant = 'secondary', small, className, ...props }: Bu
 
 export function Card({ title, action, children, className }: { title?: ReactNode; action?: ReactNode; children: ReactNode; className?: string }) {
     return (
-        <section className={cn('rounded-lg border border-line bg-white', className)}>
+        <section className={cn('rounded-xl border border-line/80 bg-white shadow-xs', className)}>
             {(title || action) && (
-                <header className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
-                    <h2 className="text-sm font-semibold">{title}</h2>
+                <header className="flex flex-wrap items-center justify-between gap-2 px-5 pt-4">
+                    <h2 className="flex items-center gap-2 text-[0.9375rem] font-semibold">{title}</h2>
                     {action}
                 </header>
             )}
-            <div className="p-4">{children}</div>
+            <div className="p-5 pt-3">{children}</div>
         </section>
     );
 }
@@ -57,13 +57,13 @@ const statusTone: Record<string, keyof typeof tones> = {
 
 export function StatusChip({ value, label }: { value?: string | null; label?: string }) {
     if (!value) return <span className="text-muted">—</span>;
-    return <span className={cn('inline-block rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap', tones[statusTone[value] ?? 'neutral'])}>{label ?? humanize(value)}</span>;
+    return <span className={cn('inline-block rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap', tones[statusTone[value] ?? 'neutral'])}>{label ?? (value === 'tentative' ? 'On hold' : humanize(value))}</span>;
 }
 
 export type FieldDef = {
     name: string;
     label: string;
-    type?: 'text' | 'textarea' | 'number' | 'money' | 'date' | 'datetime' | 'time' | 'select' | 'file' | 'checkbox';
+    type?: 'text' | 'textarea' | 'number' | 'money' | 'date' | 'datetime' | 'time' | 'select' | 'multicheck' | 'file' | 'checkbox';
     options?: { value: string | number; label: string }[];
     required?: boolean;
     help?: string;
@@ -71,7 +71,8 @@ export type FieldDef = {
     accept?: string;
 };
 
-const inputBase = 'rounded-md border border-line bg-white px-3 py-2 text-sm placeholder:text-muted/70';
+// 16px on touch screens: iPhones zoom the whole page when focusing anything smaller.
+const inputBase = 'rounded-lg border border-line bg-white px-3 py-2 text-sm shadow-xs transition-shadow placeholder:text-muted/70 focus:border-gold-dark focus:ring-2 focus:ring-gold/30 focus:outline-none pointer-coarse:min-h-11 pointer-coarse:text-base';
 const inputClass = `w-full ${inputBase}`;
 
 /** Full width unless the caller sets its own width, since w-full would win over w-auto in the generated CSS. */
@@ -81,6 +82,20 @@ function controlClass(className?: string) {
 
 export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
     return <input {...props} className={controlClass(props.className)} />;
+}
+
+/** Lets staff check what they typed, which saves most failed sign-ins. */
+export function PasswordInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
+    const [shown, setShown] = useState(false);
+
+    return (
+        <span className="relative block">
+            <Input {...props} type={shown ? 'text' : 'password'} className={cn('w-full pr-11', props.className)} />
+            <button type="button" aria-label={shown ? 'Hide password' : 'Show password'} aria-pressed={shown} onClick={() => setShown(!shown)} className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-muted hover:text-chocolate">
+                {shown ? <EyeOff size={17} aria-hidden /> : <Eye size={17} aria-hidden />}
+            </button>
+        </span>
+    );
 }
 
 export function Select({ options, placeholder, ...props }: React.SelectHTMLAttributes<HTMLSelectElement> & { options: { value: string | number; label: string }[]; placeholder?: string }) {
@@ -121,7 +136,25 @@ export function DynamicField({ field, value, error, onChange }: { field: FieldDe
             </label>
         );
     }
-    const common = { id: field.name, required: field.required, name: field.name };
+    if (type === 'multicheck') {
+        const selected: any[] = value ?? [];
+        return (
+            <fieldset className="text-sm">
+                <legend className="mb-1 font-medium">{field.label}</legend>
+                <div className="grid grid-cols-2 gap-1">
+                    {field.options?.map((o) => (
+                        <label key={o.value} className="flex items-center gap-2">
+                            <input type="checkbox" checked={selected.includes(o.value)} onChange={(e) => onChange(e.target.checked ? [...selected, o.value] : selected.filter((v) => v !== o.value))} />
+                            {o.label}
+                        </label>
+                    ))}
+                </div>
+                {field.help && <span className="mt-1 block text-xs text-muted">{field.help}</span>}
+                {error && <span role="alert" className="mt-1 block text-xs text-red-800">{error}</span>}
+            </fieldset>
+        );
+    }
+    const common = { id: field.name, required: field.required, name: field.name, 'aria-invalid': error ? true : undefined };
     let control: ReactNode;
     if (type === 'textarea') control = <textarea {...common} rows={3} className={inputClass} value={value ?? ''} onChange={(e) => onChange(e.target.value)} />;
     else if (type === 'select') control = <Select {...common} placeholder={field.required ? 'Select…' : 'None'} options={field.options ?? []} value={value ?? ''} onChange={(e) => onChange(e.target.value)} />;
@@ -147,7 +180,7 @@ export function Modal({ open, onClose, title, children }: { open: boolean; onClo
         <dialog ref={ref} onClose={onClose} className="m-auto w-[calc(100%-2rem)] max-w-lg rounded-lg border border-line bg-white p-0 text-chocolate">
             <header className="flex items-center justify-between border-b border-line px-4 py-3">
                 <h2 className="font-semibold">{title}</h2>
-                <Button variant="ghost" small aria-label="Close" onClick={onClose}>
+                <Button variant="ghost" small aria-label="Close dialog" onClick={onClose}>
                     <X size={16} />
                 </Button>
             </header>
@@ -161,16 +194,28 @@ export function FormModal({ title, url, fields, data, submitLabel, confirm, onCl
     const initial = Object.fromEntries(fields.map((f) => [f.name, f.default ?? (f.type === 'checkbox' ? false : '')]));
     const form = useForm<Record<string, any>>({ ...initial, ...data });
     const hasFile = fields.some((f) => f.type === 'file');
+    const formRef = useRef<HTMLFormElement>(null);
+
+    // Runs once the errors are on screen, so the first bad field can take focus.
+    useEffect(() => {
+        if (Object.keys(form.errors).length > 0) {
+            formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
+        }
+    }, [form.errors]);
 
     function submit(e: FormEvent) {
         e.preventDefault();
         if (confirm && !window.confirm(confirm)) return;
-        form.post(url, { forceFormData: hasFile, preserveScroll: true, onSuccess: () => onClose() });
+        form.post(url, {
+            forceFormData: hasFile,
+            preserveScroll: true,
+            onSuccess: () => onClose(),
+        });
     }
 
     return (
         <Modal open title={title} onClose={onClose}>
-            <form onSubmit={submit} className="space-y-3">
+            <form ref={formRef} onSubmit={submit} className="space-y-3">
                 {fields.map((f) => (
                     <DynamicField key={f.name} field={f} value={form.data[f.name]} error={(form.errors as any)[f.name]} onChange={(v) => form.setData(f.name, v)} />
                 ))}
@@ -213,20 +258,26 @@ export function ActionButton({ action, small = true }: { action: RowAction; smal
     );
 }
 
+export async function copyToClipboard(text: string): Promise<boolean> {
+    try {
+        await navigator.clipboard.writeText(text);
+        return true;
+    } catch {
+        // Clipboard API needs HTTPS or localhost; fall back for plain-HTTP local hosts.
+        const area = document.createElement('textarea');
+        area.value = text;
+        document.body.appendChild(area);
+        area.select();
+        const done = document.execCommand('copy');
+        area.remove();
+        return done;
+    }
+}
+
 export function CopyButton({ text, label = 'Copy', small = true }: { text: string; label?: string; small?: boolean }) {
     const [copied, setCopied] = useState(false);
     async function copy() {
-        try {
-            await navigator.clipboard.writeText(text);
-        } catch {
-            // Clipboard API needs HTTPS or localhost; fall back for plain-HTTP local hosts.
-            const area = document.createElement('textarea');
-            area.value = text;
-            document.body.appendChild(area);
-            area.select();
-            document.execCommand('copy');
-            area.remove();
-        }
+        await copyToClipboard(text);
         setCopied(true);
         setTimeout(() => setCopied(false), 1800);
     }
@@ -239,17 +290,28 @@ export function CopyButton({ text, label = 'Copy', small = true }: { text: strin
 }
 
 export function Empty({ children }: { children: ReactNode }) {
-    return <p className="py-6 text-center text-sm text-muted">{children}</p>;
-}
-
-export function Stat({ label, value, hint }: { label: string; value: ReactNode; hint?: string }) {
     return (
-        <div className="rounded-lg border border-line bg-white p-4" title={hint}>
-            <div className="text-xs text-muted">{label}</div>
-            <div className="mt-1 text-xl font-semibold tabular-nums">{value}</div>
-            {hint && <div className="mt-1 text-xs text-muted">{hint}</div>}
+        <div className="flex flex-col items-center gap-2 py-8 text-center text-sm text-muted">
+            <Inbox size={22} strokeWidth={1.5} aria-hidden />
+            <p>{children}</p>
         </div>
     );
+}
+
+export function Stat({ label, value, hint, icon: Icon, href }: { label: string; value: ReactNode; hint?: string; icon?: any; href?: string }) {
+    const body = (
+        <>
+            <div className="flex items-center justify-between gap-2 text-xs font-medium text-muted">
+                {label}
+                {Icon && <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-beige text-espresso"><Icon size={16} strokeWidth={1.75} aria-hidden /></span>}
+            </div>
+            <div className="mt-1 text-2xl font-semibold">{value}</div>
+            {hint && <div className="mt-1 text-xs text-muted">{hint}</div>}
+        </>
+    );
+    const frame = 'block rounded-xl border border-line/80 bg-white p-4 shadow-xs';
+
+    return href ? <Link href={href} className={cn(frame, 'transition-colors hover:border-gold')}>{body}</Link> : <div className={frame}>{body}</div>;
 }
 
 export function Pagination({ links }: { links?: { url: string | null; label: string; active: boolean }[] }) {
@@ -258,7 +320,7 @@ export function Pagination({ links }: { links?: { url: string | null; label: str
         <nav aria-label="Pages" className="mt-3 flex flex-wrap gap-1">
             {links.map((l, i) =>
                 l.url ? (
-                    <Link key={i} href={l.url} preserveScroll className={cn('rounded px-2.5 py-1 text-xs', l.active ? 'bg-chocolate text-ivory' : 'border border-line bg-white')} dangerouslySetInnerHTML={{ __html: l.label }} />
+                    <Link key={i} href={l.url} preserveScroll className={cn('flex items-center rounded px-2.5 py-1 text-xs pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:justify-center', l.active ? 'bg-chocolate text-ivory' : 'border border-line bg-white')} aria-current={l.active ? 'page' : undefined} dangerouslySetInnerHTML={{ __html: l.label }} />
                 ) : (
                     <span key={i} className="px-2.5 py-1 text-xs text-muted" dangerouslySetInnerHTML={{ __html: l.label }} />
                 ),
@@ -272,7 +334,7 @@ export function Tabs({ tabs, current }: { tabs?: { label: string; href: string }
     return (
         <div className="mb-4 flex gap-1 overflow-x-auto border-b border-line">
             {tabs.map((t) => (
-                <Link key={t.href} href={t.href} className={cn('px-3 py-2 text-sm whitespace-nowrap', current.startsWith(t.href) ? 'border-b-2 border-chocolate font-semibold' : 'text-muted')}>
+                <Link key={t.href} href={t.href} aria-current={current === t.href ? 'page' : undefined} className={cn('flex items-center px-3 py-2 text-sm whitespace-nowrap pointer-coarse:min-h-11', current === t.href ? 'border-b-2 border-gold-dark font-semibold' : 'text-muted hover:text-chocolate')}>
                     {t.label}
                 </Link>
             ))}

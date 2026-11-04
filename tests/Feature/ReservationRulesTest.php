@@ -163,7 +163,7 @@ class ReservationRulesTest extends DomainTestCase
             if ($locker->transactionLevel() > 0) {
                 $locker->rollBack();
             }
-            foreach (['booking_status_events', 'booking_nights', 'booking_charges', 'pricing_snapshots', 'booking_rooms', 'bookings', 'guests'] as $table) {
+            foreach (['room_night_claims', 'booking_status_events', 'booking_nights', 'booking_charges', 'pricing_snapshots', 'booking_rooms', 'bookings', 'guests'] as $table) {
                 DB::table($table)->delete();
             }
             DB::beginTransaction();
@@ -205,7 +205,7 @@ class ReservationRulesTest extends DomainTestCase
             $this->assertSame(0, DB::table('booking_charges')->where('booking_id', $loser->id)->count(), 'no partial financial update');
             $this->assertSame(2, $charges());
         } finally {
-            foreach (['booking_status_events', 'booking_nights', 'booking_charges', 'pricing_snapshots', 'booking_rooms', 'bookings', 'guests'] as $table) {
+            foreach (['room_night_claims', 'booking_status_events', 'booking_nights', 'booking_charges', 'pricing_snapshots', 'booking_rooms', 'bookings', 'guests'] as $table) {
                 DB::table($table)->delete();
             }
             DB::beginTransaction();

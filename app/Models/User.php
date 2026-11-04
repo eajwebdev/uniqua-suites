@@ -15,7 +15,7 @@ class User extends Authenticatable
 
     protected $fillable = ['name', 'email', 'password', 'is_active'];
 
-    protected $hidden = ['password', 'remember_token'];
+    protected $hidden = ['password', 'remember_token', 'two_factor_secret', 'two_factor_recovery_codes', 'two_factor_last_step'];
 
     protected $attributes = ['is_active' => true];
 
@@ -25,6 +25,15 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'is_active' => 'boolean',
+            'two_factor_secret' => 'encrypted',
+            'two_factor_recovery_codes' => 'array',
+            'two_factor_confirmed_at' => 'datetime',
+            'muted_notifications' => 'array',
         ];
+    }
+
+    public function hasTwoFactor(): bool
+    {
+        return $this->two_factor_confirmed_at !== null;
     }
 }

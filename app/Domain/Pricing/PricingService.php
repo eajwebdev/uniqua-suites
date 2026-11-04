@@ -6,6 +6,7 @@ use App\Domain\Availability\RoomConflict;
 use App\Models\RateOverride;
 use App\Models\RateRule;
 use App\Models\Room;
+use App\Models\TaxRule;
 use App\Support\Settings;
 use Carbon\CarbonImmutable;
 
@@ -78,6 +79,9 @@ class PricingService
             }
         }
 
+        // Worked out before parking, services and discounts, so repricing a stay gives the same tax.
+        $taxable = array_sum(array_column($lines, 'amount_cents'));
+
         if (($opts['parking_cents'] ?? 0) > 0) {
             $lines[] = ['type' => 'parking', 'description' => 'Parking', 'quantity' => 1, 'unit_cents' => $opts['parking_cents'], 'amount_cents' => $opts['parking_cents'], 'charge_date' => $checkIn];
         }
@@ -87,10 +91,21 @@ class PricingService
         if (($opts['discount_cents'] ?? 0) > 0) {
             $lines[] = [
                 'type' => 'discount',
-                'description' => 'Discount: '.($opts['discount_reason'] ?? 'authorized'),
+                'description' => empty($opts['discount_reason']) ? 'Discount' : "Discount: {$opts['discount_reason']}",
                 'quantity' => 1,
                 'unit_cents' => -$opts['discount_cents'],
                 'amount_cents' => -$opts['discount_cents'],
+                'charge_date' => $checkIn,
+            ];
+        }
+
+        foreach (TaxRule::inForceOn($checkIn)->orderBy('id')->get() as $rule) {
+            $lines[] = [
+                'type' => 'tax',
+                'description' => $rule->name.' ('.rtrim(rtrim(number_format($rule->rate_basis_points / 100, 2, '.', ''), '0'), '.').'%)',
+                'quantity' => 1,
+                'unit_cents' => $this->taxOn($taxable, (int) $rule->rate_basis_points),
+                'amount_cents' => $this->taxOn($taxable, (int) $rule->rate_basis_points),
                 'charge_date' => $checkIn,
             ];
         }
@@ -101,6 +116,12 @@ class PricingService
             'total_cents' => array_sum(array_column($lines, 'amount_cents')),
             'warnings' => $warnings,
         ];
+    }
+
+    /** Rounds half up in whole centavos, using integers only. */
+    private function taxOn(int $cents, int $basisPoints): int
+    {
+        return intdiv($cents * $basisPoints + 5000, 10000);
     }
 
     /** One entry per occupied night, priced from that night's date and effective rule. */

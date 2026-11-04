@@ -34,8 +34,8 @@ class DatabaseSeeder extends Seeder
         foreach (Permissions::ALL as $name) {
             Permission::findOrCreate($name, 'web');
         }
-        foreach (Permissions::ROLES as $role => $permissions) {
-            Role::findOrCreate($role, 'web')->syncPermissions($permissions);
+        foreach (Permissions::ROLES as $role) {
+            Role::findOrCreate($role, 'web')->syncPermissions(Permissions::forRole($role));
         }
 
         $loop = Property::updateOrCreate(['slug' => 'the-loop'], ['name' => 'The Loop', 'location_label' => 'The Loop, Limketkai']);
@@ -113,6 +113,11 @@ class DatabaseSeeder extends Seeder
         $this->templates();
         $this->decisions();
 
+        // Tests stay pinned to the room list's rates, and would otherwise copy every photo per test.
+        if (! app()->environment('testing')) {
+            $this->call(SuiteCatalogSeeder::class);
+        }
+
         if (! User::exists() && app()->environment('local')) {
             $password = Str::random(16);
             $owner = User::create(['name' => 'Owner', 'email' => 'owner@uniqa-suites.test', 'password' => Hash::make($password)]);
@@ -155,11 +160,15 @@ class DatabaseSeeder extends Seeder
             ['room_2510_2520', 'Is 2510 the same unit as 2520 (BALI)?', 'The parking calendar heading says 2510. The room list, cleaning and laundry use 2520. Kept separate until confirmed.', 'data_conflict'],
             ['room_14q_location', 'Is 14Q at The Loop or Mesaverte?', 'September to December headings say LOOP 14Q. The room list places BERLIN T3 14Q at Mesaverte.', 'data_conflict'],
             ['capacity_history', 'Historical capacities differ from the room list', 'Tokyo 1725 up to 7 vs 5, Venice 1410 up to 5 vs 4, Rio up to 4 vs 2, Bali 2520 5 vs 4. Current list used for new bookings once approved.', 'data_conflict'],
-            ['messenger_url', 'Official Messenger, Instagram and contact details', 'None were supplied. The public site offers a copyable inquiry until set in the environment file.', 'default_needs_approval'],
+            ['messenger_url', 'Official Messenger, Instagram and contact details', 'The website\'s Book Now buttons open a chat with the official page, facebook.com/uniqasuitescdo, set in the environment file. Instagram, phone and email were not supplied, so none are shown.', 'default_needs_approval'],
             ['room_photos', 'Room photography', 'No room photos were supplied. Public room pages show the name and details without images until uploaded.', 'default_needs_approval'],
             ['address_details', 'Public address, map links and amenities', 'Only the building names are known. Nothing further is published.', 'default_needs_approval'],
             ['cutover_date', 'Cutover date from Excel to this system', 'Must be set by the owner, with Airbnb future bookings reconciled first.', 'default_needs_approval'],
+            ['tax_rules', 'Are any taxes or fees charged on stays?', 'None were supplied, so none are charged. If one applies, add it under Settings with its effective date. Confirm the rate and how it is applied with your accountant.', 'default_needs_approval'],
+            ['stay_rules', 'Minimum stay and booking window', 'The source sets no limits, so none are enforced. Set them under Settings, or per room under Rooms.', 'default_needs_approval'],
+            ['guest_policies', 'Cancellation policy and house rules', 'None were supplied. The public policies page shows them only after you write them under Settings.', 'default_needs_approval'],
             ['ical_future', 'Airbnb iCal import', 'Read-only blocked dates are available once private feed URLs are supplied. No two-way sync is offered.', 'future_optional'],
+            ['public_no_prices', 'The public website shows taken dates but no prices', 'Owner decisions, 4 November 2026. Guests browse suites and see which dates are taken, by date only. Book Now opens Facebook Messenger with free dates they chose. Only staff see prices and send the quotation, and a booking exists only when staff enter it.', 'source_fact'],
             ['source_room_catalog', 'Nine rooms from ROOM DETAILS', 'Names, units, capacities and rates come directly from the room list. Approve each room under Rooms before publishing.', 'source_fact'],
         ];
         foreach ($rows as [$key, $title, $detail, $kind]) {

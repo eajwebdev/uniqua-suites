@@ -2,12 +2,15 @@
 
 namespace App\Domain\LegacyImport;
 
+use App\Domain\Availability\InventoryService;
 use App\Models\ImportAnomaly;
 use App\Models\ImportBatch;
 use App\Models\ImportMapping;
 use App\Models\LegacyRow;
 use App\Models\Room;
+use App\Models\RoomBlock;
 use App\Support\Audit;
+use App\Support\Local;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
@@ -26,6 +29,8 @@ class WorkbookImporter
 {
     public const VERSION = 'sales-2026-v1';
 
+    public const HOLD_KIND = 'workbook';
+
     private const MONTH_SHEETS = ['JAN. 2026' => 1, 'FEB 2026' => 2, 'MARCH 2026' => 3, 'APRIL 2026' => 4, 'MAY 2026' => 5, 'JUNE 2026' => 6, 'JULY 2026' => 7, 'AUGUST' => 8, 'SEPTEMBER' => 9, 'OCTOBER' => 10, 'NOVEMBER' => 11, 'DECEMBER' => 12];
 
     // Labels that stay unverified until the owner decides, with what the sheets actually show.
@@ -37,10 +42,92 @@ class WorkbookImporter
 
     private ImportBatch $batch;
 
+    public function __construct(private InventoryService $inventory)
+    {
+    }
+
+    /** Accepts the clean rows as history, then protects the calendar from the workbook's future stays. */
+    public function commit(ImportBatch $batch, ?int $userId): array
+    {
+        DB::transaction(function () use ($batch, $userId) {
+            LegacyRow::where('import_batch_id', $batch->id)->where('review_status', 'pending')->whereNotNull('room_id')
+                ->where('record_type', '!=', 'no_booking')
+                ->whereDoesntHave('anomalies', fn ($q) => $q->whereIn('category', ['unknown_or_conflicting_room', 'historical_unlisted_room', 'future_or_unconfirmed_record']))
+                ->update(['review_status' => 'approved', 'reviewed_by' => $userId]);
+            $batch->update(['status' => 'committed', 'committed_by' => $userId, 'committed_at' => now()]);
+            Audit::log('import.committed', $batch);
+        });
+
+        return $this->holdFutureDates($batch);
+    }
+
+    /**
+     * Blocks the rooms for future stays written in the workbook, so guests and staff see them as taken.
+     * A block, not a booking: the sheet has no check-out, payment proof or agreed price to build one from,
+     * so staff still enter the real booking. Safe to repeat, because a night already taken is skipped.
+     */
+    public function holdFutureDates(ImportBatch $batch): array
+    {
+        $today = Local::today();
+        $rows = LegacyRow::where('import_batch_id', $batch->id)->where('record_type', 'daily_sale')
+            ->where('review_status', '!=', 'rejected')->where('record_date', '>=', $today)
+            ->whereNotNull('guest_name')->where('guest_name', '!=', '');
+        $result = ['held_nights' => 0, 'already_taken' => 0, 'unmatched_nights' => (clone $rows)->whereNull('room_id')->count()];
+
+        foreach ((clone $rows)->whereNotNull('room_id')->orderBy('room_id')->orderBy('record_date')->get()->groupBy('room_id') as $roomId => $nights) {
+            $this->inventory->withRoomLocks([$roomId], function () use ($batch, $roomId, $nights, &$result) {
+                $open = null;
+                $close = function () use (&$open, $batch, $roomId) {
+                    if ($open) {
+                        RoomBlock::create([
+                            'room_id' => $roomId,
+                            'start_date' => $open['start'],
+                            'end_date' => $open['end'],
+                            'kind' => self::HOLD_KIND,
+                            'reason' => mb_substr("Sales workbook: {$open['guest']}", 0, 255),
+                            'external_uid' => "workbook:{$batch->id}:{$roomId}:{$open['start']}",
+                        ]);
+                    }
+                    $open = null;
+                };
+
+                foreach ($nights as $row) {
+                    $night = $row->record_date->toDateString();
+                    $next = $row->record_date->toImmutable()->addDay()->toDateString();
+                    if ($this->inventory->conflicts($roomId, $night, $next)->isNotEmpty()) {
+                        $result['already_taken']++;
+                        $close();
+                        continue;
+                    }
+                    $result['held_nights']++;
+                    if ($open && $open['end'] === $night && mb_strtolower($open['guest']) === mb_strtolower(trim($row->guest_name))) {
+                        $open['end'] = $next;
+                    } else {
+                        $close();
+                        $open = ['start' => $night, 'end' => $next, 'guest' => trim($row->guest_name)];
+                    }
+                }
+                $close();
+            });
+        }
+
+        Audit::log('import.future_dates_held', $batch, $result);
+
+        return $result;
+    }
+
+    public function releaseHolds(ImportBatch $batch): void
+    {
+        RoomBlock::where('kind', self::HOLD_KIND)->where('external_uid', 'like', "workbook:{$batch->id}:%")->whereNull('released_at')->update(['released_at' => now()]);
+    }
+
     public function stage(string $absolutePath, string $originalName, string $storedPath, ?int $userId = null): ImportBatch
     {
         @ini_set('memory_limit', '1G');
-        @set_time_limit(300);
+        // A web request only: from the console this limit would also cut off whatever runs after the import.
+        if (! app()->runningInConsole()) {
+            @set_time_limit(300);
+        }
 
         $reader = IOFactory::createReaderForFile($absolutePath);
         $reader->setReadDataOnly(true);

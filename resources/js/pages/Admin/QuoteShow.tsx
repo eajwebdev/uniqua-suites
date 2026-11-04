@@ -1,8 +1,21 @@
 import { Link } from '@inertiajs/react';
-import { Download, Printer } from 'lucide-react';
+import { Download, Pencil, Printer } from 'lucide-react';
 import { Button, buttonClass, Card, CopyButton } from '@/components/ui';
 import { dateOnly, dateTime, peso } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
+
+const pesos = (cents?: number) => (cents ? (Math.abs(cents) / 100).toFixed(2) : undefined);
+
+/** Everything that made this quote, so an update only has to change what changed. */
+function updateLink(q: any): string {
+    const amount = (type: string) => q.items.filter((i: any) => i.type === type).reduce((sum: number, i: any) => sum + Number(i.amount_cents), 0);
+    const params = Object.entries({
+        reference: q.reference, room_id: q.room_id, check_in: q.check_in, check_out: q.check_out, guests: q.guest_count, guest_name: q.guest_name,
+        source_id: q.source_id, early_time: q.early_time, parking: pesos(amount('parking')), discount: pesos(amount('discount')),
+    }).filter(([, v]) => v !== null && v !== undefined && v !== '');
+
+    return `/admin/quotes/create?${new URLSearchParams(params.map(([k, v]) => [k, String(v)])).toString()}`;
+}
 
 export default function QuoteShow({ quote: q, history, copyText }: any) {
     return (
@@ -11,7 +24,9 @@ export default function QuoteShow({ quote: q, history, copyText }: any) {
             actions={
                 <>
                     <CopyButton text={copyText} label="Copy for Messenger" small={false} />
+                    <Link href={updateLink(q)} className={buttonClass('secondary')}><Pencil size={15} aria-hidden /> Update quote</Link>
                     <Button onClick={() => window.print()}><Printer size={15} /> Print</Button>
+                    {!q.booking_id && <Link href={`/admin/bookings/create?room_id=${q.room_id}&check_in=${q.check_in}&check_out=${q.check_out}`} className={buttonClass('secondary')}>Create booking</Link>}
                     <a href={`/admin/quotes/${q.id}/pdf`} className={buttonClass('primary')}><Download size={15} /> PDF</a>
                 </>
             }

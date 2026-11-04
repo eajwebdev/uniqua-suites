@@ -20,28 +20,41 @@ use App\Http\Controllers\Admin\SettingsController;
 use App\Http\Controllers\Admin\TeamController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\PublicSiteController;
+use App\Http\Controllers\TwoFactorController;
 use Illuminate\Support\Facades\Route;
 
-Route::middleware('throttle:120,1')->group(function () {
+Route::middleware('throttle:public')->group(function () {
     Route::get('/', [PublicSiteController::class, 'home']);
     Route::get('/suites', [PublicSiteController::class, 'suites']);
     Route::get('/suites/{slug}', [PublicSiteController::class, 'show']);
+    Route::get('/suites/{slug}/check-dates', [PublicSiteController::class, 'checkDates']);
     Route::get('/policies', [PublicSiteController::class, 'policies']);
 });
 
 Route::middleware('guest')->group(function () {
     Route::get('/login', [AuthController::class, 'loginForm'])->name('login');
-    Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:8,1');
+    Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:login');
+    Route::post('/login/demo/{role}', [AuthController::class, 'demoLogin'])->middleware('throttle:login');
     Route::get('/forgot-password', [AuthController::class, 'forgotForm'])->name('password.request');
-    Route::post('/forgot-password', [AuthController::class, 'forgot'])->middleware('throttle:5,1');
+    Route::post('/forgot-password', [AuthController::class, 'forgot'])->middleware('throttle:password-reset');
     Route::get('/reset-password/{token}', [AuthController::class, 'resetForm'])->name('password.reset');
-    Route::post('/reset-password', [AuthController::class, 'reset'])->middleware('throttle:5,1');
+    Route::post('/reset-password', [AuthController::class, 'reset'])->middleware('throttle:password-reset');
+    Route::get('/two-factor', [TwoFactorController::class, 'form']);
+    Route::post('/two-factor', [TwoFactorController::class, 'verify'])->middleware('throttle:two-factor');
 });
 
-Route::middleware(['auth', 'active'])->prefix('admin')->group(function () {
+// auth.session ends a person's other sessions when their password changes.
+Route::middleware(['auth', 'auth.session', 'active', 'mfa.enrolled'])->prefix('admin')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/account', [AuthController::class, 'account']);
     Route::post('/account/password', [AuthController::class, 'updatePassword']);
+    Route::middleware('throttle:two-factor')->group(function () {
+        Route::post('/account/two-factor/setup', [TwoFactorController::class, 'setup']);
+        Route::post('/account/two-factor/confirm', [TwoFactorController::class, 'confirm']);
+        Route::post('/account/two-factor/recovery-codes', [TwoFactorController::class, 'regenerateRecoveryCodes']);
+        Route::post('/account/two-factor/disable', [TwoFactorController::class, 'disable']);
+    });
+    Route::post('/account/notifications', [AuthController::class, 'updateNotificationPrefs']);
     Route::post('/notifications/read', [AuthController::class, 'readNotifications']);
 
     Route::get('/', [DashboardController::class, 'index']);
@@ -53,6 +66,7 @@ Route::middleware(['auth', 'active'])->prefix('admin')->group(function () {
     });
     Route::middleware('perm:bookings.manage')->group(function () {
         Route::get('/bookings/create', [BookingController::class, 'create']);
+        Route::get('/bookings/availability', [BookingController::class, 'availability']);
         Route::post('/bookings', [BookingController::class, 'store']);
         Route::post('/bookings/{booking}/hold', [BookingController::class, 'hold']);
         Route::post('/bookings/{booking}/cancel', [BookingController::class, 'cancel']);
@@ -74,6 +88,7 @@ Route::middleware(['auth', 'active'])->prefix('admin')->group(function () {
         Route::get('/quotes', [QuoteController::class, 'index']);
         Route::get('/quotes/create', [QuoteController::class, 'create']);
         Route::post('/quotes', [QuoteController::class, 'store']);
+        Route::get('/quotes/check', [QuoteController::class, 'check']);
         Route::get('/quotes/{quote}', [QuoteController::class, 'show']);
         Route::get('/quotes/{quote}/pdf', [QuoteController::class, 'pdf']);
     });
@@ -86,6 +101,8 @@ Route::middleware(['auth', 'active'])->prefix('admin')->group(function () {
         Route::post('/rooms/{room}/publish', [RoomController::class, 'togglePublish']);
         Route::post('/rooms/{room}/images', [RoomController::class, 'addImage']);
         Route::post('/room-images/{image}/delete', [RoomController::class, 'deleteImage']);
+        Route::post('/rooms/{room}/listings', [RoomController::class, 'addListing']);
+        Route::post('/room-listings/{listing}/delete', [RoomController::class, 'deleteListing']);
     });
     Route::post('/rooms/{room}/rates', [RoomController::class, 'addRate'])->middleware('perm:rates.manage');
     Route::post('/rooms/{room}/overrides', [RoomController::class, 'addOverride'])->middleware('perm:rates.manage');
@@ -101,6 +118,7 @@ Route::middleware(['auth', 'active'])->prefix('admin')->group(function () {
     });
     Route::post('/receipts', [FinanceController::class, 'storeReceipt'])->middleware('perm:payments.record');
     Route::post('/receipts/{receipt}/review', [FinanceController::class, 'reviewReceipt'])->middleware('perm:payments.verify');
+    Route::post('/receipts/{receipt}/reverse', [FinanceController::class, 'reverseReceipt'])->middleware('perm:payments.verify');
     Route::post('/refunds', [FinanceController::class, 'storeRefund'])->middleware('perm:payments.record');
     Route::post('/refunds/{refund}/decide', [FinanceController::class, 'decideRefund'])->middleware('perm:refunds.approve');
     Route::post('/settlements', [FinanceController::class, 'storeSettlement'])->middleware('perm:settlements.manage');
@@ -112,15 +130,17 @@ Route::middleware(['auth', 'active'])->prefix('admin')->group(function () {
     Route::post('/expenses', [ExpenseController::class, 'store'])->middleware('perm:expenses.manage');
     Route::post('/expenses/{expense}/paid', [ExpenseController::class, 'markPaid'])->middleware('perm:expenses.manage');
     Route::post('/expenses/{expense}/approve', [ExpenseController::class, 'approve'])->middleware('perm:expenses.approve');
+    Route::post('/expenses/{expense}/reverse', [ExpenseController::class, 'reverse'])->middleware('perm:expenses.manage');
 
     Route::get('/reports', [ReportController::class, 'index'])->middleware('perm:reports.view');
     Route::get('/reports/export/{type}/{format}', [ReportController::class, 'export'])->middleware('perm:reports.export');
 
+    Route::get('/housekeeping', [HousekeepingController::class, 'index'])->middleware('perm:housekeeping.own|housekeeping.manage|housekeeping.inspect');
     Route::middleware('perm:housekeeping.own|housekeeping.manage')->group(function () {
-        Route::get('/housekeeping', [HousekeepingController::class, 'index']);
         Route::post('/tasks/{task}/start', [HousekeepingController::class, 'start']);
         Route::post('/tasks/{task}/complete', [HousekeepingController::class, 'complete']);
     });
+    Route::post('/tasks/auto-assign', [HousekeepingController::class, 'autoAssign'])->middleware('perm:housekeeping.manage');
     Route::post('/tasks/{task}/assign', [HousekeepingController::class, 'assign'])->middleware('perm:housekeeping.manage');
     Route::post('/tasks/{task}/inspect', [HousekeepingController::class, 'inspect'])->middleware('perm:housekeeping.inspect');
     Route::get('/laundry', [HousekeepingController::class, 'laundry'])->middleware('perm:housekeeping.manage');
@@ -132,6 +152,8 @@ Route::middleware(['auth', 'active'])->prefix('admin')->group(function () {
     });
     Route::post('/work-orders', [MaintenanceController::class, 'storeWorkOrder'])->middleware('perm:maintenance.manage');
     Route::get('/incidents', [MaintenanceController::class, 'incidents'])->middleware('perm:incidents.view');
+    Route::get('/incidents/{incident}', [MaintenanceController::class, 'showIncident'])->middleware('perm:incidents.view');
+    Route::post('/incidents/{incident}/notes', [MaintenanceController::class, 'storeIncidentNote'])->middleware('perm:incidents.manage');
     Route::post('/incidents', [MaintenanceController::class, 'storeIncident'])->middleware('perm:incidents.manage');
     Route::post('/incidents/{incident}/status', [MaintenanceController::class, 'updateIncident'])->middleware('perm:incidents.manage');
     Route::post('/incidents/{incident}/decide', [MaintenanceController::class, 'decideIncident'])->middleware('perm:incidents.approve');
@@ -141,6 +163,7 @@ Route::middleware(['auth', 'active'])->prefix('admin')->group(function () {
     Route::post('/inventory/movements', [InventoryController::class, 'storeMovement'])->middleware('perm:inventory.manage|inventory.consume');
 
     Route::get('/parking', [ParkingController::class, 'index'])->middleware('perm:parking.view');
+    Route::get('/parking/calendar', [ParkingController::class, 'calendar'])->middleware('perm:parking.view');
     Route::middleware('perm:parking.manage')->group(function () {
         Route::post('/parking/spaces', [ParkingController::class, 'storeSpace']);
         Route::post('/parking/assignments', [ParkingController::class, 'storeAssignment']);
@@ -160,13 +183,17 @@ Route::middleware(['auth', 'active'])->prefix('admin')->group(function () {
         Route::get('/imports/{batch}', [ImportController::class, 'show']);
         Route::post('/imports/{batch}/commit', [ImportController::class, 'commit']);
         Route::post('/imports/{batch}/rollback', [ImportController::class, 'rollback']);
+        Route::post('/imports/{batch}/hold-future', [ImportController::class, 'holdFutureDates']);
         Route::post('/imports/mappings/{mapping}', [ImportController::class, 'decideMapping']);
         Route::post('/imports/rows/{row}/review', [ImportController::class, 'reviewRow']);
     });
 
     Route::get('/team', [TeamController::class, 'index'])->middleware('perm:team.manage');
+    Route::get('/team/create', [TeamController::class, 'create'])->middleware('perm:team.manage');
     Route::post('/team', [TeamController::class, 'store'])->middleware('perm:team.manage');
+    Route::get('/team/{user}/edit', [TeamController::class, 'edit'])->middleware('perm:team.manage');
     Route::post('/team/{user}', [TeamController::class, 'update'])->middleware('perm:team.manage');
+    Route::post('/team/{user}/reset-two-factor', [TeamController::class, 'resetTwoFactor'])->middleware('perm:team.manage');
 
     Route::middleware('perm:settings.manage')->group(function () {
         Route::get('/settings', [SettingsController::class, 'index']);
@@ -174,6 +201,8 @@ Route::middleware(['auth', 'active'])->prefix('admin')->group(function () {
         Route::post('/settings/decisions/{decision}', [SettingsController::class, 'decide']);
         Route::post('/settings/templates/{template}', [SettingsController::class, 'updateTemplate']);
         Route::post('/settings/feeds', [SettingsController::class, 'storeFeed']);
+        Route::post('/settings/taxes', [SettingsController::class, 'storeTax']);
+        Route::post('/settings/taxes/{rule}/end', [SettingsController::class, 'endTax']);
     });
     Route::get('/audit', [SettingsController::class, 'audit'])->middleware('perm:audit.view');
 

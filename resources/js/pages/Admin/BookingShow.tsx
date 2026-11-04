@@ -1,14 +1,58 @@
-import { Link, usePage } from '@inertiajs/react';
-import { ActionButton, Card, CopyButton, Empty, FieldDef, RowAction, StatusChip, buttonClass } from '@/components/ui';
+import { Link, useForm, usePage } from '@inertiajs/react';
+import { useState } from 'react';
+import { nextDay, RoomPicker, useRoomAvailability } from '@/components/RoomPicker';
+import { ActionButton, Button, Card, CopyButton, Empty, Field, FieldDef, Input, Modal, RowAction, StatusChip, buttonClass } from '@/components/ui';
 import { dateOnly, dateTime, humanize, peso, time12 } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
+
+/** Changing a stay uses the same room picker as a new booking. The booking's own dates never count against it. */
+function ChangeStay({ booking: b, rooms, url }: { booking: any; rooms: any[]; url: string }) {
+    const [open, setOpen] = useState(false);
+    const form = useForm<any>({ check_in: b.check_in, check_out: b.check_out, room_ids: b.rooms.map((r: any) => r.id), adults: b.adults, children: b.children, approved_early_time: b.approved_early_time ?? '', reason: '' });
+    const e = form.errors as any;
+    const availability = useRoomAvailability(open ? form.data.check_in : '', open ? form.data.check_out : '', b.id);
+    const picker = rooms.map((r: any) => ({ id: r.id, label: `${r.name} (${r.unit_code})`, max: r.max_guests ?? 99 }));
+
+    return (
+        <>
+            <Button onClick={() => setOpen(true)}>Change dates, room or party</Button>
+            {open && (
+                <Modal open title="Change dates, room or party" onClose={() => setOpen(false)}>
+                    <form
+                        className="space-y-3"
+                        onSubmit={(ev) => {
+                            ev.preventDefault();
+                            if (window.confirm('This may change what the guest owes. Continue?')) form.post(`${url}/amend`, { preserveScroll: true, onSuccess: () => setOpen(false) });
+                        }}
+                    >
+                        <div className="grid gap-3 sm:grid-cols-2">
+                            <Field label="Check-in" error={e.check_in}><Input type="date" value={form.data.check_in} onChange={(ev) => { const value = ev.target.value; form.setData((d: any) => ({ ...d, check_in: value, check_out: value && d.check_out <= value ? nextDay(value) : d.check_out })); }} /></Field>
+                            <Field label="Check-out" error={e.check_out}><Input type="date" min={form.data.check_in ? nextDay(form.data.check_in) : undefined} value={form.data.check_out} onChange={(ev) => form.setData('check_out', ev.target.value)} /></Field>
+                        </div>
+                        <RoomPicker rooms={picker} availability={availability} value={form.data.room_ids} onChange={(ids) => form.setData('room_ids', ids)} error={e.room_ids} />
+                        <div className="grid gap-3 sm:grid-cols-3">
+                            <Field label="Adults" error={e.adults}><Input type="number" min={1} value={form.data.adults} onChange={(ev) => form.setData('adults', ev.target.value)} /></Field>
+                            <Field label="Children" error={e.children}><Input type="number" min={0} value={form.data.children} onChange={(ev) => form.setData('children', ev.target.value)} /></Field>
+                            <Field label="Early check-in" error={e.approved_early_time}><Input type="time" value={form.data.approved_early_time} onChange={(ev) => form.setData('approved_early_time', ev.target.value)} /></Field>
+                        </div>
+                        <Field label="Reason" required error={e.reason}><Input required value={form.data.reason} onChange={(ev) => form.setData('reason', ev.target.value)} /></Field>
+                        <div className="flex justify-end gap-2 pt-1">
+                            <Button onClick={() => setOpen(false)}>Cancel</Button>
+                            <Button type="submit" variant="primary" disabled={availability.state !== 'ready' || form.data.room_ids.length === 0 || form.processing}>Save changes</Button>
+                        </div>
+                    </form>
+                </Modal>
+            )}
+        </>
+    );
+}
 
 export default function BookingShow({ booking: b, charges, balance, receipts, settlements, refunds, events, snapshots, parking, messages, rooms }: any) {
     const perms: string[] = (usePage<any>().props as any).auth.user.permissions;
     const can = (p: string) => perms.includes(p);
     const url = `/admin/bookings/${b.id}`;
     const open = ['inquiry', 'tentative', 'confirmed'].includes(b.status);
-    const roomOptions = rooms.map((r: any) => ({ value: r.id, label: `${r.name} (${r.unit_code})` }));
+    let amendable = false;
 
     const moneyFields: FieldDef[] = [
         { name: 'parking', label: 'Parking (PHP)', type: 'money' },
@@ -38,20 +82,7 @@ export default function BookingShow({ booking: b, charges, balance, receipts, se
             actions.push({ label: 'Check out', url: `${url}/check-out`, variant: 'primary', confirm: 'Check out? This marks the room dirty and creates turnover work.' });
         }
         if (['inquiry', 'tentative', 'confirmed', 'checked_in'].includes(b.status)) {
-            actions.push({
-                label: 'Change dates, room or party',
-                url: `${url}/amend`,
-                confirm: 'This revalidates availability and may change what the guest owes. Continue?',
-                fields: [
-                    { name: 'check_in', label: 'Check-in', type: 'date', default: b.check_in },
-                    { name: 'check_out', label: 'Check-out', type: 'date', default: b.check_out },
-                    { name: 'room_id_primary', label: 'Move to room', type: 'select', options: roomOptions, help: 'Leave blank to keep the current room(s).' },
-                    { name: 'adults', label: 'Adults', type: 'number', default: b.adults },
-                    { name: 'children', label: 'Children', type: 'number', default: b.children },
-                    { name: 'approved_early_time', label: 'Approved early check-in', type: 'time', default: b.approved_early_time ?? '' },
-                    { name: 'reason', label: 'Reason', type: 'text', required: true },
-                ],
-            });
+            amendable = true;
         }
         if (open) {
             actions.push({ label: 'Cancel', url: `${url}/cancel`, variant: 'danger', fields: [{ name: 'reason', label: 'Reason', type: 'text', required: true }], confirm: 'Cancel this booking and release its dates?' });
@@ -64,7 +95,8 @@ export default function BookingShow({ booking: b, charges, balance, receipts, se
                 <StatusChip value={b.status} />
                 {b.status === 'tentative' && b.hold_expires_at && <span className="text-sm text-muted">Hold until {dateTime(b.hold_expires_at)}</span>}
                 <div className="ml-auto flex flex-wrap gap-2">
-                    {actions.map((a) => <ActionButton key={a.label} action={a} small={false} />)}
+                    {amendable && <ChangeStay booking={b} rooms={rooms} url={url} />}
+                {actions.map((a) => <ActionButton key={a.label} action={a} small={false} />)}
                     {can('quotes.manage') && <Link className={buttonClass('secondary')} href={`/admin/quotes/create?room_id=${b.rooms[0]?.id ?? ''}&check_in=${b.check_in}&check_out=${b.check_out}&guests=${b.guest_count}&booking_id=${b.id}`}>New quote</Link>}
                 </div>
             </div>

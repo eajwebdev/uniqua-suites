@@ -4,20 +4,23 @@ namespace App\Http\Controllers\Admin;
 
 use App\Domain\Reporting\ReportService;
 use App\Http\Controllers\Controller;
+use App\Models\BookingSource;
 use App\Models\Property;
+use App\Models\Room;
 use App\Support\Audit;
 use App\Support\Local;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
 class ReportController extends Controller
 {
-    private const TYPES = ['room_ledger' => 'Nightly room ledger', 'channels' => 'Channel report', 'aging' => 'Guest balance aging', 'collections' => 'Daily collections', 'expenses' => 'Expenses', 'tasks' => 'Housekeeping tasks', 'incidents' => 'Incidents'];
+    private const TYPES = ['sales_recording' => 'Sales recording (workbook layout)', 'room_grid' => 'Monthly room grid', 'room_ledger' => 'Nightly room ledger', 'by_basis' => 'Totals by date basis', 'channels' => 'Channel report', 'aging' => 'Guest balance aging', 'collections' => 'Daily collections', 'expenses' => 'Expenses', 'utilities' => 'Utilities by room', 'cleaning_laundry' => 'Cleaning and laundry', 'parking' => 'Parking', 'tasks' => 'Housekeeping tasks', 'incidents' => 'Incidents'];
 
-    private const FINANCIAL = ['room_ledger', 'channels', 'aging', 'collections', 'expenses', 'incidents'];
+    private const FINANCIAL = ['sales_recording', 'room_grid', 'room_ledger', 'by_basis', 'channels', 'aging', 'collections', 'expenses', 'utilities', 'cleaning_laundry', 'parking', 'incidents'];
 
     public function __construct(private ReportService $reports)
     {
@@ -25,24 +28,29 @@ class ReportController extends Controller
 
     public function index(Request $request)
     {
-        [$from, $to, $property] = $this->range($request);
+        [$from, $to, $property, $basis, $filters] = $this->range($request);
         $canFinance = $request->user()->can('reports.finance');
-        $type = $request->validate(['type' => 'nullable|string'])['type'] ?? ($canFinance ? 'room_ledger' : 'tasks');
+        $type = $request->validate(['type' => 'nullable|string'])['type'] ?? ($canFinance ? 'room_grid' : 'tasks');
         abort_unless(isset(self::TYPES[$type]), 404);
         $this->assertTypeAllowed($request, $type);
-        [$headers, $rows, $definition] = $this->reports->table($type, $from, $to);
+        [$headers, $rows, $definition] = $this->reports->table($type, $from, $to, $property, $basis, $filters);
 
         return Inertia::render('Admin/Reports', [
             'from' => $from,
             'to' => $to,
             'property' => $property,
             'type' => $type,
+            'basis' => $basis,
+            'filters' => $filters,
+            'rooms' => $canFinance ? Room::orderBy('id')->get(['id', 'name']) : [],
+            'sources' => $canFinance ? BookingSource::orderBy('name')->get(['id', 'name']) : [],
+            'bases' => collect(ReportService::BASES)->map(fn ($b, $key) => ['value' => $key, 'label' => $b[0]])->values(),
             'properties' => Property::orderBy('id')->get(['id', 'name']),
             'types' => collect(self::TYPES)->filter(fn ($_, $k) => $canFinance || ! in_array($k, self::FINANCIAL, true))->map(fn ($label, $key) => compact('key', 'label'))->values(),
             'kpis' => $canFinance ? $this->reports->kpis($from, $to, $property) : null,
-            'channels' => $canFinance ? $this->reports->channelMix($from, $to) : [],
-            'topRooms' => $canFinance ? $this->reports->topRooms($from, $to) : [],
-            'trend' => $canFinance ? $this->reports->monthlyTrend(12) : [],
+            'channels' => $canFinance ? $this->reports->channelMix($from, $to, $property) : [],
+            'topRooms' => $canFinance ? $this->reports->topRooms($from, $to, $property) : [],
+            'trend' => $canFinance ? $this->reports->monthlyTrend(12, $property) : [],
             'definitions' => ReportService::DEFINITIONS,
             'table' => ['headers' => $headers, 'rows' => array_slice($rows, 0, 500), 'definition' => $definition, 'total' => count($rows)],
             'canExport' => $request->user()->can('reports.export'),
@@ -53,13 +61,14 @@ class ReportController extends Controller
     {
         abort_unless(isset(self::TYPES[$type]) && in_array($format, ['csv', 'xlsx', 'pdf'], true), 404);
         $this->assertTypeAllowed($request, $type);
-        [$from, $to] = $this->range($request);
-        [$headers, $rows, $definition] = $this->reports->table($type, $from, $to);
+        [$from, $to, $property, $basis, $filters] = $this->range($request);
+        [$headers, $rows, $definition] = $this->reports->table($type, $from, $to, $property, $basis, $filters);
         $title = self::TYPES[$type];
+        $scope = $property ? Property::whereKey($property)->value('name') ?? 'Unknown property' : 'All properties';
         $generated = $this->reports->generatedBy($request->user());
-        $meta = [[$title], ["Period: {$from} to {$to}"], ["Definition: {$definition}"], ["Generated by: {$generated}"], []];
+        $meta = [[$title], ["Period: {$from} to {$to}"], ["Scope: {$scope}"], ["Definition: {$definition}"], ["Generated by: {$generated}"], []];
         $file = 'uniqa-'.str_replace('_', '-', $type)."-{$from}-{$to}";
-        Audit::log('report.exported', null, ['type' => $type, 'format' => $format, 'from' => $from, 'to' => $to]);
+        Audit::log('report.exported', null, ['type' => $type, 'format' => $format, 'from' => $from, 'to' => $to, 'property' => $property, 'basis' => $type === 'by_basis' ? $basis : null]);
 
         return match ($format) {
             'csv' => response()->streamDownload(function () use ($meta, $headers, $rows) {
@@ -71,7 +80,7 @@ class ReportController extends Controller
                 fclose($out);
             }, "{$file}.csv", ['Content-Type' => 'text/csv; charset=UTF-8']),
             'xlsx' => $this->xlsx($meta, $headers, $rows, "{$file}.xlsx"),
-            'pdf' => Pdf::loadView('pdf.report', compact('title', 'from', 'to', 'definition', 'generated', 'headers', 'rows') + ['logo' => public_path('brand/uniqa-wordmark.png')])
+            'pdf' => Pdf::loadView('pdf.report', compact('title', 'from', 'to', 'scope', 'definition', 'generated', 'headers', 'rows') + ['logo' => public_path('brand/uniqa-wordmark.png')])
                 ->setPaper('a4', 'landscape')->download("{$file}.pdf"),
         };
     }
@@ -106,8 +115,8 @@ class ReportController extends Controller
 
     private function range(Request $request): array
     {
-        $f = $request->validate(['from' => 'nullable|date_format:Y-m-d', 'to' => 'nullable|date_format:Y-m-d', 'property' => 'nullable|integer']);
+        $f = $request->validate(['from' => 'nullable|date_format:Y-m-d', 'to' => 'nullable|date_format:Y-m-d|after_or_equal:from', 'property' => 'nullable|integer', 'basis' => ['nullable', Rule::in(array_keys(ReportService::BASES))], 'source' => 'nullable|integer', 'room' => 'nullable|integer', 'method' => 'nullable|in:cash,gcash,bank_transfer,other']);
 
-        return [$f['from'] ?? Local::now()->startOfMonth()->toDateString(), $f['to'] ?? Local::now()->endOfMonth()->toDateString(), $f['property'] ?? null];
+        return [$f['from'] ?? Local::now()->startOfMonth()->toDateString(), $f['to'] ?? Local::now()->endOfMonth()->toDateString(), isset($f['property']) ? (int) $f['property'] : null, $f['basis'] ?? 'stay', array_filter(['source' => $f['source'] ?? null, 'room' => $f['room'] ?? null, 'method' => $f['method'] ?? null])];
     }
 }

@@ -16,6 +16,8 @@ use App\Support\Audit;
 use App\Support\Local;
 use App\Support\Money;
 use Illuminate\Http\Request;
+use App\Domain\Bookings\VacancySearch;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 
 class BookingController extends Controller
@@ -68,7 +70,23 @@ class BookingController extends Controller
         ]);
     }
 
-    public function store(Request $request)
+    /** Which rooms cannot take these dates, and why. Capacity is left out: a group can share several rooms. */
+    public function availability(Request $request, VacancySearch $vacancies)
+    {
+        $data = $request->validate(['check_in' => 'required|date_format:Y-m-d', 'check_out' => 'required|date_format:Y-m-d|after:check_in', 'ignore_booking' => 'nullable|integer|exists:bookings,id']);
+
+        $taken = [];
+        foreach (Room::where('operational_status', '!=', 'retired')->orderBy('id')->get() as $room) {
+            $reason = $vacancies->reasonUnavailable($room, $data['check_in'], $data['check_out'], 1, $data['ignore_booking'] ?? null);
+            if ($reason) {
+                $taken[$room->id] = $reason;
+            }
+        }
+
+        return response()->json(['taken' => (object) $taken])->header('Cache-Control', 'no-store');
+    }
+
+    public function store(Request $request, VacancySearch $vacancies)
     {
         $data = $request->validate([
             'guest_id' => 'nullable|exists:guests,id',
@@ -89,6 +107,16 @@ class BookingController extends Controller
             'idempotency_key' => 'nullable|string|max:60',
             'then' => 'nullable|in:hold',
         ]);
+
+        // A double-clicked Save carries the same key and returns the booking already made, so it skips this.
+        if (empty($data['idempotency_key']) || ! Booking::where('idempotency_key', $data['idempotency_key'])->exists()) {
+            foreach (Room::whereIn('id', $data['room_ids'])->orderBy('id')->get() as $room) {
+                $reason = $vacancies->reasonUnavailable($room, $data['check_in'], $data['check_out'], 1);
+                if ($reason) {
+                    throw ValidationException::withMessages(['room_ids' => "{$room->name} cannot be booked for these dates. {$reason}"]);
+                }
+            }
+        }
 
         if (empty($data['guest_id'])) {
             $data['guest_id'] = Guest::create(['full_name' => $data['guest_name'], 'phone' => $data['guest_phone'] ?? null, 'email' => $data['guest_email'] ?? null])->id;
@@ -218,14 +246,9 @@ class BookingController extends Controller
             'adults' => 'nullable|integer|min:1|max:30',
             'children' => 'nullable|integer|min:0|max:30',
             'approved_early_time' => 'nullable|date_format:H:i',
-            'room_id_primary' => 'nullable|integer|exists:rooms,id',
             'reason' => 'required|string|max:255',
         ]);
         $data = array_filter($data, fn ($v) => $v !== null);
-        if (isset($data['room_id_primary'])) {
-            $data['room_ids'] = [(int) $data['room_id_primary']];
-        }
-        unset($data['room_id_primary']);
         $this->bookings->amend($booking, $data);
 
         return back()->with('success', 'Booking updated. Conflicts were rechecked and the price re-versioned.');

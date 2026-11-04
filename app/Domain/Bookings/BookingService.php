@@ -4,6 +4,8 @@ namespace App\Domain\Bookings;
 
 use App\Domain\Availability\InventoryService;
 use App\Domain\Availability\RoomConflict;
+use App\Domain\Availability\StayRules;
+use App\Domain\Finance\FinanceService;
 use App\Domain\Pricing\PricingService;
 use App\Domain\Tasks\TurnoverService;
 use App\Models\Booking;
@@ -13,6 +15,7 @@ use App\Models\BookingRoom;
 use App\Models\BookingStatusEvent;
 use App\Models\PricingSnapshot;
 use App\Models\Room;
+use App\Models\TaxRule;
 use App\Support\Audit;
 use App\Support\Local;
 use App\Support\Settings;
@@ -25,6 +28,8 @@ class BookingService
         private InventoryService $inventory,
         private PricingService $pricing,
         private TurnoverService $turnover,
+        private StayRules $stayRules,
+        private FinanceService $finance,
     ) {
     }
 
@@ -99,6 +104,7 @@ class BookingService
         return $this->lockForBooking($booking, function ($fresh) use ($pricingOpts) {
             $this->assertStatus($fresh, [Booking::INQUIRY, Booking::TENTATIVE], 'confirm');
             $this->assertRoomsFree($fresh);
+            $this->finance->assertStayOpen($fresh->check_in->toDateString(), $fresh->check_out->toDateString());
 
             if ($fresh->status === Booking::TENTATIVE && $fresh->hold_expires_at?->isPast()) {
                 $this->event($fresh, Booking::TENTATIVE, Booking::TENTATIVE, 'Confirmed after hold lapse; availability rechecked');
@@ -143,9 +149,22 @@ class BookingService
             }
             $this->assertCapacity($rooms, $adults + $children);
 
-            if (in_array($fresh->status, [Booking::TENTATIVE, Booking::CONFIRMED, Booking::CHECKED_IN], true)) {
+            // Repricing rewrites every night, so a stay touching a closed month must stay as it is.
+            if (in_array($fresh->status, [Booking::CONFIRMED, Booking::CHECKED_IN], true)) {
+                $this->finance->assertStayOpen($fresh->check_in->toDateString(), $fresh->check_out->toDateString());
+                $this->finance->assertStayOpen($checkIn, $checkOut);
+            }
+
+            $current = $fresh->activeRooms()->pluck('room_id')->sort()->values()->all();
+            $moved = $checkIn !== $fresh->check_in->toDateString() || $checkOut !== $fresh->check_out->toDateString() || $current !== $rooms->pluck('id')->sort()->values()->all();
+
+            // An inquiry holds nothing, but it must not be moved onto dates that are already taken either.
+            if (in_array($fresh->status, [Booking::INQUIRY, Booking::TENTATIVE, Booking::CONFIRMED, Booking::CHECKED_IN], true)) {
                 foreach ($rooms as $room) {
                     $this->inventory->assertFree($room, $checkIn, $checkOut, $fresh->id);
+                    if ($moved) {
+                        $this->assertStayRules($room, $checkIn, $checkOut);
+                    }
                 }
             }
 
@@ -164,6 +183,7 @@ class BookingService
             if (in_array($fresh->status, [Booking::CONFIRMED, Booking::CHECKED_IN], true)) {
                 $this->reprice($fresh, $pricingOpts, $data['reason'] ?? 'Amendment');
             }
+            $this->inventory->syncClaims($fresh);
             $this->event($fresh, $fresh->status, $fresh->status, 'Amended: '.($data['reason'] ?? 'dates, rooms or party'));
             Audit::log('booking.amended', $fresh, ['check_in' => $checkIn, 'check_out' => $checkOut, 'room_ids' => $roomIds]);
 
@@ -175,6 +195,9 @@ class BookingService
     {
         return $this->lockForBooking($booking, function ($fresh) use ($reason) {
             $this->assertStatus($fresh, [Booking::INQUIRY, Booking::TENTATIVE, Booking::CONFIRMED], 'cancel');
+            if ($fresh->status === Booking::CONFIRMED) {
+                $this->finance->assertStayOpen($fresh->check_in->toDateString(), $fresh->check_out->toDateString());
+            }
             $from = $fresh->status;
             $fresh->update(['status' => Booking::CANCELLED, 'cancellation_reason' => $reason, 'hold_expires_at' => null]);
             $fresh->activeRooms()->update(['released_at' => now()]);
@@ -191,6 +214,7 @@ class BookingService
             if ($fresh->check_in->toDateString() > Local::today()) {
                 throw new RoomConflict('A booking cannot be a no-show before its check-in date.');
             }
+            $this->finance->assertStayOpen($fresh->check_in->toDateString(), $fresh->check_out->toDateString());
             $fresh->update(['status' => Booking::NO_SHOW]);
             $fresh->activeRooms()->update(['released_at' => now()]);
             $this->event($fresh, Booking::CONFIRMED, Booking::NO_SHOW, $note ?? 'No show');
@@ -259,6 +283,7 @@ class BookingService
                     ->update(['status' => Booking::EXPIRED]);
                 if ($updated) {
                     $count++;
+                    DB::table('room_night_claims')->where('booking_id', $id)->delete();
                     BookingStatusEvent::create([
                         'booking_id' => $id,
                         'from_status' => Booking::TENTATIVE,
@@ -287,7 +312,10 @@ class BookingService
                 throw new RoomConflict('This booking was just changed by someone else. Reload and try again.');
             }
 
-            return $work($fresh, $rooms);
+            $result = $work($fresh, $rooms);
+            $this->inventory->syncClaims($fresh);
+
+            return $result;
         });
     }
 
@@ -295,6 +323,15 @@ class BookingService
     {
         foreach ($booking->activeRooms()->with('room')->get() as $br) {
             $this->inventory->assertFree($br->room, $br->check_in->toDateString(), $br->check_out->toDateString(), $booking->id);
+            $this->assertStayRules($br->room, $br->check_in->toDateString(), $br->check_out->toDateString());
+        }
+    }
+
+    private function assertStayRules(Room $room, string $checkIn, string $checkOut): void
+    {
+        $problem = $this->stayRules->violation($room, $checkIn, $checkOut);
+        if ($problem) {
+            throw new RoomConflict($problem);
         }
     }
 
@@ -337,7 +374,7 @@ class BookingService
     private function reprice(Booking $booking, array $opts, string $reason): void
     {
         $version = $booking->pricing_version + 1;
-        $engineTypes = ['accommodation', 'extra_guest', 'early_check_in'];
+        $engineTypes = ['accommodation', 'extra_guest', 'early_check_in', 'tax'];
         $opts = array_merge(['source_id' => $booking->booking_source_id], $opts);
         if ($booking->approved_early_time) {
             $opts['early_time'] = substr($booking->approved_early_time, 0, 5);
@@ -390,6 +427,7 @@ class BookingService
                 'extra_guest_unit' => Settings::get('pricing.extra_guest_unit'),
                 'extra_guest_cents' => Settings::get('pricing.extra_guest_cents'),
                 'early_fee_cents_per_hour' => Settings::get('pricing.early_fee_cents_per_hour'),
+                'tax_rules' => TaxRule::inForceOn($booking->check_in->toDateString())->get(['name', 'rate_basis_points'])->toArray(),
             ]],
             'total_cents' => $total,
             'reason' => $reason,

@@ -34,6 +34,7 @@ class FinanceController extends Controller
         $rows = Receipt::with(['booking:id,reference', 'account:id,name', 'enteredBy:id,name'])
             ->when($status, fn ($q, $v) => $q->where('verification_status', $v))
             ->orderByDesc('id')->paginate(30)->withQueryString();
+        $reversed = Receipt::whereNotNull('reverses_receipt_id')->pluck('reverses_receipt_id');
 
         return Inertia::render('Admin/Resource', [
             'title' => 'Payments',
@@ -62,10 +63,17 @@ class FinanceController extends Controller
                 'amount_cents' => (int) $r->amount_cents,
                 'evidence' => $r->evidence_path ? ['label' => 'View', 'href' => "/admin/files/receipt/{$r->id}", 'external' => true] : ['label' => 'None'],
                 'verification_status' => $r->verification_status,
-                '_actions' => $user->can('payments.verify') && $r->verification_status === 'pending' ? [
-                    ['label' => 'Verify', 'url' => "/admin/receipts/{$r->id}/review", 'data' => ['decision' => 'verified'], 'confirm' => 'Confirm these funds were actually received?', 'variant' => 'primary'],
-                    ['label' => 'Reject', 'url' => "/admin/receipts/{$r->id}/review", 'data' => ['decision' => 'rejected'], 'fields' => [['name' => 'note', 'label' => 'Reason', 'type' => 'text', 'required' => true]], 'variant' => 'danger'],
-                ] : [],
+                '_actions' => match (true) {
+                    ! $user->can('payments.verify') => [],
+                    $r->verification_status === 'pending' => [
+                        ['label' => 'Verify', 'url' => "/admin/receipts/{$r->id}/review", 'data' => ['decision' => 'verified'], 'confirm' => 'Confirm these funds were actually received?', 'variant' => 'primary'],
+                        ['label' => 'Reject', 'url' => "/admin/receipts/{$r->id}/review", 'data' => ['decision' => 'rejected'], 'fields' => [['name' => 'note', 'label' => 'Reason', 'type' => 'text', 'required' => true]], 'variant' => 'danger'],
+                    ],
+                    $r->verification_status === 'verified' && ! $r->reverses_receipt_id && ! $reversed->contains($r->id) => [
+                        ['label' => 'Reverse', 'url' => "/admin/receipts/{$r->id}/reverse", 'variant' => 'danger', 'confirm' => 'This records a new negative receipt dated today. The original stays on file. Continue?', 'fields' => [['name' => 'reason', 'label' => 'Why is this being reversed?', 'type' => 'text', 'required' => true]]],
+                    ],
+                    default => [],
+                },
             ]),
             'create' => $user->can('payments.record') ? ['label' => 'Record payment', 'url' => '/admin/receipts', 'fields' => $this->receiptFields()] : null,
         ]);
@@ -103,6 +111,13 @@ class FinanceController extends Controller
         $this->finance->review($receipt, $data['decision'] === 'verified', $data['note'] ?? null);
 
         return back()->with('success', "Receipt {$data['decision']}.");
+    }
+
+    public function reverseReceipt(Request $request, Receipt $receipt)
+    {
+        $this->finance->reverseReceipt($receipt, $request->validate(['reason' => 'required|string|max:200'])['reason']);
+
+        return back()->with('success', 'Reversal recorded, dated today. The original receipt is unchanged.');
     }
 
     public function storeRefund(Request $request)
@@ -201,8 +216,7 @@ class FinanceController extends Controller
     public function recordPayout(Request $request, ExternalSettlement $settlement)
     {
         $data = $request->validate(['actual_payout' => ['required', Money::RULE], 'payout_date' => 'required|date_format:Y-m-d', 'payment_account_id' => 'nullable|exists:payment_accounts,id']);
-        $this->finance->assertOpen($data['payout_date']);
-        $settlement->update([
+        $this->finance->recordPayout($settlement, [
             'actual_payout_cents' => Money::cents($data['actual_payout']),
             'payout_date' => $data['payout_date'],
             'payment_account_id' => $data['payment_account_id'] ?? null,
@@ -214,25 +228,9 @@ class FinanceController extends Controller
     public function reconciliation(Request $request)
     {
         $user = $request->user();
-        $exceptions = collect();
+        $exceptions = $this->finance->reconciliationExceptions();
 
-        Receipt::where('verification_status', 'pending')->with('booking:id,reference')->get()
-            ->each(fn ($r) => $exceptions->push(['type' => 'Pending verification', 'detail' => "{$r->reference}, ".Money::format((int) $r->amount_cents), 'href' => '/admin/payments?status=pending']));
-        Receipt::whereNull('booking_id')->where('verification_status', '!=', 'rejected')->get()
-            ->each(fn ($r) => $exceptions->push(['type' => 'Unmatched receipt', 'detail' => "{$r->reference}, ".Money::format((int) $r->amount_cents), 'href' => '/admin/payments']));
-        Receipt::whereNull('evidence_path')->where('method', '!=', 'cash')->where('verification_status', '!=', 'rejected')->get()
-            ->each(fn ($r) => $exceptions->push(['type' => 'Missing proof', 'detail' => "{$r->reference}, {$r->method}", 'href' => '/admin/payments']));
-        foreach ($this->finance->duplicateReferences() as $ref => $n) {
-            $exceptions->push(['type' => 'Duplicate reference', 'detail' => "{$ref} appears {$n} times", 'href' => '/admin/payments']);
-        }
-        ExternalSettlement::whereNull('actual_payout_cents')->get()
-            ->each(fn ($s) => $exceptions->push(['type' => 'Payout not received', 'detail' => "{$s->provider}, expected ".Money::format((int) $s->expected_net_cents), 'href' => '/admin/settlements']));
-        ExternalSettlement::whereNotNull('actual_payout_cents')->whereColumn('actual_payout_cents', '!=', 'expected_net_cents')->get()
-            ->each(fn ($s) => $exceptions->push(['type' => 'Payout mismatch', 'detail' => $s->provider.', '.Money::format((int) $s->actual_payout_cents - (int) $s->expected_net_cents).' difference', 'href' => '/admin/settlements']));
-        ExternalSettlement::whereNull('booking_id')->get()
-            ->each(fn ($s) => $exceptions->push(['type' => 'Unlinked payout', 'detail' => "{$s->provider} {$s->payout_reference}", 'href' => '/admin/settlements']));
-
-        $locks = PeriodLock::with('locker:id,name')->orderByDesc('period')->limit(24)->get();
+        $locks =PeriodLock::with('locker:id,name')->orderByDesc('period')->limit(24)->get();
 
         return Inertia::render('Admin/Resource', [
             'title' => 'Reconciliation',

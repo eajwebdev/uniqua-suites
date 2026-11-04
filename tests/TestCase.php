@@ -2,6 +2,7 @@
 
 namespace Tests;
 
+use Illuminate\Contracts\Auth\Authenticatable as UserContract;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
 use RuntimeException;
 
@@ -26,5 +27,16 @@ abstract class TestCase extends BaseTestCase
         }
 
         return $app;
+    }
+
+    /**
+     * A real sign-in starts a fresh session, but a test swaps users inside one. Without this,
+     * auth.session would see the previous user's password hash and sign the new user out.
+     */
+    public function be(UserContract $user, $guard = null)
+    {
+        session()->forget('password_hash_web');
+
+        return parent::be($user, $guard);
     }
 }

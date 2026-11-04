@@ -3,7 +3,7 @@ import { ActionButton, Card, Empty, Pagination, Select, Stat, StatusChip } from 
 import { dateOnly, humanize, peso } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
 
-export default function ImportShow({ batch, summary, counts, categories, blockAnomalies, monthly, mappings, rooms, rows, filters, sheets }: any) {
+export default function ImportShow({ batch, summary, future, counts, categories, blockAnomalies, monthly, mappings, rooms, rows, filters, sheets }: any) {
     const go = (changes: any) => router.get(`/admin/imports/${batch.id}`, { ...filters, ...changes, page: undefined }, { preserveState: true, preserveScroll: true, replace: true });
     const roomOptions = rooms.map((r: any) => ({ value: r.id, label: `${r.name} (${r.unit_code})` }));
     const totals = (summary?.block_totals ?? []) as any[];
@@ -22,7 +22,17 @@ export default function ImportShow({ batch, summary, counts, categories, blockAn
                 <StatusChip value={batch.status} />
                 <span className="text-muted">SHA-256 {batch.checksum.slice(0, 16)}… · {batch.transformation_version}</span>
             </div>
-            <p className="mb-4 max-w-3xl rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-950">All amounts here are <strong>Provisional / Unreconciled</strong>. They come from sheet cells without proof of receipt, and they never feed bookings, receipts or the Reports page.</p>
+            <p className="mb-4 max-w-3xl rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-950">All amounts here are <strong>Provisional / Unreconciled</strong>. They come from sheet cells without proof of receipt. They appear only in the <strong>Sales recording</strong> report, labelled unverified, and never feed bookings, receipts or verified totals.</p>
+
+            {batch.status !== 'rolled_back' && future.nights > 0 && (
+                <div className={`mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${future.unmatched > 0 || future.held === 0 ? 'border-red-200 bg-red-50 text-red-950' : 'border-emerald-200 bg-emerald-50 text-emerald-950'}`}>
+                    <div className="min-w-0">
+                        <p className="font-semibold">Future stays in this workbook: {future.nights} night(s)</p>
+                        <p>{future.held === 0 ? 'Not held yet, so guests and staff can still see these dates as free.' : `${future.held} stay(s) are held on the calendar.`}{future.unmatched > 0 && ` ${future.unmatched} night(s) cannot be held until their room label is matched below.`}</p>
+                    </div>
+                    <ActionButton small={false} action={{ label: 'Hold future dates', url: `/admin/imports/${batch.id}/hold-future`, variant: 'primary', confirm: 'Block these dates on the calendar and website? No bookings are created. Staff still enter each real booking.' }} />
+                </div>
+            )}
 
             <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-5">
                 <Stat label="Rows staged" value={summary?.rows ?? 0} />

@@ -12,6 +12,7 @@
     --color-espresso: #46362d;
     --color-gold: #c6a675;
     --color-gold-dark: #8a6d3f;
+    --color-bronze: #765b30; /* gold that stays readable as small text on ivory */
     --color-ivory: #f8f4ec;
     --color-beige: #ede4d8;
     --color-line: #e3d9cb;
@@ -30,9 +31,73 @@ h1, h2, h3 {
     text-wrap: balance;
 }
 
+/* Slim, on-brand scrollbars instead of the browser's wide grey ones. */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line) transparent;
+}
+
+.sidebar-scroll {
+    scrollbar-color: transparent transparent;
+}
+
+.sidebar-scroll:hover,
+.sidebar-scroll:focus-within {
+    scrollbar-color: var(--color-espresso) transparent;
+}
+
+/* The icon-only menu has no width to spare. It still scrolls by wheel, touch and keyboard. */
+.sidebar-scroll-hidden {
+    scrollbar-width: none;
+}
+
 :focus-visible {
     outline: 2px solid var(--color-gold-dark);
     outline-offset: 2px;
+}
+
+/* Tailwind 4 leaves buttons with the default arrow cursor. */
+button:not(:disabled),
+select:not(:disabled),
+summary,
+[role='button'] {
+    cursor: pointer;
+}
+
+a,
+button,
+select,
+summary,
+label {
+    touch-action: manipulation;
+}
+
+@media (pointer: coarse) {
+    summary {
+        padding-block: 0.75rem;
+    }
+
+    input[type='checkbox'],
+    input[type='radio'] {
+        width: 1.25rem;
+        height: 1.25rem;
+    }
+}
+
+.skip-link {
+    position: absolute;
+    left: 0.75rem;
+    top: -4rem;
+    z-index: 60;
+    border-radius: 0.375rem;
+    background: var(--color-gold);
+    color: var(--color-chocolate);
+    font-weight: 600;
+    padding: 0.625rem 1rem;
+}
+
+.skip-link:focus {
+    top: 0.5rem;
 }
 
 dialog::backdrop {

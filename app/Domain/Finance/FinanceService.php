@@ -4,13 +4,17 @@ namespace App\Domain\Finance;
 
 use App\Domain\Availability\RoomConflict;
 use App\Models\Booking;
+use App\Models\Expense;
 use App\Models\ExternalSettlement;
 use App\Models\PeriodLock;
 use App\Models\Receipt;
 use App\Models\Refund;
 use App\Support\Audit;
 use App\Support\Local;
+use App\Support\Money;
+use App\Support\Settings;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
 class FinanceService
@@ -45,6 +49,7 @@ class FinanceService
         if ($receipt->verification_status !== 'pending') {
             throw new RoomConflict("Receipt is already {$receipt->verification_status}.");
         }
+        $this->assertSecondPerson($receipt->entered_by, 'review a receipt you recorded');
         $receipt->update([
             'verification_status' => $verified ? 'verified' : 'rejected',
             'reviewed_by' => auth()->id(),
@@ -134,6 +139,7 @@ class FinanceService
         }
         $changes = ['status' => $next];
         if ($action === 'approve') {
+            $this->assertSecondPerson($refund->requested_by, 'approve a refund you requested');
             $changes['approved_by'] = auth()->id();
         }
         if ($action === 'execute') {
@@ -182,12 +188,152 @@ class FinanceService
         return $row;
     }
 
+    public function recordPayout(ExternalSettlement $settlement, array $data): void
+    {
+        $this->assertOpen($data['payout_date']);
+        if ($settlement->actual_payout_cents !== null) {
+            throw new RoomConflict('This payout is already recorded.');
+        }
+        $settlement->update($data);
+        Audit::log('settlement.payout_recorded', $settlement, ['actual_payout_cents' => $data['actual_payout_cents'], 'payout_date' => $data['payout_date']]);
+    }
+
+    /** A bill at or above the owner's threshold cannot count as cash out until someone approves it. */
+    public function assertExpensePayable(int $cents, bool $approved): void
+    {
+        $threshold = Settings::get('finance.expense_approval_threshold_cents');
+        if ($threshold !== null && $cents >= $threshold && ! $approved) {
+            throw new RoomConflict('Expenses of '.Money::format((int) $threshold).' or more need approval before they are paid. Record it as incurred, then have it approved.');
+        }
+    }
+
+    public function markExpensePaid(Expense $expense, array $data): void
+    {
+        if ($expense->status === 'paid') {
+            throw new RoomConflict('This expense is already marked paid.');
+        }
+        $this->assertOpen($data['paid_on']);
+        $this->assertExpensePayable((int) $expense->amount_cents, $expense->approved_at !== null);
+        $expense->update(['status' => 'paid'] + $data);
+        Audit::log('expense.paid', $expense);
+    }
+
+    public function approveExpense(Expense $expense): void
+    {
+        if ($expense->approved_at) {
+            throw new RoomConflict('This expense is already approved.');
+        }
+        $this->assertSecondPerson($expense->created_by, 'approve an expense you recorded');
+        $expense->update(['approved_by' => auth()->id(), 'approved_at' => now()]);
+        Audit::log('expense.approved', $expense);
+    }
+
+    private function assertSecondPerson(?int $actorId, string $action): void
+    {
+        if ($actorId !== null && $actorId === auth()->id() && Settings::get('finance.second_reviewer')) {
+            throw new RoomConflict("A second person is required: you cannot {$action}.");
+        }
+    }
+
+    /** A closed month stays as closed: the mistake is corrected by a new entry dated today. */
+    public function reverseExpense(Expense $expense, string $reason): Expense
+    {
+        if ($expense->reverses_expense_id || Expense::where('reverses_expense_id', $expense->id)->exists()) {
+            throw new RoomConflict('This expense has already been reversed, or is itself a reversal.');
+        }
+        $today = Local::today();
+        $this->assertOpen($today);
+
+        $reversal = $expense->replicate(['proof_path', 'approved_by', 'approved_at']);
+        $reversal->fill([
+            'amount_cents' => -(int) $expense->amount_cents,
+            'description' => 'Reversal: '.$expense->description,
+            'expense_date' => $today,
+            'paid_on' => $expense->status === 'paid' ? $today : null,
+            'reverses_expense_id' => $expense->id,
+            'reversal_reason' => $reason,
+            'created_by' => auth()->id(),
+        ])->save();
+        Audit::log('expense.reversed', $reversal, ['reverses' => $expense->id, 'reason' => $reason]);
+
+        return $reversal;
+    }
+
+    public function reverseReceipt(Receipt $receipt, string $reason): Receipt
+    {
+        if ($receipt->verification_status !== 'verified') {
+            throw new RoomConflict('Only a verified receipt can be reversed. Reject it instead.');
+        }
+        if ($receipt->reverses_receipt_id || Receipt::where('reverses_receipt_id', $receipt->id)->exists()) {
+            throw new RoomConflict('This receipt has already been reversed, or is itself a reversal.');
+        }
+        $today = Local::today();
+        $this->assertOpen($today);
+
+        $reversal = Receipt::create([
+            'reference' => 'RC-'.Local::now()->format('ym').'-'.Str::upper(Str::random(6)),
+            'booking_id' => $receipt->booking_id,
+            'received_at' => now(),
+            'receipt_date' => $today,
+            'amount_cents' => -(int) $receipt->amount_cents,
+            'method' => $receipt->method,
+            'payment_account_id' => $receipt->payment_account_id,
+            'verification_status' => 'verified',
+            'entered_by' => auth()->id(),
+            'reviewed_by' => auth()->id(),
+            'reviewed_at' => now(),
+            'review_note' => "Reversal of {$receipt->reference}: {$reason}",
+            'reverses_receipt_id' => $receipt->id,
+        ]);
+        Audit::log('receipt.reversed', $reversal, ['reverses' => $receipt->reference, 'reason' => $reason]);
+
+        return $reversal;
+    }
+
+    /** Everything open for the reconciliation screen and the month-end notice. */
+    public function reconciliationExceptions(): Collection
+    {
+        $exceptions = collect();
+
+        Receipt::where('verification_status', 'pending')->get()
+            ->each(fn ($r) => $exceptions->push(['type' => 'Pending verification', 'detail' => "{$r->reference}, ".Money::format((int) $r->amount_cents), 'href' => '/admin/payments?status=pending']));
+        Receipt::whereNull('booking_id')->whereNull('reverses_receipt_id')->where('verification_status', '!=', 'rejected')->get()
+            ->each(fn ($r) => $exceptions->push(['type' => 'Unmatched receipt', 'detail' => "{$r->reference}, ".Money::format((int) $r->amount_cents), 'href' => '/admin/payments']));
+        Receipt::whereNull('evidence_path')->whereNull('reverses_receipt_id')->where('method', '!=', 'cash')->where('verification_status', '!=', 'rejected')->get()
+            ->each(fn ($r) => $exceptions->push(['type' => 'Missing proof', 'detail' => "{$r->reference}, {$r->method}", 'href' => '/admin/payments']));
+        foreach ($this->duplicateReferences() as $ref => $n) {
+            $exceptions->push(['type' => 'Duplicate reference', 'detail' => "{$ref} appears {$n} times", 'href' => '/admin/payments']);
+        }
+        ExternalSettlement::whereNull('actual_payout_cents')->get()
+            ->each(fn ($s) => $exceptions->push(['type' => 'Payout not received', 'detail' => "{$s->provider}, expected ".Money::format((int) $s->expected_net_cents), 'href' => '/admin/settlements']));
+        ExternalSettlement::whereNotNull('actual_payout_cents')->whereColumn('actual_payout_cents', '!=', 'expected_net_cents')->get()
+            ->each(fn ($s) => $exceptions->push(['type' => 'Payout mismatch', 'detail' => $s->provider.', '.Money::format((int) $s->actual_payout_cents - (int) $s->expected_net_cents).' difference', 'href' => '/admin/settlements']));
+        ExternalSettlement::whereNull('booking_id')->get()
+            ->each(fn ($s) => $exceptions->push(['type' => 'Unlinked payout', 'detail' => "{$s->provider} {$s->payout_reference}", 'href' => '/admin/settlements']));
+
+        return $exceptions;
+    }
+
     /** Closed months accept no silent edits; corrections are dated in an open period. */
     public function assertOpen(string $date): void
     {
         $period = substr($date, 0, 7);
         if (PeriodLock::where('period', $period)->exists()) {
             throw new RoomConflict("{$period} is locked. Record an adjustment dated in an open period.");
+        }
+    }
+
+    /** Checks every month holding a night of this stay. The check-out date is not a night. */
+    public function assertStayOpen(string $checkIn, string $checkOut): void
+    {
+        $months = [];
+        $lastNight = CarbonImmutable::parse($checkOut)->subDay();
+        for ($month = CarbonImmutable::parse($checkIn)->startOfMonth(); $month->lte($lastNight); $month = $month->addMonth()) {
+            $months[] = $month->format('Y-m');
+        }
+        $locked = PeriodLock::whereIn('period', $months)->orderBy('period')->value('period');
+        if ($locked) {
+            throw new RoomConflict("This stay has nights in {$locked}, which is locked. Leave the booking as it is and add an adjustment dated in an open period.");
         }
     }
 

@@ -3,6 +3,9 @@
 return [
     'display_timezone' => env('UNIQA_DISPLAY_TIMEZONE', 'Asia/Manila'),
 
+    // One-click sign-in on the login page. Production ignores this: see App\Support\DemoLogin.
+    'demo' => (bool) env('DEMO', false),
+
     // Official channels only. Blank means "not yet supplied by the owner".
     'contact' => [
         'messenger_url' => env('UNIQA_MESSENGER_URL'),

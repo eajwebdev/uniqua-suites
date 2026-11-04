@@ -6,8 +6,10 @@ use App\Domain\Availability\InventoryService;
 use App\Models\ExternalCalendarFeed;
 use App\Models\IntegrationHealth;
 use App\Models\RoomBlock;
+use App\Support\PublicUrl;
 use App\Support\SystemNotice;
 use Illuminate\Support\Facades\Http;
+use RuntimeException;
 use Throwable;
 
 /**
@@ -16,6 +18,8 @@ use Throwable;
  */
 class IcalSync
 {
+    private const MAX_BYTES = 5_000_000;
+
     public function __construct(private InventoryService $inventory)
     {
     }
@@ -30,8 +34,14 @@ class IcalSync
         $failures = 0;
         foreach ($feeds as $feed) {
             try {
-                $response = Http::timeout(20)->get($feed->url);
+                if (! PublicUrl::isSafe($feed->url)) {
+                    throw new RuntimeException('Feed host is not a public address.');
+                }
+                $response = Http::timeout(20)->withOptions(['allow_redirects' => false])->get($feed->url);
                 $response->throw();
+                if ($response->redirect() || strlen($response->body()) > self::MAX_BYTES) {
+                    throw new RuntimeException('Feed response was not usable.');
+                }
                 $this->apply($feed, $this->parse($response->body()));
                 $feed->update(['last_synced_at' => now(), 'last_status' => 'ok', 'last_error' => null]);
             } catch (Throwable $e) {
@@ -49,7 +59,7 @@ class IcalSync
             $failures ? 'last_failure_at' : 'last_success_at' => now(),
         ]);
         if ($failures) {
-            SystemNotice::toPermission('settings.manage', "{$failures} calendar feed(s) failed to sync.", '/admin/settings');
+            SystemNotice::toPermission('settings.manage', "{$failures} calendar feed(s) failed to sync.", '/admin/settings', 'calendar');
         }
 
         return $feeds->count();
@@ -65,7 +75,8 @@ class IcalSync
         foreach ($matches[1] as $body) {
             if (preg_match('/UID[^:]*:(.+)/', $body, $uid)
                 && preg_match('/DTSTART[^:]*:(\d{8})/', $body, $start)
-                && preg_match('/DTEND[^:]*:(\d{8})/', $body, $end)) {
+                && preg_match('/DTEND[^:]*:(\d{8})/', $body, $end)
+                && $start[1] < $end[1]) {
                 $events[] = [
                     'uid' => substr(trim($uid[1]), 0, 180),
                     'start' => date('Y-m-d', strtotime($start[1])),
@@ -85,7 +96,7 @@ class IcalSync
                 $seen[] = $e['uid'];
                 $clash = $this->inventory->conflicts($feed->room_id, $e['start'], $e['end'])->where('type', '!=', 'block');
                 if ($clash->isNotEmpty()) {
-                    SystemNotice::toPermission('bookings.manage', "Calendar clash on room #{$feed->room_id}: external block {$e['start']} to {$e['end']} overlaps {$clash->first()['label']}.", '/admin/calendar');
+                    SystemNotice::toPermission('bookings.manage', "Calendar clash on room #{$feed->room_id}: external block {$e['start']} to {$e['end']} overlaps {$clash->first()['label']}.", '/admin/calendar', 'calendar');
                 }
                 RoomBlock::updateOrCreate(
                     ['external_calendar_feed_id' => $feed->id, 'external_uid' => $e['uid']],

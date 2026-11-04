@@ -32,6 +32,7 @@ class ExpenseController extends Controller
             ->when($f['category'] ?? null, fn ($q, $v) => $q->where('expense_category_id', $v))
             ->when($f['status'] ?? null, fn ($q, $v) => $q->where('status', $v))
             ->orderByDesc('expense_date')->orderByDesc('id')->paginate(30)->withQueryString();
+        $reversed = Expense::whereNotNull('reverses_expense_id')->pluck('reverses_expense_id');
         $categories = ExpenseCategory::orderBy('name')->get()->map(fn ($c) => ['value' => $c->id, 'label' => $c->name])->all();
 
         return Inertia::render('Admin/Resource', [
@@ -52,16 +53,20 @@ class ExpenseController extends Controller
                 ['key' => 'status', 'label' => 'Status', 'type' => 'status'],
                 ['key' => 'proof', 'label' => 'Proof', 'type' => 'link'],
             ],
-            'rows' => $rows->through(function ($e) use ($user) {
+            'rows' => $rows->through(function ($e) use ($user, $reversed) {
                 $actions = [];
-                if ($user->can('expenses.manage') && $e->status === 'incurred') {
+                $isReversal = $e->reverses_expense_id !== null;
+                if ($user->can('expenses.manage') && $e->status === 'incurred' && ! $isReversal) {
                     $actions[] = ['label' => 'Mark paid', 'url' => "/admin/expenses/{$e->id}/paid", 'fields' => [
                         ['name' => 'paid_on', 'label' => 'Paid on', 'type' => 'date', 'required' => true, 'default' => Local::today()],
                         ['name' => 'payment_method', 'label' => 'Method', 'type' => 'text'],
                     ]];
                 }
-                if ($user->can('expenses.approve') && ! $e->approved_at) {
+                if ($user->can('expenses.approve') && ! $e->approved_at && ! $isReversal) {
                     $actions[] = ['label' => 'Approve', 'url' => "/admin/expenses/{$e->id}/approve"];
+                }
+                if ($user->can('expenses.manage') && ! $isReversal && ! $reversed->contains($e->id)) {
+                    $actions[] = ['label' => 'Reverse', 'url' => "/admin/expenses/{$e->id}/reverse", 'variant' => 'danger', 'confirm' => 'This records a new negative entry dated today. The original stays on file. Continue?', 'fields' => [['name' => 'reason', 'label' => 'Why is this being reversed?', 'type' => 'text', 'required' => true]]];
                 }
 
                 return [
@@ -107,6 +112,9 @@ class ExpenseController extends Controller
             'proof' => 'nullable|file|mimes:jpg,jpeg,png,webp,pdf|max:10240',
         ]);
         $this->finance->assertOpen($data['expense_date']);
+        if ($data['status'] === 'paid') {
+            $this->finance->assertExpensePayable(Money::cents($data['amount']), false);
+        }
 
         $expense = Expense::create([
             'expense_date' => $data['expense_date'],
@@ -130,19 +138,23 @@ class ExpenseController extends Controller
     public function markPaid(Request $request, Expense $expense)
     {
         $data = $request->validate(['paid_on' => 'required|date_format:Y-m-d', 'payment_method' => 'nullable|string|max:60']);
-        $this->finance->assertOpen($data['paid_on']);
-        $expense->update(['status' => 'paid'] + $data);
-        Audit::log('expense.paid', $expense);
+        $this->finance->markExpensePaid($expense, $data);
 
         return back()->with('success', 'Marked as paid.');
     }
 
-    public function approve(Request $request, Expense $expense)
+    public function approve(Expense $expense)
     {
-        $expense->update(['approved_by' => $request->user()->id, 'approved_at' => now()]);
-        Audit::log('expense.approved', $expense);
+        $this->finance->approveExpense($expense);
 
         return back()->with('success', 'Expense approved.');
+    }
+
+    public function reverse(Request $request, Expense $expense)
+    {
+        $this->finance->reverseExpense($expense, $request->validate(['reason' => 'required|string|max:200'])['reason']);
+
+        return back()->with('success', 'Reversal recorded, dated today. The original expense is unchanged.');
     }
 
     /** Actual money movements by date. Unpaid expenses and unverified receipts are excluded. */

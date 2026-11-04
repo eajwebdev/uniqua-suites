@@ -9,8 +9,10 @@ use App\Models\IntegrationHealth;
 use App\Models\MessageTemplate;
 use App\Models\OwnerDecision;
 use App\Models\Room;
+use App\Models\TaxRule;
 use App\Support\Audit;
 use App\Support\Money;
+use App\Support\PublicUrl;
 use App\Support\Settings;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -35,7 +37,16 @@ class SettingsController extends Controller
                 'laundry_auto' => $s['laundry.auto_create'],
                 'require_verification' => $s['finance.require_verification_to_confirm'],
                 'turnover_due_hours' => $s['housekeeping.turnover_due_hours'],
+                'expense_threshold' => Money::pesos($s['finance.expense_approval_threshold_cents']),
+                'second_reviewer' => $s['finance.second_reviewer'],
+                'require_two_factor' => $s['security.require_two_factor'],
+                'min_nights' => $s['stay.min_nights'],
+                'max_advance_days' => $s['stay.max_advance_days'],
+                'house_rules' => $s['policy.house_rules'],
+                'cancellation' => $s['policy.cancellation'],
+                'arrival_lead_days' => $s['alerts.arrival_lead_days'],
             ],
+            'taxes' => TaxRule::orderByDesc('effective_from')->orderByDesc('id')->get()->map(fn ($t) => ['id' => $t->id, 'name' => $t->name, 'percent' => number_format($t->rate_basis_points / 100, 2, '.', ''), 'from' => $t->effective_from->toDateString(), 'to' => $t->effective_to?->toDateString()]),
             'decisions' => OwnerDecision::orderByRaw("FIELD(status,'pending','approved','rejected')")->orderBy('id')->get(['id', 'title', 'detail', 'kind', 'status', 'resolution', 'decided_at']),
             'templates' => MessageTemplate::orderBy('id')->get(['id', 'key', 'name', 'body']),
             'integrations' => IntegrationHealth::orderBy('id')->get(['provider', 'status', 'detail', 'last_success_at', 'last_failure_at']),
@@ -61,6 +72,14 @@ class SettingsController extends Controller
             'laundry_auto' => 'required|boolean',
             'require_verification' => 'required|boolean',
             'turnover_due_hours' => 'required|integer|min:1|max:72',
+            'expense_threshold' => ['nullable', Money::RULE],
+            'second_reviewer' => 'required|boolean',
+            'require_two_factor' => 'required|boolean',
+            'min_nights' => 'nullable|integer|min:1|max:365',
+            'max_advance_days' => 'nullable|integer|min:1|max:1825',
+            'house_rules' => 'nullable|string|max:4000',
+            'cancellation' => 'nullable|string|max:4000',
+            'arrival_lead_days' => 'nullable|integer|min:1|max:14',
         ]);
 
         // An empty list stays "pending": no weekend pricing is a decision the owner has to make explicitly.
@@ -77,6 +96,14 @@ class SettingsController extends Controller
             'laundry.auto_create' => (bool) $d['laundry_auto'],
             'finance.require_verification_to_confirm' => (bool) $d['require_verification'],
             'housekeeping.turnover_due_hours' => (int) $d['turnover_due_hours'],
+            'finance.expense_approval_threshold_cents' => Money::cents($d['expense_threshold'] ?? null),
+            'finance.second_reviewer' => (bool) $d['second_reviewer'],
+            'security.require_two_factor' => (bool) $d['require_two_factor'],
+            'stay.min_nights' => isset($d['min_nights']) ? (int) $d['min_nights'] : null,
+            'stay.max_advance_days' => isset($d['max_advance_days']) ? (int) $d['max_advance_days'] : null,
+            'policy.house_rules' => $d['house_rules'] ?? null,
+            'policy.cancellation' => $d['cancellation'] ?? null,
+            'alerts.arrival_lead_days' => (int) ($d['arrival_lead_days'] ?? 1),
         ];
         $before = Settings::all();
         $changed = [];
@@ -91,6 +118,30 @@ class SettingsController extends Controller
         }
 
         return back()->with('success', 'Settings saved.');
+    }
+
+    /** Added only by the owner. A rule is never edited or deleted, so past quotes stay explainable: it is ended and replaced. */
+    public function storeTax(Request $request)
+    {
+        $d = $request->validate(['name' => 'required|string|max:80', 'percent' => ['required', 'regex:/^\d{1,2}(\.\d{1,2})?$/'], 'effective_from' => 'required|date_format:Y-m-d']);
+        $rule = TaxRule::create([
+            'name' => $d['name'],
+            'rate_basis_points' => Money::cents($d['percent']),
+            'effective_from' => $d['effective_from'],
+            'created_by' => $request->user()->id,
+        ]);
+        Audit::log('tax.added', $rule, ['name' => $d['name'], 'percent' => $d['percent'], 'from' => $d['effective_from']]);
+
+        return back()->with('success', 'Tax added. It applies to new quotes and repriced stays; confirmed prices do not change.');
+    }
+
+    public function endTax(Request $request, TaxRule $rule)
+    {
+        $d = $request->validate(['effective_to' => 'required|date_format:Y-m-d|after_or_equal:'.$rule->effective_from->toDateString()]);
+        $rule->update($d);
+        Audit::log('tax.ended', $rule, $d);
+
+        return back()->with('success', "{$rule->name} ends on {$d['effective_to']}.");
     }
 
     public function decide(Request $request, OwnerDecision $decision)
@@ -113,8 +164,7 @@ class SettingsController extends Controller
     public function storeFeed(Request $request)
     {
         $d = $request->validate(['room_id' => 'required|exists:rooms,id', 'provider' => 'required|string|max:40', 'url' => 'required|url:https|max:1000']);
-        $host = parse_url($d['url'], PHP_URL_HOST);
-        if (! $host || ! filter_var(gethostbyname($host), FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+        if (! PublicUrl::isSafe($d['url'])) {
             throw new RoomConflict('The calendar URL must point to a public internet host.');
         }
         $feed = ExternalCalendarFeed::create($d);

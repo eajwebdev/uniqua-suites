@@ -10,6 +10,7 @@ use App\Models\Guest;
 use App\Models\Room;
 use App\Models\User;
 use App\Support\Local;
+use App\Support\Permissions;
 use App\Support\Settings;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
@@ -33,15 +34,12 @@ class DemoSeeder extends Seeder
             'Owner' => 'owner@uniqa-suites.test',
             'Operations Manager' => 'manager@uniqa-suites.test',
             'Booking / Reception' => 'reception@uniqa-suites.test',
-            'Finance / Bookkeeper' => 'finance@uniqa-suites.test',
-            'Housekeeping / Laundry' => 'housekeeping@uniqa-suites.test',
-            'Maintenance' => 'maintenance@uniqa-suites.test',
-            'Staff Advances / Payroll' => 'payroll@uniqa-suites.test',
-            'Auditor' => 'auditor@uniqa-suites.test',
+            'Administrator' => 'admin@uniqa-suites.test',
+            'Staff' => 'staff@uniqa-suites.test',
         ];
         foreach ($staff as $role => $email) {
             $user = User::updateOrCreate(['email' => $email], ['name' => 'Demo '.$role, 'password' => Hash::make('demo-password')]);
-            $user->syncRoles([$role]);
+            Permissions::apply($user, $role);
         }
 
         auth()->login(User::where('email', 'owner@uniqa-suites.test')->first());

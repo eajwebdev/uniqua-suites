@@ -7,6 +7,7 @@ use App\Models\Booking;
 use App\Models\Property;
 use App\Models\Room;
 use App\Support\Local;
+use App\Support\Settings;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -42,6 +43,7 @@ class CalendarController extends Controller
             'next' => $start->addMonth()->format('Y-m'),
             'days' => $start->daysInMonth,
             'today' => Local::today(),
+            'weekend_days' => Settings::get('pricing.weekend_days') ?? [],
             'property' => $data['property'] ?? null,
             'properties' => Property::orderBy('id')->get(['id', 'name']),
             'rooms' => $rooms->map(fn ($r) => ['id' => $r->id, 'name' => $r->name, 'unit' => $r->unit_code, 'property' => $r->property->name, 'housekeeping' => $r->housekeeping_status]),

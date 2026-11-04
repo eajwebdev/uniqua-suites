@@ -5,11 +5,13 @@ namespace App\Domain\Tasks;
 use App\Domain\Availability\RoomConflict;
 use App\Models\Booking;
 use App\Models\HousekeepingTask;
+use App\Models\InventoryMovement;
 use App\Models\LaundryJob;
 use App\Models\Room;
 use App\Models\RoomStatusEvent;
 use App\Models\TaskEvent;
 use App\Models\User;
+use App\Support\Audit;
 use App\Support\Settings;
 
 class TurnoverService
@@ -60,6 +62,46 @@ class TurnoverService
         $task->update(['status' => 'in_progress', 'started_at' => now(), 'assigned_to' => $task->assigned_to ?? auth()->id()]);
         $this->setHousekeeping($task->room, 'cleaning', 'Task #'.$task->id);
         $this->taskEvent($task, 'started');
+    }
+
+    /** Spreads unassigned work to the housekeeping staff with the fewest open tasks. Returns how many were assigned. */
+    public function assignByWorkload(): int
+    {
+        // People who do the cleaning, not those who manage it or have full access.
+        $staff = User::permission('housekeeping.own')->where('is_active', true)->orderBy('id')->get()->reject(fn ($u) => $u->can('housekeeping.manage'))->values();
+        if ($staff->isEmpty()) {
+            throw new RoomConflict("Tick 'Housekeeping: own cleaning tasks' for an active team member first.");
+        }
+
+        $open = ['assigned', 'in_progress', 'pending', 'rejected'];
+        $load = $staff->mapWithKeys(fn ($u) => [$u->id => HousekeepingTask::where('assigned_to', $u->id)->whereIn('status', $open)->count()])->all();
+        $count = 0;
+        foreach (HousekeepingTask::whereNull('assigned_to')->whereIn('status', ['pending', 'rejected'])->orderBy('due_at')->orderBy('id')->get() as $task) {
+            $user = $staff->sortBy(fn ($u) => $load[$u->id])->first();
+            $this->assign($task, $user);
+            $load[$user->id]++;
+            $count++;
+        }
+
+        return $count;
+    }
+
+    /** Stock only falls because use was recorded here. Runs with the completion, so a retry cannot count it twice. */
+    public function recordSupplies(HousekeepingTask $task, array $supplies, int $userId): void
+    {
+        foreach ($supplies as $line) {
+            $movement = InventoryMovement::create([
+                'inventory_item_id' => $line['inventory_item_id'],
+                'property_id' => $task->room->property_id,
+                'room_id' => $task->room_id,
+                'housekeeping_task_id' => $task->id,
+                'type' => 'issue',
+                'quantity' => -abs((int) $line['quantity']),
+                'note' => 'Used on task #'.$task->id,
+                'user_id' => $userId,
+            ]);
+            Audit::log('inventory.moved', $movement, ['quantity' => $movement->quantity, 'task' => $task->id]);
+        }
     }
 
     /** Completing a clean queues inspection; it never makes the room ready. */

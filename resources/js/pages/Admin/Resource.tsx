@@ -1,6 +1,6 @@
 import { Link, router, usePage } from '@inertiajs/react';
 import { ColumnDef, flexRender, getCoreRowModel, getSortedRowModel, SortingState, useReactTable } from '@tanstack/react-table';
-import { ArrowLeft, ArrowUpDown } from 'lucide-react';
+import { ArrowLeft, ArrowUpDown, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { ActionButton, Button, buttonClass, Empty, FieldDef, FormModal, Input, Pagination, RowAction, Select, Stat, StatusChip, Tabs } from '@/components/ui';
 import { dateOnly, dateTime, peso } from '@/lib/format';
@@ -39,9 +39,9 @@ function Cell({ column, value }: { column: Column; value: any }) {
         case 'link':
             if (!value?.href) return <span className="text-muted">{value?.label ?? '—'}</span>;
             return value.external ? (
-                <a href={value.href} target="_blank" rel="noreferrer" className="font-medium underline">{value.label}</a>
+                <a href={value.href} target="_blank" rel="noreferrer" className="inline-block font-medium underline pointer-coarse:py-3">{value.label}</a>
             ) : (
-                <Link href={value.href} className="font-medium underline">{value.label}</Link>
+                <Link href={value.href} className="inline-block font-medium underline pointer-coarse:py-3">{value.label}</Link>
             );
         default:
             return <span className="break-words">{value ?? '—'}</span>;
@@ -67,7 +67,7 @@ export default function Resource(props: Props) {
         if (hasActions) {
             defs.push({
                 id: '_actions',
-                header: '',
+                header: () => <span className="sr-only">Actions</span>,
                 enableSorting: false,
                 cell: (info) => (
                     <div className="flex justify-end gap-1.5">
@@ -102,7 +102,7 @@ export default function Resource(props: Props) {
             )}
             <Tabs tabs={props.tabs} current={path} />
             {props.subtitle && <p className="mb-4 max-w-3xl text-sm text-muted">{props.subtitle}</p>}
-            {props.note && <p className="mb-4 rounded-md bg-beige px-3 py-2 text-sm">{props.note}</p>}
+            {props.note && <p className="mb-4 rounded-lg bg-beige px-3 py-2 text-sm">{props.note}</p>}
 
             {props.stats && (
                 <div className="mb-4 grid gap-3 sm:grid-cols-3">
@@ -113,8 +113,9 @@ export default function Resource(props: Props) {
             {(props.search || props.filters || props.dateRange) && (
                 <div className="mb-4 flex flex-wrap items-end gap-2">
                     {props.search && (
-                        <form onSubmit={(e) => { e.preventDefault(); applyFilter(props.search?.param ?? 'q', term); }} className="min-w-52 flex-1 sm:max-w-sm">
-                            <Input type="search" aria-label="Search" placeholder={props.search.placeholder} value={term} onChange={(e) => setTerm(e.target.value)} />
+                        <form onSubmit={(e) => { e.preventDefault(); applyFilter(props.search?.param ?? 'q', term); }} className="relative min-w-52 flex-1 sm:max-w-sm">
+                            <Search size={15} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted" aria-hidden />
+                            <Input type="search" aria-label="Search" placeholder={props.search.placeholder} className="w-full pl-9" value={term} onChange={(e) => setTerm(e.target.value)} />
                         </form>
                     )}
                     {props.filters?.map((f) => (
@@ -129,18 +130,18 @@ export default function Resource(props: Props) {
                 </div>
             )}
 
-            <div className="overflow-x-auto rounded-lg border border-line bg-white">
+            <div className="relative overflow-x-auto rounded-xl border border-line/80 bg-white shadow-xs">
                 {rows.length === 0 ? (
                     <Empty>Nothing here yet.</Empty>
                 ) : (
                     <table className="w-full text-left text-sm">
-                        <thead className="bg-ivory text-xs text-muted">
+                        <thead className="bg-ivory/70 text-xs text-muted">
                             {table.getHeaderGroups().map((hg) => (
                                 <tr key={hg.id}>
                                     {hg.headers.map((h) => (
-                                        <th key={h.id} scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
+                                        <th key={h.id} scope="col" aria-sort={h.column.getIsSorted() === 'asc' ? 'ascending' : h.column.getIsSorted() === 'desc' ? 'descending' : undefined} className="px-4 py-2.5 font-medium whitespace-nowrap">
                                             {h.column.getCanSort() ? (
-                                                <button className="inline-flex items-center gap-1" onClick={h.column.getToggleSortingHandler()}>
+                                                <button className="inline-flex items-center gap-1 pointer-coarse:min-h-11" onClick={h.column.getToggleSortingHandler()}>
                                                     {flexRender(h.column.columnDef.header, h.getContext())} <ArrowUpDown size={11} aria-hidden />
                                                 </button>
                                             ) : (
@@ -153,9 +154,9 @@ export default function Resource(props: Props) {
                         </thead>
                         <tbody>
                             {table.getRowModel().rows.map((row) => (
-                                <tr key={row.id} className="border-t border-line align-top">
+                                <tr key={row.id} className="border-t border-line/70 align-top transition-colors hover:bg-ivory/60">
                                     {row.getVisibleCells().map((cell) => (
-                                        <td key={cell.id} className="max-w-xs px-3 py-2">{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
+                                        <td key={cell.id} className="max-w-xs px-4 py-2.5">{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
                                     ))}
                                 </tr>
                             ))}

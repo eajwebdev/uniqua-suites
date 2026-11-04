@@ -12,6 +12,7 @@ use App\Models\RateRule;
 use App\Models\Room;
 use App\Models\RoomBlock;
 use App\Models\RoomImage;
+use App\Models\RoomListing;
 use App\Models\RoomSecret;
 use App\Models\RoomStatusEvent;
 use App\Support\Audit;
@@ -34,7 +35,7 @@ class RoomController extends Controller
 
         return Inertia::render('Admin/Resource', [
             'title' => 'Rooms & Properties',
-            'subtitle' => 'Proposed from ROOM DETAILS. Approve each room against the current list before publishing it.',
+            'subtitle' => 'Proposed from the room list and suite flyers. Check each room, then approve it before publishing.',
             'columns' => [
                 ['key' => 'name', 'label' => 'Suite', 'type' => 'link'],
                 ['key' => 'unit', 'label' => 'Unit'],
@@ -81,7 +82,7 @@ class RoomController extends Controller
         $secret = RoomSecret::where('room_id', $room->id)->first();
 
         return Inertia::render('Admin/RoomEdit', [
-            'room' => $room->only(['id', 'name', 'unit_code', 'floor', 'bedrooms', 'ac_count', 'bathrooms', 'has_balcony', 'included_guests', 'max_guests', 'description', 'inclusions', 'policies', 'operational_notes', 'operational_status', 'parking_eligible', 'active_from', 'active_to', 'catalog_status', 'is_published', 'housekeeping_status']) + [
+            'room' => $room->only(['id', 'name', 'unit_code', 'floor', 'bedrooms', 'ac_count', 'bathrooms', 'has_balcony', 'included_guests', 'max_guests', 'min_nights', 'max_advance_days', 'description', 'inclusions', 'policies', 'operational_notes', 'operational_status', 'parking_eligible', 'active_from', 'active_to', 'catalog_status', 'is_published', 'housekeeping_status']) + [
                 'property' => $room->property->name,
                 'type' => $room->type->name,
                 'amenity_ids' => $room->amenities->pluck('id'),
@@ -90,6 +91,7 @@ class RoomController extends Controller
             'rates' => $room->rateRules->map(fn ($r) => ['id' => $r->id, 'from' => $r->effective_from->toDateString(), 'to' => $r->effective_to?->toDateString(), 'weekday_cents' => (int) $r->weekday_cents, 'weekend_cents' => (int) $r->weekend_cents, 'note' => $r->source_note]),
             'overrides' => RateOverride::where('room_id', $room->id)->orderByDesc('date_from')->with('source:id,name')->get()->map(fn ($o) => ['id' => $o->id, 'from' => $o->date_from->toDateString(), 'to' => $o->date_to->toDateString(), 'cents' => (int) $o->nightly_cents, 'label' => $o->label, 'source' => $o->source?->name]),
             'blocks' => $room->blocks->map(fn ($b) => ['id' => $b->id, 'start' => $b->start_date->toDateString(), 'end' => $b->end_date->toDateString(), 'kind' => $b->kind, 'reason' => $b->reason]),
+            'listings' => $room->listings()->orderBy('provider')->get(['id', 'provider', 'listing_id', 'url']),
             'amenities' => Amenity::orderBy('name')->get(['id', 'name']),
             'sources' => BookingSource::orderBy('name')->get(['id', 'name']),
             // Metadata only: the password is fetched through the audited reveal endpoint.
@@ -108,6 +110,8 @@ class RoomController extends Controller
             'has_balcony' => 'required|boolean',
             'included_guests' => 'required|integer|min:1|max:30',
             'max_guests' => 'required|integer|min:1|max:30|gte:included_guests',
+            'min_nights' => 'nullable|integer|min:1|max:365',
+            'max_advance_days' => 'nullable|integer|min:1|max:1825',
             'description' => 'nullable|string|max:4000',
             'inclusions' => 'nullable|string|max:4000',
             'policies' => 'nullable|string|max:4000',
@@ -165,6 +169,24 @@ class RoomController extends Controller
         $image->delete();
 
         return back()->with('success', 'Photo removed.');
+    }
+
+    /** Reference only: a listing ID connects nothing and sends nothing to the platform. */
+    public function addListing(Request $request, Room $room)
+    {
+        $data = $request->validate(['provider' => 'required|string|max:60', 'listing_id' => 'required|string|max:120', 'url' => 'nullable|url:https|max:500']);
+        $listing = $room->listings()->create($data + ['created_by' => $request->user()->id]);
+        Audit::log('room.listing_added', $listing, ['room' => $room->name, 'provider' => $data['provider'], 'listing_id' => $data['listing_id']]);
+
+        return back()->with('success', 'Listing ID saved.');
+    }
+
+    public function deleteListing(RoomListing $listing)
+    {
+        Audit::log('room.listing_removed', $listing, ['provider' => $listing->provider, 'listing_id' => $listing->listing_id]);
+        $listing->delete();
+
+        return back()->with('success', 'Listing ID removed.');
     }
 
     /** A new rule never edits an old one, so past stays keep their dated rate. */

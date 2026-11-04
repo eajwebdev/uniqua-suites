@@ -17,7 +17,7 @@
 | SALARYC.A | `employees`, `staff_cash_advances`, `staff_repayments` (restricted) | Staff Advances |
 | PARKING DETAILS and calendar | `parking_spaces`, `parking_assignments` | Parking |
 | WIFI DETAILS | `room_secrets` (encrypted, reveal is audited) | Room edit |
-| All of the above, historically | `legacy_rows`, `import_anomalies`, `import_mappings`: never mixed with live data | Import & Data Quality |
+| Sales, cleaning, damage and utility sheets, historically | `legacy_rows`, `import_anomalies`, `import_mappings`: never mixed with live data. `SALARYC.A`, Wi-Fi details and the parking calendar are deliberately not imported | Import & Data Quality |
 
 ## State flows
 
@@ -43,6 +43,12 @@ Incident:  reported | evidence_pending | under_review ──owner approves──
            approved_for_charge ──owner reverses──> disputed       Only the owner decision creates a charge.
 Import:    staged ──commit──> committed           staged or committed ──rollback──> rolled_back
 ```
+
+## Public site and quoting
+
+The public site sends guests to Facebook Messenger, and that is all it does. `PublicSiteController` never touches the pricing or inventory services, so a price cannot reach a public page or its page data.
+
+Staff answer from the quotation screen. `VacancySearch` lists each unit that can take the stay, with its price, and gives a reason for each that cannot: booked, held, blocked, in maintenance, safety work order, too small or outside stay rules. It reads without locking and reserves nothing. Only a hold or confirmation does, through the inventory gate below.
 
 ## Inventory safety
 
@@ -79,15 +85,34 @@ Shown beside the numbers in the app, and defined in `ReportService::DEFINITIONS`
 | ADR | Earned accommodation / occupied room nights | Stay date |
 | RevPAR | Earned accommodation / sellable room nights | Stay date |
 
-These use different date bases, so they are not expected to add up across cards.
+These use different date bases, so they are not expected to add up across cards. The **Totals by date basis** report lets you pick one basis at a time: created, stay, receipt, payout or expense date. Dates taken from timestamps use the Manila day, not the UTC day.
+
+## Finance controls
+
+Both are off until the owner sets them under Settings, because a one-person office could otherwise approve nothing.
+
+- **Expense approval threshold:** a bill at or above it cannot be recorded as paid, or marked paid, until approved.
+- **Second reviewer:** nobody can verify a receipt, approve a refund or approve an expense that they recorded themselves.
+
+A locked month is fully closed. A stay with a night in it cannot be confirmed, amended, cancelled or marked no-show, because repricing rewrites every night. A paid expense cannot be marked paid again, so its cash date cannot leave a locked month. Mistakes are corrected with **Reverse**: a new opposite entry dated today, with the original kept. An entry can be reversed once.
+
+Taxes are owner-added rules with effective dates, picked by check-in date. They are worked out in whole centavos on accommodation, extra-guest and early check-in charges, before discounts, and are kept out of revenue figures. Month-end (`uniqa:month-end`, 07:30 Manila on the 1st) only notifies: locking a period stays a person's decision.
+
+## Sign-in security
+
+- **Two-factor:** standard authenticator-app codes (RFC 6238), implemented in `app/Support/Totp.php`. Password success only records a pending user in the session; nobody is signed in until a code is accepted. Secrets are encrypted, recovery codes are stored as hashes, a code cannot be reused, and five wrong codes end the attempt. "Keep me signed in" lasts until sign-out and skips the code on that device; turning two-factor on or off invalidates older such cookies.
+- **Sessions and headers:** changing a password ends that person's other sessions. Every response carries security headers, including a content security policy.
+- **Calendar feeds:** the host is rechecked before every fetch and redirects are refused, so a feed cannot be used to reach this server's own network.
+- **Health:** `php artisan uniqa:doctor` checks an installation, and the dashboard warns the owner when the scheduler has stopped.
+- **Rate limits:** named limiters in `AppServiceProvider`, one per surface. Do not use plain `throttle:N,1` on routes: those share a single counter per address, which let public browsing use up staff sign-in attempts.
 
 ## Schema
 
-69 InnoDB tables in `utf8mb4`, managed by the migrations in `database/migrations`.
+72 InnoDB tables in `utf8mb4`, managed by the migrations in `database/migrations`. Every column is listed in [DATA_DICTIONARY.md](DATA_DICTIONARY.md).
 
 ```
 properties 1─* rooms *─1 room_types          rooms 1─1 room_secrets (encrypted)
-rooms 1─* room_images, room_blocks, room_status_events, rate_rules, rate_overrides
+rooms 1─* room_images, room_blocks, room_status_events, room_listings, rate_rules, rate_overrides
 guests 1─* bookings *─1 booking_sources      bookings 1─* booking_rooms *─1 rooms
 bookings 1─* booking_nights, booking_charges, pricing_snapshots, booking_status_events
 bookings 1─* quotes 1─* quote_items
@@ -117,4 +142,4 @@ Money and history use restrict-on-delete foreign keys, so a finance or audit rec
 | Staff Advances / Payroll | Advances only |
 | Auditor | Read-only reports and audit log |
 
-Permissions are enforced by route middleware plus per-record checks on tasks and work orders, and pages serialize explicit fields rather than whole models. The role definitions are in `app/Support/Permissions.php`.
+Reception can also open Housekeeping, where it sees only rooms waiting for inspection. Permissions are enforced by route middleware plus per-record checks on tasks and work orders, and pages serialize explicit fields rather than whole models. The role definitions are in `app/Support/Permissions.php`.

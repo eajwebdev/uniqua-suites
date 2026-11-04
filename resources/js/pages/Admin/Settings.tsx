@@ -1,6 +1,6 @@
 import { useForm } from '@inertiajs/react';
 import { ActionButton, Button, Card, Field, Input, Select, StatusChip } from '@/components/ui';
-import { dateTime, humanize } from '@/lib/format';
+import { dateOnly, dateTime, humanize } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
 
 const DAYS = [[1, 'Mon'], [2, 'Tue'], [3, 'Wed'], [4, 'Thu'], [5, 'Fri'], [6, 'Sat'], [7, 'Sun']] as const;
@@ -12,14 +12,14 @@ function TemplateRow({ template }: any) {
         <details className="rounded-md border border-line px-3 py-2 text-sm">
             <summary className="cursor-pointer font-medium">{template.name}</summary>
             <form onSubmit={(e) => { e.preventDefault(); form.post(`/admin/settings/templates/${template.id}`, { preserveScroll: true }); }} className="mt-2 space-y-2">
-                <textarea aria-label={`${template.name} body`} rows={4} className="w-full rounded-md border border-line px-3 py-2 text-sm" value={form.data.body} onChange={(e) => form.setData('body', e.target.value)} />
+                <textarea aria-label={`${template.name} body`} rows={4} className="w-full rounded-md border border-line px-3 py-2 text-sm pointer-coarse:text-base" value={form.data.body} onChange={(e) => form.setData('body', e.target.value)} />
                 <Button small type="submit" disabled={form.processing}>Save</Button>
             </form>
         </details>
     );
 }
 
-export default function Settings({ settings: s, decisions, templates, integrations, feeds, rooms, contact }: any) {
+export default function Settings({ settings: s, decisions, templates, integrations, feeds, rooms, contact, taxes }: any) {
     const form = useForm<any>({
         weekend_days: s.weekend_days ?? [],
         extra_guest: s.extra_guest ?? '200.00',
@@ -32,6 +32,14 @@ export default function Settings({ settings: s, decisions, templates, integratio
         laundry_auto: s.laundry_auto,
         require_verification: s.require_verification,
         turnover_due_hours: s.turnover_due_hours,
+        expense_threshold: s.expense_threshold ?? '',
+        second_reviewer: s.second_reviewer,
+        require_two_factor: s.require_two_factor,
+        min_nights: s.min_nights ?? '',
+        max_advance_days: s.max_advance_days ?? '',
+        house_rules: s.house_rules ?? '',
+        cancellation: s.cancellation ?? '',
+        arrival_lead_days: s.arrival_lead_days,
     });
     const e = form.errors as any;
     const set = (k: string) => (ev: any) => form.setData(k, ev.target.value);
@@ -72,7 +80,7 @@ export default function Settings({ settings: s, decisions, templates, integratio
                                 </label>
                             ))}
                         </div>
-                        {form.data.weekend_days.length === 0 && <p className="mt-1 text-xs text-amber-900">Pending: staff quotes stay disabled and the public site shows only the two posted rates until days are chosen.</p>}
+                        {form.data.weekend_days.length === 0 && <p className="mt-1 text-xs text-amber-900">Pending: staff quotes stay disabled until days are chosen.</p>}
                     </fieldset>
                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                         <Field label="Extra-guest fee (PHP)" error={e.extra_guest}><Input value={form.data.extra_guest} onChange={set('extra_guest')} /></Field>
@@ -85,14 +93,44 @@ export default function Settings({ settings: s, decisions, templates, integratio
                         <Field label="Late check-out fee per hour (PHP)" error={e.late_fee}><Input value={form.data.late_fee} onChange={set('late_fee')} /></Field>
                         <Field label="Default hold length (hours)" error={e.hold_hours}><Input type="number" value={form.data.hold_hours} onChange={set('hold_hours')} /></Field>
                         <Field label="Turnover due within (hours)" error={e.turnover_due_hours}><Input type="number" value={form.data.turnover_due_hours} onChange={set('turnover_due_hours')} /></Field>
+                        <Field label="Expense approval threshold (PHP)" error={e.expense_threshold} help="Bills at or above this need approval before they are paid. Blank means none do."><Input value={form.data.expense_threshold} onChange={set('expense_threshold')} /></Field>
+                        <Field label="Minimum stay (nights)" error={e.min_nights} help="Blank means no minimum. A room can set its own."><Input type="number" min={1} value={form.data.min_nights} onChange={set('min_nights')} /></Field>
+                        <Field label="Book at most this many days ahead" error={e.max_advance_days} help="Blank means no limit. A room can set its own."><Input type="number" min={1} value={form.data.max_advance_days} onChange={set('max_advance_days')} /></Field>
+                        <Field label="Arrival reminder (days before)" error={e.arrival_lead_days}><Input type="number" min={1} max={14} value={form.data.arrival_lead_days} onChange={set('arrival_lead_days')} /></Field>
+                    </div>
+                    <div className="grid gap-3 lg:grid-cols-2">
+                        <Field label="Cancellation policy" error={e.cancellation} help="Shown on the public policies page once written. Blank shows nothing."><textarea rows={3} className="w-full rounded-md border border-line px-3 py-2 text-sm pointer-coarse:text-base" value={form.data.cancellation} onChange={set('cancellation')} /></Field>
+                        <Field label="House rules" error={e.house_rules} help="Shown on the public policies page once written. Blank shows nothing."><textarea rows={3} className="w-full rounded-md border border-line px-3 py-2 text-sm pointer-coarse:text-base" value={form.data.house_rules} onChange={set('house_rules')} /></Field>
                     </div>
                     <div className="space-y-1 text-sm">
                         <label className="flex items-center gap-2"><input type="checkbox" checked={form.data.laundry_auto} onChange={(ev) => form.setData('laundry_auto', ev.target.checked)} /> Suggest a laundry job at every checkout</label>
                         <label className="flex items-center gap-2"><input type="checkbox" checked={form.data.require_verification} onChange={(ev) => form.setData('require_verification', ev.target.checked)} /> Require a verified payment before confirming a booking</label>
+                        <label className="flex items-center gap-2"><input type="checkbox" checked={form.data.second_reviewer} onChange={(ev) => form.setData('second_reviewer', ev.target.checked)} /> Require a second person to verify receipts and approve refunds and expenses they did not record</label>
+                        <label className="flex items-center gap-2"><input type="checkbox" checked={form.data.require_two_factor} onChange={(ev) => form.setData('require_two_factor', ev.target.checked)} /> Require two-factor sign-in for staff with finance, security or administrator access</label>
                     </div>
                     <Button type="submit" variant="primary" disabled={form.processing}>Save policy</Button>
                     <p className="text-xs text-muted">Changes apply to new prices only. Confirmed bookings keep their saved snapshot.</p>
                 </form>
+            </Card>
+
+            <Card title="Taxes and fees" className="mb-4" action={
+                <ActionButton action={{ label: 'Add tax', url: '/admin/settings/taxes', confirm: 'New quotes and repriced stays will include this. Have you confirmed the rate with your accountant?', fields: [
+                    { name: 'name', label: 'Name shown on quotes', type: 'text', required: true },
+                    { name: 'percent', label: 'Rate (%)', type: 'text', required: true, help: 'For example 12 or 1.5.' },
+                    { name: 'effective_from', label: 'Applies to stays checking in from', type: 'date', required: true },
+                ] }} />
+            }>
+                {taxes.length === 0 ? <p className="text-sm text-muted">None configured, so none are charged.</p> : (
+                    <ul className="divide-y divide-line text-sm">
+                        {taxes.map((t: any) => (
+                            <li key={t.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                                <span>{t.name}, {t.percent}% <span className="text-xs text-muted">from {dateOnly(t.from)}{t.to ? ` to ${dateOnly(t.to)}` : ''}</span></span>
+                                {!t.to && <ActionButton action={{ label: 'End', url: `/admin/settings/taxes/${t.id}/end`, fields: [{ name: 'effective_to', label: 'Last check-in date it applies to', type: 'date', required: true }] }} />}
+                            </li>
+                        ))}
+                    </ul>
+                )}
+                <p className="mt-2 text-xs text-muted">Worked out on accommodation, extra-guest and early check-in charges, before discounts. Kept out of revenue figures. Confirmed bookings keep their saved price.</p>
             </Card>
 
             <div className="grid gap-4 lg:grid-cols-2">
@@ -129,7 +167,7 @@ export default function Settings({ settings: s, decisions, templates, integratio
                         <ul className="space-y-1 text-sm">
                             {Object.entries(contact).map(([k, v]) => <li key={k} className="flex justify-between gap-2"><span>{humanize(k)}</span><StatusChip value={v ? 'approved' : 'pending'} label={v ? 'Set' : 'Not supplied'} /></li>)}
                         </ul>
-                        <p className="mt-2 text-xs text-muted">Set these in the environment file once the owner supplies official links.</p>
+                        <p className="mt-2 text-xs text-muted">Set these in the environment file. The website's Message us button opens the Messenger link, or the Facebook link if there is no Messenger link.</p>
                     </Card>
                 </div>
             </div>

@@ -48,6 +48,11 @@ class Room extends Model
         return $this->hasMany(RoomBlock::class);
     }
 
+    public function listings()
+    {
+        return $this->hasMany(RoomListing::class);
+    }
+
     public function secret()
     {
         return $this->hasOne(RoomSecret::class);

@@ -21,7 +21,15 @@ class Settings
         'holds.default_hours' => 24,
         'laundry.auto_create' => true,
         'finance.require_verification_to_confirm' => false,
+        'finance.expense_approval_threshold_cents' => null, // null: no amount needs approval before payment
+        'finance.second_reviewer' => false, // off by default: a one-person office could not approve anything
         'housekeeping.turnover_due_hours' => 4,
+        'security.require_two_factor' => false,
+        'stay.min_nights' => null, // null: no limit until the owner sets one
+        'stay.max_advance_days' => null,
+        'policy.house_rules' => null, // shown publicly only once written
+        'policy.cancellation' => null,
+        'alerts.arrival_lead_days' => 1,
     ];
 
     public static function get(string $key, mixed $default = null): mixed

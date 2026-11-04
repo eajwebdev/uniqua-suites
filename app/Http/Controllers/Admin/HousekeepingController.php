@@ -5,12 +5,14 @@ namespace App\Http\Controllers\Admin;
 use App\Domain\Tasks\TurnoverService;
 use App\Http\Controllers\Controller;
 use App\Models\HousekeepingTask;
+use App\Models\InventoryItem;
 use App\Models\LaundryJob;
 use App\Models\TaskAttachment;
 use App\Models\User;
 use App\Support\Money;
 use App\Support\SystemNotice;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 
 class HousekeepingController extends Controller
@@ -27,7 +29,12 @@ class HousekeepingController extends Controller
         // Serialized field by field: no guest name, payment or balance reaches housekeeping staff.
         $tasks = HousekeepingTask::with(['room:id,name,unit_code,housekeeping_status', 'assignee:id,name', 'attachments:id,housekeeping_task_id,stage'])
             ->whereNotIn('status', ['accepted'])
-            ->when(! $manager, fn ($q) => $q->where(fn ($w) => $w->where('assigned_to', $user->id)->orWhereNull('assigned_to')))
+            ->when(! $manager, fn ($q) => $q->where(function ($w) use ($user) {
+                // Cleaners see their own and unclaimed work; inspectors see what is waiting for them.
+                $w->whereRaw('1 = 0')
+                    ->when($user->can('housekeeping.own'), fn ($own) => $own->orWhere('assigned_to', $user->id)->orWhereNull('assigned_to'))
+                    ->when($user->can('housekeeping.inspect'), fn ($inspect) => $inspect->orWhere('status', 'for_inspection'));
+            }))
             ->orderBy('due_at')->limit(100)->get()
             ->map(fn ($t) => [
                 'id' => $t->id,
@@ -44,12 +51,15 @@ class HousekeepingController extends Controller
                 'checklist' => $t->checklist ?? [],
                 'notes' => $t->completion_notes,
                 'photos' => $t->attachments->count(),
+                'started_at' => $t->started_at,
+                'completed_at' => $t->completed_at,
             ]);
 
         return Inertia::render('Admin/Housekeeping', [
             'tasks' => $tasks,
             'staff' => $manager ? User::permission('housekeeping.own')->where('is_active', true)->orderBy('name')->get(['id', 'name']) : [],
-            'can' => ['manage' => $manager, 'inspect' => $user->can('housekeeping.inspect')],
+            'items' => $user->can('inventory.consume') ? InventoryItem::orderBy('name')->get(['id', 'name', 'unit']) : [],
+            'can' => ['manage' => $manager, 'work' => $manager || $user->can('housekeeping.own'), 'inspect' => $user->can('housekeeping.inspect')],
             'tabs' => $manager ? [['label' => 'Tasks', 'href' => '/admin/housekeeping'], ['label' => 'Laundry', 'href' => '/admin/laundry']] : [],
         ]);
     }
@@ -61,6 +71,13 @@ class HousekeepingController extends Controller
         $user->notify(new SystemNotice("Cleaning assigned: {$task->room->name}", '/admin/housekeeping'));
 
         return back()->with('success', "Assigned to {$user->name}.");
+    }
+
+    public function autoAssign()
+    {
+        $count = $this->turnover->assignByWorkload();
+
+        return back()->with('success', $count ? "{$count} task(s) assigned by current workload." : 'Nothing is waiting to be assigned.');
     }
 
     public function start(Request $request, HousekeepingTask $task)
@@ -81,12 +98,20 @@ class HousekeepingController extends Controller
             'notes' => 'nullable|string|max:1000',
             'photos' => 'nullable|array|max:10',
             'photos.*' => 'image|mimes:jpg,jpeg,png,webp|max:8192',
+            'supplies' => 'nullable|array|max:20',
+            'supplies.*.inventory_item_id' => 'required|exists:inventory_items,id',
+            'supplies.*.quantity' => 'required|integer|min:1|max:1000',
         ]);
+        abort_if(! empty($data['supplies']) && ! $request->user()->can('inventory.consume'), 403);
+
+        DB::transaction(function () use ($request, $task, $data) {
+            $this->turnover->complete($task, $data['checklist'], $data['notes'] ?? null);
+            $this->turnover->recordSupplies($task, $data['supplies'] ?? [], $request->user()->id);
+        });
         foreach ($request->file('photos', []) as $photo) {
             TaskAttachment::create(['housekeeping_task_id' => $task->id, 'path' => $photo->store('evidence/tasks', 'local'), 'user_id' => $request->user()->id]);
         }
-        $this->turnover->complete($task, $data['checklist'], $data['notes'] ?? null);
-        SystemNotice::toPermission('housekeeping.inspect', "{$task->room->name} is ready for inspection.", '/admin/housekeeping');
+        SystemNotice::toPermission('housekeeping.inspect', "{$task->room->name} is ready for inspection.", '/admin/housekeeping', 'housekeeping');
 
         return back()->with('success', 'Sent for inspection. The room is not ready until it passes.');
     }
