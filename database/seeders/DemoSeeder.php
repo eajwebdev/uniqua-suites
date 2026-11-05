@@ -24,7 +24,7 @@ class DemoSeeder extends Seeder
 {
     public function run(): void
     {
-        abort_unless(app()->environment(['local', 'testing']), 403, 'Demo data is local only.');
+        abort_unless(app()->environment(['local', 'demo', 'testing']), 403, 'Demo data is allowed only in the local, demo, or testing environment.');
 
         // Use the one database already configured by .env. Seed the real roles and catalog first,
         // so a fresh demo database does not need a separate setup command or another database.
