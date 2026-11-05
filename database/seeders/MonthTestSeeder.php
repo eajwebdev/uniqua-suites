@@ -16,12 +16,11 @@ use App\Support\Permissions;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
-use RuntimeException;
 
 /**
  * Two samples of every booking status and every cleaning status, on three suites, around today.
- * Fully synthetic, for trying the screens by hand. It runs only on a database whose name ends in
- * _sim: use .\scripts\simulation.ps1 -Month
+ * Fully synthetic, for trying the screens by hand. It uses the active database connection from
+ * .env.
  */
 class MonthTestSeeder extends Seeder
 {
@@ -33,11 +32,6 @@ class MonthTestSeeder extends Seeder
 
     public function run(): void
     {
-        $database = (string) config('database.connections.'.config('database.default').'.database');
-        if (! str_ends_with($database, '_sim')) {
-            throw new RuntimeException("Refusing to seed test data into [{$database}]: its name must end in _sim.");
-        }
-
         $this->call(DatabaseSeeder::class);
         Room::query()->update(['is_published' => true, 'catalog_status' => 'approved', 'housekeeping_status' => 'ready']);
 

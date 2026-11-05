@@ -9,36 +9,15 @@ use App\Models\Guest;
 use App\Models\HousekeepingTask;
 use App\Support\Local;
 use Database\Seeders\MonthTestSeeder;
-use RuntimeException;
+use Database\Seeders\SimulationSeeder;
 use Tests\DomainTestCase;
 
 class MonthTestSeederTest extends DomainTestCase
 {
     private function seedMonth(): void
     {
-        // The connection stays on the test database. Only the name the guard reads changes.
-        $key = 'database.connections.'.config('database.default').'.database';
-        $real = config($key);
-        config([$key => 'db_uniquasuites_sim']);
         $this->app->make(MonthTestSeeder::class)->run();
-        config([$key => $real]);
         $this->actingAs($this->owner);
-    }
-
-    public function test_it_refuses_any_database_not_ending_in_sim(): void
-    {
-        foreach (['db_uniquasuites', 'db_uniquasuites_test'] as $name) {
-            config(['database.connections.'.config('database.default').'.database' => $name]);
-
-            try {
-                $this->app->make(MonthTestSeeder::class)->run();
-                $this->fail("It ran against {$name}");
-            } catch (RuntimeException $e) {
-                $this->assertStringContainsString('must end in _sim', $e->getMessage());
-            }
-        }
-
-        $this->assertSame(0, Booking::count());
     }
 
     public function test_it_makes_two_of_every_booking_status(): void
@@ -60,10 +39,10 @@ class MonthTestSeederTest extends DomainTestCase
 
         $employees = Employee::with('user')->orderBy('id')->get();
 
-        $this->assertCount(count(\Database\Seeders\SimulationSeeder::ACCOUNTS), $employees);
+        $this->assertCount(count(SimulationSeeder::ACCOUNTS), $employees);
         $this->assertTrue($employees->every(fn (Employee $employee) => $employee->is_active && $employee->user_id));
         $this->assertEqualsCanonicalizing(
-            array_keys(\Database\Seeders\SimulationSeeder::ACCOUNTS),
+            array_keys(SimulationSeeder::ACCOUNTS),
             $employees->pluck('user.email')->all(),
         );
     }

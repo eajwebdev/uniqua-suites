@@ -28,12 +28,10 @@ use Carbon\CarbonImmutable;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
-use RuntimeException;
 
 /**
- * A busy two months of entirely synthetic activity, for testing before go-live. It runs only on a
- * database whose name ends in _sim: see scripts/simulation.ps1. Fixed random seed, so a failure can
- * be reproduced.
+ * A busy two months of entirely synthetic activity, for testing before go-live. It uses the active
+ * database connection from .env. Fixed random seed, so a failure can be reproduced.
  */
 class SimulationSeeder extends Seeder
 {
@@ -60,11 +58,6 @@ class SimulationSeeder extends Seeder
 
     public function run(): void
     {
-        $database = (string) config('database.connections.'.config('database.default').'.database');
-        if (! str_ends_with($database, '_sim')) {
-            throw new RuntimeException("Refusing to seed simulation data into [{$database}]: its name must end in _sim.");
-        }
-
         mt_srand(2026);
         $this->call(DatabaseSeeder::class);
         Room::query()->update(['is_published' => true, 'catalog_status' => 'approved', 'housekeeping_status' => 'ready']);

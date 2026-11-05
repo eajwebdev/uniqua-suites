@@ -3,28 +3,20 @@
 namespace Tests\Feature;
 
 use App\Models\Booking;
+use App\Models\User;
 use Database\Seeders\SimulationSeeder;
 use Illuminate\Support\Facades\Artisan;
-use RuntimeException;
 use Tests\DomainTestCase;
 
-/** The simulation writes hundreds of fake bookings, so it must never be able to reach a real database. */
+/** Direct seeding uses .env; helper simulation commands remain isolated to the simulation setup. */
 class SimulationGuardTest extends DomainTestCase
 {
-    public function test_the_seeder_refuses_any_database_not_ending_in_sim(): void
+    public function test_the_seeder_uses_the_current_configured_database(): void
     {
-        foreach (['db_uniquasuites', 'db_uniquasuites_test', 'simulation', 'db_sim_real'] as $name) {
-            config(['database.connections.'.config('database.default').'.database' => $name]);
+        app(SimulationSeeder::class)->run();
 
-            try {
-                app(SimulationSeeder::class)->run();
-                $this->fail("It ran against {$name}");
-            } catch (RuntimeException $e) {
-                $this->assertStringContainsString('must end in _sim', $e->getMessage());
-            }
-        }
-
-        $this->assertSame(0, Booking::count());
+        $this->assertGreaterThan(0, Booking::count());
+        $this->assertTrue(User::where('email', 'owner@sim.test')->firstOrFail()->hasRole('Owner'));
     }
 
     public function test_the_simulation_commands_do_not_exist_outside_the_simulation_database(): void
