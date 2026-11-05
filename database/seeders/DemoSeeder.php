@@ -26,6 +26,10 @@ class DemoSeeder extends Seeder
     {
         abort_unless(app()->environment(['local', 'testing']), 403, 'Demo data is local only.');
 
+        // Use the one database already configured by .env. Seed the real roles and catalog first,
+        // so a fresh demo database does not need a separate setup command or another database.
+        $this->call(DatabaseSeeder::class);
+
         Room::query()->update(['is_published' => true, 'catalog_status' => 'approved']);
         Settings::set('pricing.weekend_days', [5, 6]);
         Settings::set('pricing.extra_guest_unit', 'per_night');
