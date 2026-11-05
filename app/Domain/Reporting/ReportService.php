@@ -131,6 +131,7 @@ class ReportService
             if ($balance['balance_cents'] > 0) {
                 $total += $balance['balance_cents'];
                 $rows[] = [
+                    'booking_id' => $b->id,
                     'reference' => $b->reference,
                     'guest' => $b->guest->full_name,
                     'source' => $b->source->name,

@@ -1,7 +1,8 @@
 import { Link, router, usePage } from '@inertiajs/react';
-import { Ban, BedDouble, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Clock, HelpCircle, List, LogIn, LogOut, Plus, Search } from 'lucide-react';
+import { Ban, BedDouble, CalendarDays, CalendarOff, CheckCircle2, ChevronLeft, ChevronRight, Clock, HelpCircle, List, LogIn, LogOut, Plus, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { buttonClass, cn, Empty, Input, Select, Stat, StatusChip } from '@/components/ui';
+import { openNewBooking } from '@/components/NewBooking';
+import { ActionButton, buttonClass, cn, confirmDialog, Empty, Input, Select, Stat, StatusChip } from '@/components/ui';
 import { dateOnly, humanize } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
 
@@ -19,7 +20,33 @@ const BOOKED = ['confirmed', 'checked_in', 'checked_out'];
 
 const HOUSEKEEPING_DOT: Record<string, string> = { ready: 'bg-emerald-600', dirty: 'bg-red-700', cleaning: 'bg-amber-500', assigned: 'bg-amber-500', for_inspection: 'bg-sky-600', under_maintenance: 'bg-red-700' };
 
-export default function Calendar({ month, label, prev, next, days, today, weekend_days, property, properties, rooms, events, blocks }: any) {
+/** Why dates are closed is visible to all staff, so nobody has to ask. Only the owner can change it. */
+function ClosedDates({ closures, canChange, total }: { closures: any[]; canChange: boolean; total: number }) {
+    if (closures.length === 0) return null;
+
+    return (
+        <section aria-label="Closed dates" className="mb-3 rounded-xl border border-red-200 bg-red-50/60 px-4 py-2">
+            <ul className="divide-y divide-red-200/70">
+                {closures.map((c) => (
+                    <li key={c.group} className="flex flex-wrap items-center justify-between gap-2 py-1.5 text-sm">
+                        <span className="flex min-w-0 items-start gap-2">
+                            <CalendarOff size={15} className="mt-0.5 shrink-0 text-red-800" aria-hidden />
+                            <span className="min-w-0">
+                                <span className="font-medium">{c.reason}</span>
+                                <span className="block text-xs text-muted">
+                                    {c.from === c.last_night ? `Night of ${dateOnly(c.from)}` : `Nights of ${dateOnly(c.from)} to ${dateOnly(c.last_night)}`} · {c.rooms.length >= total ? 'All rooms' : c.rooms.join(', ')}
+                                </span>
+                            </span>
+                        </span>
+                        {canChange && <ActionButton action={{ label: 'Reopen', url: `/admin/closures/${c.group}/reopen`, confirm: `Open these dates for booking again? "${c.reason}" will no longer block them.` }} />}
+                    </li>
+                ))}
+            </ul>
+        </section>
+    );
+}
+
+export default function Calendar({ month, label, prev, next, days, today, weekend_days, property, properties, rooms, events, blocks, closures = [], closeRooms }: any) {
     const { auth } = usePage<any>().props as any;
     const canCreate = auth.user.permissions.includes('bookings.manage');
     const [term, setTerm] = useState('');
@@ -82,8 +109,25 @@ export default function Calendar({ month, label, prev, next, days, today, weeken
         <AdminLayout
             title="Booking Calendar"
             subtitle={<><span className="md:hidden">Tap a stay to open it.</span><span className="hidden md:inline">{canCreate ? 'Click an empty day on a room to start a booking there. ' : ''}Click a stay to open it.</span></>}
-            actions={canCreate ? <Link href="/admin/bookings/create" className={buttonClass('primary')}><Plus size={15} aria-hidden /> New booking</Link> : undefined}
+            actions={
+                <>
+                    {closeRooms && (
+                        <ActionButton small={false} action={{
+                            label: 'Close dates',
+                            url: '/admin/closures',
+                            fields: [
+                                { name: 'reason', label: 'Why are you closing?', type: 'text', required: true, help: 'For example: Christmas party. Only staff see this. Guests just see the dates as taken.' },
+                                { name: 'first_night', label: 'First night closed', type: 'date', required: true, default: today },
+                                { name: 'last_night', label: 'Last night closed', type: 'date', required: true, default: today, help: 'For a single night, use the same date. A guest can still check out that morning, and a new guest can arrive the morning after.' },
+                                { name: 'room_ids', label: 'Rooms to close', type: 'multicheck', options: closeRooms, default: closeRooms.map((r: any) => r.value), help: 'All rooms are ticked. Untick any that stay open.' },
+                            ],
+                        }} />
+                    )}
+                    {canCreate && <button type="button" onClick={() => openNewBooking()} className={buttonClass('primary')}><Plus size={15} aria-hidden /> New booking</button>}
+                </>
+            }
         >
+            <ClosedDates closures={closures} canChange={!!closeRooms} total={closeRooms?.length ?? rooms.length} />
             <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
                 <Stat label={isThisMonth ? 'Rooms booked today' : 'Rooms'} value={isThisMonth ? <>{bookedToday} <span className="text-sm font-normal text-muted">of {rooms.length}</span></> : rooms.length} icon={BedDouble} />
                 <Stat label={`Booked in ${label}`} value={`${monthPct}%`} icon={CalendarDays} hint={`${roomNights} room nights`} />
@@ -152,16 +196,16 @@ export default function Calendar({ month, label, prev, next, days, today, weeken
                                     {dates.map((d) => {
                                         const cell = cn('border-l border-line/40', d.weekend && 'bg-beige/40', d.date === today && 'bg-gold/15');
                                         return canCreate ? (
-                                            <Link key={d.date} href={`/admin/bookings/create?room_id=${room.id}&check_in=${d.date}`} aria-label={`New booking, ${room.name}, ${dateOnly(d.date)}`} title={`New booking, ${room.name}, ${dateOnly(d.date)}`} className={cn('group/cell flex items-center justify-center transition-colors hover:bg-gold/25', cell)}>
+                                            <button type="button" key={d.date} onClick={() => openNewBooking({ room_id: room.id, check_in: d.date })} aria-label={`New booking, ${room.name}, ${dateOnly(d.date)}`} title={`New booking, ${room.name}, ${dateOnly(d.date)}`} className={cn('group/cell flex items-center justify-center transition-colors hover:bg-gold/25', cell)}>
                                                 <Plus size={13} className="text-espresso opacity-0 group-hover/cell:opacity-100" aria-hidden />
-                                            </Link>
+                                            </button>
                                         ) : <div key={d.date} className={cell} />;
                                     })}
                                 </div>
                                 <div className="pointer-events-none relative grid min-h-14 content-center gap-y-0.5 py-1.5" style={columns}>
                                     {byRoom(room.id).map((e: any) => {
                                         const s = STATUS[e.kind];
-                                        const content = e.kind === 'block' ? `Blocked: ${e.reason}` : e.guest;
+                                        const content = e.kind === 'block' ? `${e.block_kind === 'closure' ? 'Closed' : 'Blocked'}: ${e.reason}` : e.guest;
                                         const title = e.kind === 'block' ? content : `${e.reference}: ${e.guest}. ${s.label}, ${e.source}. ${dateOnly(e.start)} to ${dateOnly(e.end)}`;
                                         const cls = cn('pointer-events-auto mx-0.5 flex min-h-7 items-center gap-1 overflow-hidden rounded-md px-1.5 text-xs leading-tight shadow-xs', s.style);
                                         // A one-night stay is too narrow for an icon as well as the name. The colour and tooltip still say what it is.
@@ -170,7 +214,7 @@ export default function Calendar({ month, label, prev, next, days, today, weeken
                                         if (e.kind === 'block' && e.block_kind === 'workbook' && canCreate) {
                                             return (
                                                 <button key={`b${e.id}`} type="button" title={`${title}. Click to release it once the real booking is ready to enter.`} aria-label={`${title}. Release this hold`} className={cn(cls, 'text-left hover:brightness-95')} style={span(e.start, e.end)}
-                                                    onClick={() => { if (window.confirm(`Release this hold on ${room.name}, ${dateOnly(e.start)} to ${dateOnly(e.end)}? The dates become free until you enter the real booking, so enter it right away.`)) router.post(`/admin/blocks/${e.id}/release`, {}, { preserveScroll: true }); }}>
+                                                    onClick={async () => { if (await confirmDialog({ title: 'Release this hold?', message: `${room.name}, ${dateOnly(e.start)} to ${dateOnly(e.end)}. The dates become free until you enter the real booking, so enter it right away.`, confirmLabel: 'Release hold', danger: true })) router.post(`/admin/blocks/${e.id}/release`, {}, { preserveScroll: true }); }}>
                                                     {body}
                                                 </button>
                                             );
@@ -214,7 +258,7 @@ export default function Calendar({ month, label, prev, next, days, today, weeken
                                     {stays.map((e: any) => (
                                         <li key={`${e.kind}-${e.id}`} className="flex items-center justify-between gap-2 py-1.5">
                                             <span className="min-w-0">
-                                                {e.kind === 'block' ? <>Blocked: {e.reason}</> : <Link href={`/admin/bookings/${e.id}`} className="inline-block font-medium hover:underline pointer-coarse:py-3">{e.guest}</Link>}
+                                                {e.kind === 'block' ? <>{e.block_kind === 'closure' ? 'Closed' : 'Blocked'}: {e.reason}</> : <Link href={`/admin/bookings/${e.id}`} className="inline-block font-medium hover:underline pointer-coarse:py-3">{e.guest}</Link>}
                                                 <span className="block text-xs text-muted">{dateOnly(e.start)} to {dateOnly(e.end)}{e.source ? ` · ${e.source}` : ''}</span>
                                             </span>
                                             {e.kind !== 'block' && <StatusChip value={e.status} label={STATUS[e.status]?.label} />}
@@ -222,7 +266,7 @@ export default function Calendar({ month, label, prev, next, days, today, weeken
                                     ))}
                                 </ul>
                             )}
-                            {canCreate && <Link href={`/admin/bookings/create?room_id=${room.id}`} className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-bronze hover:underline pointer-coarse:min-h-11"><Plus size={13} aria-hidden /> New booking</Link>}
+                            {canCreate && <button type="button" onClick={() => openNewBooking({ room_id: room.id })} className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-bronze hover:underline pointer-coarse:min-h-11"><Plus size={13} aria-hidden /> New booking</button>}
                         </section>
                     );
                 })}

@@ -34,10 +34,10 @@ class SuiteCatalogSeeder extends Seeder
         'bali' => ['25', 'Twin Studio. 23 sqm on the 25th floor.', '1 Queen bed, 1 Double bed, 1 Single bed', 2000, 2200, 4, 5, null, []],
         'tokyo' => ['17', 'Elite Plus 1 Bedroom with a balcony view. 28 sqm on the 17th floor.', '1 Queen bed, 1 Single bed, 2 Double beds', 2200, 2400, 3, 5, null, []],
         'roma' => ['19', 'Elite 1 Bedroom with a balcony. 25 sqm on the 19th floor.', '1 Double bed, 1 Single bed, 1 Sofa bed', 2100, 2300, 3, 4, null, []],
-        'milan' => ['9', 'Premium 1 Bedroom with a balcony. 32 sqm on the 9th floor.', '1 Queen bed, 2 Double beds', 2500, 2700, 4, 6, 2, []],
+        'milan' => ['9', 'Premium 1 Bedroom with a balcony. 32 sqm on the 9th floor.', '1 Queen bed, 2 Double beds', 2600, 2800, 4, 6, 2, []],
         'berlin' => ['14', 'Executive 1 Bedroom. 28 sqm on the 14th floor.', '1 Queen bed, 1 Double bed, 1 Sofa bed', 2500, 2800, 4, 6, 1, []],
         'paris' => ['5', 'Executive 2 Bedroom with an 80-degree balcony. 55 sqm on the 5th floor.', '2 Queen beds, 2 Double beds', 3800, 4000, 6, 8, 2, []],
-        'new-york' => ['5', 'Presidential Suite, 2 Bedroom with an 80-degree balcony. 55 sqm on the 5th floor.', '2 Queen beds, 2 Double beds', 4200, 4500, 6, 8, 3, []],
+        'new-york' => ['22', 'Presidential Suite, 2 Bedroom with an 80-degree balcony. 55 sqm on the 22nd floor.', '2 Queen beds, 2 Double beds', 4200, 4500, 6, 8, 3, []],
     ];
 
     // No HD pack was supplied for these: the flyer's main photo stands in until one is added. x, y, width, height.
@@ -178,7 +178,7 @@ class SuiteCatalogSeeder extends Seeder
 
         OwnerDecision::firstOrCreate(['key' => 'flyer_differences'], [
             'title' => 'Suite flyers differ from the room list',
-            'detail' => 'The flyers were used as the newer source. Rates: Rio 1,700 (was 1,600), Venice 1,800 (was 1,700), Berlin weekend 2,800 (was 2,700), Paris 3,800 (was 3,500), New York 4,200 (was 4,000). Guests: Rio up to 4 (was 2), Bali up to 5 (was 4), Tokyo and Roma include 3 (was 4), New York up to 8 (was 10). Berlin has 1 air conditioner (was 2). Please check: New York says 5th floor but its unit is 2224, and its size and balcony match Paris exactly. Rio shows a pool and gym but Berlin, in the same building, does not. Amenity names were read from the flyer icons.',
+            'detail' => 'The flyers were used as the newer source. Rates: Rio 1,700 (was 1,600), Venice 1,800 (was 1,700), Berlin weekend 2,800 (was 2,700), Paris 3,800 (was 3,500), New York 4,200 (was 4,000). Guests: Rio up to 4 (was 2), Bali up to 5 (was 4), Tokyo and Roma include 3 (was 4), New York up to 8 (was 10). Berlin has 1 air conditioner (was 2). Amenity names were read from the flyer icons.',
             'kind' => 'data_conflict',
         ]);
     }

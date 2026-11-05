@@ -5,13 +5,13 @@ namespace App\Http\Controllers\Admin;
 use App\Domain\Availability\InventoryService;
 use App\Domain\Finance\FinanceService;
 use App\Domain\LegacyImport\WorkbookImporter;
+use App\Domain\Reporting\DashboardDetails;
 use App\Domain\Reporting\ReportService;
 use App\Http\Controllers\Controller;
 use App\Models\Booking;
 use App\Models\ExternalSettlement;
 use App\Models\HousekeepingTask;
 use App\Models\Incident;
-use App\Models\IntegrationHealth;
 use App\Models\InventoryItem;
 use App\Models\LaundryJob;
 use App\Models\ParkingAssignment;
@@ -28,7 +28,7 @@ use Inertia\Inertia;
 
 class DashboardController extends Controller
 {
-    public function __construct(private ReportService $reports, private FinanceService $finance, private InventoryService $inventory)
+    public function __construct(private ReportService $reports, private FinanceService $finance, private InventoryService $inventory, private DashboardDetails $details)
     {
     }
 
@@ -49,15 +49,19 @@ class DashboardController extends Controller
         $period = $this->period($request->validate(['period' => 'nullable|in:month,last_month,90d'])['period'] ?? 'month');
         $money = null;
         $performance = null;
+        $income = null;
+        $expenses = null;
 
         if ($user->can('dashboard.finance')) {
             $current = $this->reports->kpis($period['from'], $period['to']);
             $prior = $this->reports->kpis($period['prior_from'], $period['prior_to']);
+            $outstanding = $this->reports->outstanding();
             $money = [
                 'collected_today_cents' => $this->reports->kpis($today, $today)['collected_cents'],
+                'gross_cents' => $current['gross_operating_cents'],
                 'collected_cents' => $current['collected_cents'],
                 'collected_prior_cents' => $prior['collected_cents'],
-                'outstanding_cents' => $this->reports->outstanding()['total_cents'],
+                'outstanding_cents' => $outstanding['total_cents'],
                 'expected_payout_cents' => (int) ExternalSettlement::whereNull('actual_payout_cents')->sum('expected_net_cents'),
                 'earned_cents' => $current['earned_cents'],
                 'earned_prior_cents' => $prior['earned_cents'],
@@ -80,6 +84,8 @@ class DashboardController extends Controller
                 'channels' => $this->reports->channelMix($period['from'], $period['to']),
                 'trend' => $this->reports->monthlyTrend(12),
             ];
+            $income = $this->details->income($current, $outstanding, $user->can('payments.view'));
+            $expenses = $this->details->expenses($current, $prior, $user->can('expenses.view'));
         }
 
         return Inertia::render('Admin/Dashboard', [
@@ -90,6 +96,10 @@ class DashboardController extends Controller
             'period' => $period,
             'money' => $money,
             'performance' => $performance,
+            'bookingsTab' => $user->can('bookings.view') ? $this->details->bookings($period['from'], $period['to'], $today, $user->can('dashboard.finance')) : null,
+            'income' => $income,
+            'expenses' => $expenses,
+            'operations' => $this->details->operations($user),
             'team' => [
                 'open_tasks' => HousekeepingTask::whereIn('status', ['pending', 'assigned', 'in_progress'])->count(),
                 'late_tasks' => HousekeepingTask::whereIn('status', ['pending', 'assigned', 'in_progress'])->where('due_at', '<', now())->count(),
@@ -207,7 +217,6 @@ class DashboardController extends Controller
         $add(Booking::where('status', Booking::EXPIRED)->where('check_in', '>=', $today)->count(), 'expired hold(s) for upcoming dates', '/admin/bookings?status=expired_hold');
         $add(WorkOrder::where('safety_block', true)->whereIn('status', ['open', 'in_progress'])->count(), 'unresolved safety work order(s)', '/admin/work-orders', 'danger');
         $add(HousekeepingTask::where('status', 'for_inspection')->count(), 'room(s) waiting for inspection', '/admin/housekeeping');
-        $add(IntegrationHealth::whereIn('status', ['failed', 'degraded'])->count(), 'calendar feed problem(s)', '/admin/settings', 'danger');
 
         if ($user->can('settings.manage')) {
             $lastRun = Settings::get('system.scheduler_last_run');
@@ -215,6 +224,11 @@ class DashboardController extends Controller
         }
         if ($user->can('incidents.approve')) {
             $add(Incident::whereIn('status', ['reported', 'under_review', 'evidence_pending'])->count(), 'incident(s) needing a decision', '/admin/incidents');
+        }
+        if ($user->can('dashboard.finance')) {
+            $left = Booking::where('status', Booking::CHECKED_OUT)->whereHas('source', fn ($s) => $s->where('code', '!=', 'airbnb'))->get()
+                ->filter(fn ($b) => $this->finance->balance($b)['balance_cents'] > 0)->count();
+            $add($left, 'guest(s) checked out with an unpaid balance', '/admin?tab=income');
         }
         if ($user->can('payments.verify')) {
             $add(Receipt::where('verification_status', 'pending')->count(), 'receipt(s) awaiting verification', '/admin/payments?status=pending');

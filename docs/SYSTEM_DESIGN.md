@@ -17,7 +17,7 @@
 | SALARYC.A | `employees`, `staff_cash_advances`, `staff_repayments` (restricted) | Staff Advances |
 | PARKING DETAILS and calendar | `parking_spaces`, `parking_assignments` | Parking |
 | WIFI DETAILS | `room_secrets` (encrypted, reveal is audited) | Room edit |
-| Sales, cleaning, damage and utility sheets, historically | `legacy_rows`, `import_anomalies`, `import_mappings`: never mixed with live data. `SALARYC.A`, Wi-Fi details and the parking calendar are deliberately not imported | Import & Data Quality |
+| Sales, cleaning, damage and utility sheets, historically | `legacy_rows`, `import_anomalies`, `import_mappings`: retained as historical storage and never mixed with live data. The former owner-facing import module is retired. `SALARYC.A`, Wi-Fi details and the parking calendar are deliberately not imported | Historical records only |
 
 ## State flows
 
@@ -102,7 +102,6 @@ Taxes are owner-added rules with effective dates, picked by check-in date. They 
 
 - **Two-factor:** standard authenticator-app codes (RFC 6238), implemented in `app/Support/Totp.php`. Password success only records a pending user in the session; nobody is signed in until a code is accepted. Secrets are encrypted, recovery codes are stored as hashes, a code cannot be reused, and five wrong codes end the attempt. "Keep me signed in" lasts until sign-out and skips the code on that device; turning two-factor on or off invalidates older such cookies.
 - **Sessions and headers:** changing a password ends that person's other sessions. Every response carries security headers, including a content security policy.
-- **Calendar feeds:** the host is rechecked before every fetch and redirects are refused, so a feed cannot be used to reach this server's own network.
 - **Health:** `php artisan uniqa:doctor` checks an installation, and the dashboard warns the owner when the scheduler has stopped.
 - **Rate limits:** named limiters in `AppServiceProvider`, one per surface. Do not use plain `throttle:N,1` on routes: those share a single counter per address, which let public browsing use up staff sign-in attempts.
 

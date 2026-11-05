@@ -67,6 +67,27 @@ class ReservationRulesTest extends DomainTestCase
         $this->assertSame(Booking::CONFIRMED, $second->fresh()->status);
     }
 
+    public function test_the_next_guest_cannot_check_in_while_the_last_guest_is_still_in_the_room(): void
+    {
+        $first = $this->confirmed('venice', '2031-03-03', '2031-03-05');
+        $second = $this->confirmed('venice', '2031-03-05', '2031-03-07');
+        $this->room('venice')->update(['housekeeping_status' => 'ready']);
+        $this->bookings->checkIn($first);
+
+        foreach ([false, true] as $override) {
+            try {
+                $this->bookings->checkIn($second->fresh(), $override, 'Override must not help');
+                $this->fail('A room cannot hold two parties.');
+            } catch (RoomConflict $e) {
+                $this->assertStringContainsString('still has a guest checked in', $e->getMessage());
+            }
+        }
+        $this->assertSame(Booking::CONFIRMED, $second->fresh()->status);
+
+        $this->bookings->checkOut($first->fresh());
+        $this->assertSame(Booking::CHECKED_IN, $this->bookings->checkIn($second->fresh(), true, 'Cleaned early')->status);
+    }
+
     public function test_moving_a_room_extending_dates_and_group_changes_recheck_conflicts(): void
     {
         $this->confirmed('bali', '2031-03-03', '2031-03-05');

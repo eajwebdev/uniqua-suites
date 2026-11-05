@@ -2,7 +2,7 @@ import { Link, router, useForm, usePage } from '@inertiajs/react';
 import axios from 'axios';
 import { QRCodeSVG } from 'qrcode.react';
 import { FormEvent, useState } from 'react';
-import { Button, Card, CopyButton, Empty, Field, Input } from '@/components/ui';
+import { Button, Card, confirmDialog, CopyButton, Empty, Field, Input } from '@/components/ui';
 import { dateTime } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
 
@@ -66,8 +66,8 @@ function TwoFactorCard({ state }: any) {
         });
     }
 
-    function disable() {
-        if (!window.confirm('Turn off two-factor sign-in? Your account will be protected by its password alone.')) return;
+    async function disable() {
+        if (!(await confirmDialog({ title: 'Turn off two-factor sign-in?', message: 'Your account will be protected by its password alone.', confirmLabel: 'Turn off', danger: true }))) return;
         setError('');
         router.post('/admin/account/two-factor/disable', { current_password: password }, {
             preserveScroll: true,
@@ -153,18 +153,20 @@ export default function Account({ notifications, twoFactor, notificationPrefs }:
                 </Card>
                 <TwoFactorCard state={twoFactor} />
                 <NotificationPrefs prefs={notificationPrefs} />
-                <Card title="Notifications" action={auth.user.unread > 0 ? <Button small onClick={() => router.post('/admin/notifications/read', {}, { preserveScroll: true })}>Mark all read</Button> : undefined}>
-                    {notifications.length === 0 ? <Empty>No notifications.</Empty> : (
-                        <ul className="divide-y divide-line text-sm">
-                            {notifications.map((n: any) => (
-                                <li key={n.id} className="py-2">
-                                    {n.url ? <Link href={n.url} className={n.read ? 'underline' : 'font-medium underline'}>{n.title}</Link> : <span className={n.read ? '' : 'font-medium'}>{n.title}</span>}
-                                    <span className="block text-xs text-muted">{dateTime(n.at)}</span>
-                                </li>
-                            ))}
-                        </ul>
-                    )}
-                </Card>
+                <section id="notifications" className="scroll-mt-20">
+                    <Card title="Notifications" action={auth.user.unread > 0 ? <Button small onClick={() => router.post('/admin/notifications/read', {}, { preserveScroll: true })}>Mark all read</Button> : undefined}>
+                        {notifications.length === 0 ? <Empty>No notifications.</Empty> : (
+                            <ul className="divide-y divide-line text-sm">
+                                {notifications.map((n: any) => (
+                                    <li key={n.id} className="py-2">
+                                        {n.url ? <Link href={n.url} className={n.read ? 'underline' : 'font-medium underline'}>{n.title}</Link> : <span className={n.read ? '' : 'font-medium'}>{n.title}</span>}
+                                        <span className="block text-xs text-muted">{dateTime(n.at)}</span>
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                    </Card>
+                </section>
             </div>
         </AdminLayout>
     );

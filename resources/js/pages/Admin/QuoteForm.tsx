@@ -5,10 +5,10 @@ import { Button, Card, cn, copyToClipboard, Field, Input, Select, StatusChip } f
 import { peso } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
 
-export default function QuoteForm({ rooms, sources, filters, preview, vacancy, bookingId }: any) {
+export default function QuoteForm({ rooms, sources, filters, preview, vacancy, bookingId, parkingRate }: any) {
     const form = useForm<any>({
         room_id: filters.room_id ?? '', check_in: filters.check_in ?? '', check_out: filters.check_out ?? '', guests: filters.guests ?? 2,
-        early_time: filters.early_time ?? '', source_id: filters.source_id ?? '', discount: filters.discount ?? '', parking: filters.parking ?? '',
+        early_time: filters.early_time ?? '', source_id: filters.source_id ?? '', discount: filters.discount ?? '', parking_nights: filters.parking_nights ?? '', parking_rate: filters.parking_rate ?? parkingRate,
         guest_name: filters.guest_name ?? '', booking_id: bookingId ?? '', reference: filters.reference ?? '',
     });
     const e = form.errors as any;
@@ -23,7 +23,7 @@ export default function QuoteForm({ rooms, sources, filters, preview, vacancy, b
     }
 
     // The vacant list follows the form: choosing dates is all it takes, with no button to press.
-    const { room_id, check_in, check_out, guests, early_time, source_id, discount, parking } = form.data;
+    const { room_id, check_in, check_out, guests, early_time, source_id, discount, parking_nights, parking_rate } = form.data;
     const firstRender = useRef(true);
     useEffect(() => {
         if (firstRender.current) {
@@ -38,7 +38,7 @@ export default function QuoteForm({ rooms, sources, filters, preview, vacancy, b
         const timer = setTimeout(() => search(form.data), 350);
 
         return () => clearTimeout(timer);
-    }, [room_id, check_in, check_out, guests, early_time, source_id, discount, parking]);
+    }, [room_id, check_in, check_out, guests, early_time, source_id, discount, parking_nights, parking_rate]);
 
     function calculate(ev: FormEvent) {
         ev.preventDefault();
@@ -101,10 +101,11 @@ export default function QuoteForm({ rooms, sources, filters, preview, vacancy, b
                             <Field label="Booking source" error={e.source_id} help="Applies any channel-specific rate">
                                 <Select placeholder="None" options={sources.map((s: any) => ({ value: s.id, label: s.name }))} value={form.data.source_id} onChange={set('source_id')} />
                             </Field>
-                            <div className="grid gap-3 sm:grid-cols-2">
-                                <Field label="Parking (PHP)" error={e.parking}><Input inputMode="decimal" value={form.data.parking} onChange={set('parking')} /></Field>
-                                <Field label="Authorized discount (PHP)" error={e.discount}><Input inputMode="decimal" value={form.data.discount} onChange={set('discount')} /></Field>
+                            <div className="grid grid-cols-2 gap-3">
+                                <Field label="Parking nights" error={e.parking_nights} help="Leave blank for no parking."><Input type="number" min={0} inputMode="numeric" value={form.data.parking_nights} onChange={set('parking_nights')} /></Field>
+                                <Field label="Parking rate per night (PHP)" error={e.parking_rate}><Input inputMode="decimal" value={form.data.parking_rate} onChange={set('parking_rate')} /></Field>
                             </div>
+                            <Field label="Authorized discount (PHP)" error={e.discount}><Input inputMode="decimal" value={form.data.discount} onChange={set('discount')} /></Field>
                             <Field label="Unit" error={e.room_id} help="Optional. Leave as is to choose from the vacant list.">
                                 <Select placeholder="Choose from the vacant list" options={rooms.map((r: any) => ({ value: r.id, label: takenIds.includes(r.id) ? `${r.label} - not available` : r.label }))} value={form.data.room_id} onChange={set('room_id')} />
                             </Field>
@@ -158,13 +159,15 @@ export default function QuoteForm({ rooms, sources, filters, preview, vacancy, b
                                             <tr key={i} className="border-b border-line"><td className="py-1.5 pr-3">{l.description}</td><td className="py-1.5 text-right tabular-nums">{peso(l.amount_cents)}</td></tr>
                                         ))}
                                         <tr className="font-semibold"><td className="py-2">Total</td><td className="py-2 text-right tabular-nums">{peso(preview.total_cents)}</td></tr>
+                                        {preview.downpayment_percent && <tr className="border-t border-line"><td className="py-1.5">{preview.downpayment_percent}% downpayment</td><td className="py-1.5 text-right tabular-nums">{peso(preview.downpayment_cents)}</td></tr>}
+                                        {preview.downpayment_percent && <tr className="border-t border-line"><td className="py-1.5">Balance upon check-in</td><td className="py-1.5 text-right tabular-nums">{peso(preview.balance_cents)}</td></tr>}
                                     </tbody>
                                 </table>
                                 {preview.warnings.map((w: string) => <p key={w} className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-950">{w}</p>)}
                                 <form onSubmit={(ev) => { ev.preventDefault(); form.post('/admin/quotes'); }} className="mt-4 space-y-3 border-t border-line pt-3">
                                     <Field label="Guest name (optional)" error={e.guest_name}><Input value={form.data.guest_name} onChange={set('guest_name')} /></Field>
                                     <Field label="Message for Messenger" help="You can change the wording before copying.">
-                                        <textarea ref={messageBox} rows={11} value={message} onChange={(ev) => setMessage(ev.target.value)} className="w-full rounded-lg border border-line bg-white px-3 py-2 text-sm shadow-xs focus:border-gold-dark focus:ring-2 focus:ring-gold/30 focus:outline-none pointer-coarse:text-base" />
+                                        <textarea ref={messageBox} rows={20} value={message} onChange={(ev) => setMessage(ev.target.value)} className="w-full rounded-lg border border-line bg-white px-3 py-2 text-sm shadow-xs focus:border-gold-dark focus:ring-2 focus:ring-gold/30 focus:outline-none pointer-coarse:text-base" />
                                     </Field>
                                     <div className="flex flex-wrap gap-2">
                                         <Button variant="primary" disabled={copy.state === 'checking'} onClick={copyMessage}>

@@ -29,3 +29,4 @@ Thumbs.db
 .env.testing
 /storage/app/private/*
 /graphify-out
+.env.simulation

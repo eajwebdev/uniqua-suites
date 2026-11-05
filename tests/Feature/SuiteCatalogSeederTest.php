@@ -184,7 +184,7 @@ class SuiteCatalogSeederTest extends DomainTestCase
         Room::query()->update(['is_published' => true, 'catalog_status' => 'approved']);
         auth()->logout();
 
-        foreach (['/', '/suites', '/suites/rio', '/suites/bali'] as $url) {
+        foreach (['/', '/suites/rio', '/suites/bali'] as $url) {
             $body = $this->get($url)->assertOk()->getContent();
 
             foreach (['_cents', 'included_guests', '₱', '170000', '180000', 'Andrea', 'Ereca', '892 8150'] as $marker) {

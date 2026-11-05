@@ -58,7 +58,7 @@ export default function Suite({ room, policy }: any) {
     return (
         <PublicLayout title={room.name} description={`${room.name} at ${room.location}, ${room.type.toLowerCase()} for up to ${room.max_guests} guests. Browse the suite, then book in a Messenger chat with our staff.`}>
             <div className={cn(PAGE_WIDTH, 'pt-6', canBook && 'pb-20 lg:pb-0')}>
-                <Link href="/suites" className="mb-5 inline-flex items-center gap-1.5 text-[0.8125rem] font-medium tracking-[0.14em] uppercase transition-colors hover:text-bronze pointer-coarse:min-h-11"><ArrowLeft size={14} strokeWidth={1.5} aria-hidden /> All suites</Link>
+                <Link href="/#availability" className="mb-5 inline-flex items-center gap-1.5 text-[0.8125rem] font-medium tracking-[0.14em] uppercase transition-colors hover:text-bronze pointer-coarse:min-h-11"><ArrowLeft size={14} strokeWidth={1.5} aria-hidden /> All suites</Link>
 
                 {room.images.length > 0 ? <Gallery images={room.images} name={room.name} /> : <SuitePhoto name={room.name} className="aspect-[3/1]" />}
 

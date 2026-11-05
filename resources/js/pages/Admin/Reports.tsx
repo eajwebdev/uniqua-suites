@@ -1,11 +1,12 @@
 import { router } from '@inertiajs/react';
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { CHART, SERIES } from '@/components/charts';
-import { buttonClass, Card, Empty, Input, Select, Stat } from '@/components/ui';
+import { buttonClass, Card, ClientPager, Empty, Input, Select, Stat, tableClass, tdClass, thClass, theadClass, usePaged } from '@/components/ui';
 import { chartsAnimate, peso } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
 
 export default function Reports({ from, to, property, type, basis, bases, filters, rooms, sources, properties, types, kpis, channels, topRooms, trend, definitions, table, canExport }: any) {
+    const pager = usePaged<any[]>(table.rows);
     const go = (changes: any) => router.get('/admin/reports', { from, to, property: property ?? undefined, type, basis: type === 'by_basis' ? basis : undefined, source: filters.source, room: filters.room, method: filters.method, ...changes }, { preserveState: true, preserveScroll: true, replace: true });
     const query = new URLSearchParams({ from, to, ...(property ? { property: String(property) } : {}), ...(type === 'by_basis' ? { basis } : {}), ...(type === 'room_ledger' && filters.source ? { source: String(filters.source) } : {}), ...(type === 'room_ledger' && filters.room ? { room: String(filters.room) } : {}), ...(type === 'collections' && filters.method ? { method: filters.method } : {}) });
     const exportQuery = `?${query}`;
@@ -80,11 +81,14 @@ export default function Reports({ from, to, property, type, basis, bases, filter
             >
                 <p className="mb-2 text-xs text-muted">{table.definition}{type === 'collections' && filters.method ? ' Filtered by method, so channel payouts and refunds are not shown.' : ''}</p>
                 {table.rows.length === 0 ? <Empty>No records in this period.</Empty> : (
-                    <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Report table, scrolls sideways">
-                        <table className="w-full text-left text-sm">
-                            <thead className="text-xs text-muted"><tr>{table.headers.map((h: string, j: number) => <th key={h} scope="col" className={j === 0 ? 'sticky left-0 z-10 bg-white py-1 pr-3 font-medium whitespace-nowrap' : 'py-1 pr-3 font-medium whitespace-nowrap'}>{h}</th>)}</tr></thead>
-                            <tbody>{table.rows.map((row: any[], i: number) => <tr key={i} className="border-t border-line">{row.map((v, j) => <td key={j} className={j === 0 ? 'sticky left-0 bg-white py-1.5 pr-3 whitespace-nowrap tabular-nums' : 'py-1.5 pr-3 whitespace-nowrap tabular-nums'}>{v}</td>)}</tr>)}</tbody>
-                        </table>
+                    <div className="overflow-hidden rounded-lg border border-line/70">
+                        <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Report table, scrolls sideways">
+                            <table className={tableClass}>
+                                <thead className={theadClass}><tr>{table.headers.map((h: string, j: number) => <th key={h} scope="col" className={j === 0 ? `sticky left-0 z-10 bg-ivory ${thClass}` : thClass}>{h}</th>)}</tr></thead>
+                                <tbody>{pager.rows.map((row: any[], i: number) => <tr key={i} className="border-t border-line/70">{row.map((v, j) => <td key={j} className={j === 0 ? `sticky left-0 bg-white ${tdClass} whitespace-nowrap tabular-nums` : `${tdClass} whitespace-nowrap tabular-nums`}>{v}</td>)}</tr>)}</tbody>
+                            </table>
+                        </div>
+                        <ClientPager pager={pager} />
                     </div>
                 )}
                 {table.total > table.rows.length && <p className="mt-2 text-xs text-muted">Showing the first {table.rows.length} of {table.total}. Export for all rows.</p>}

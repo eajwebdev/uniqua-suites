@@ -1,7 +1,7 @@
 import { router, useForm } from '@inertiajs/react';
 import { Eye, EyeOff, Trash2 } from 'lucide-react';
 import { useState } from 'react';
-import { ActionButton, Button, Card, Empty, Field, Input, Select, StatusChip } from '@/components/ui';
+import { ActionButton, Button, Card, confirmDialog, Empty, Field, Input, Select, StatusChip } from '@/components/ui';
 import { dateOnly, peso } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
 
@@ -47,7 +47,7 @@ function SecretCard({ room, secret, can }: any) {
     );
 }
 
-export default function RoomEdit({ room, images, rates, overrides, blocks, sources, secret, can, amenities, listings }: any) {
+export default function RoomEdit({ room, images, rates, overrides, blocks, sources, secret, can, amenities }: any) {
     const selectedNames = amenities.filter((a: any) => room.amenity_ids.includes(a.id)).map((a: any) => a.name).join(', ');
     const form = useForm<any>({
         floor: room.floor ?? '', bedrooms: room.bedrooms, ac_count: room.ac_count, bathrooms: room.bathrooms, has_balcony: room.has_balcony,
@@ -164,31 +164,11 @@ export default function RoomEdit({ room, images, rates, overrides, blocks, sourc
                                 {images.map((i: any) => (
                                     <figure key={i.id} className="relative">
                                         <img src={i.url} alt={i.alt} className="aspect-[4/3] w-full rounded object-cover" />
-                                        <button aria-label="Delete photo" className="absolute top-1 right-1 rounded bg-white/90 p-1" onClick={() => window.confirm('Delete this photo?') && router.post(`/admin/room-images/${i.id}/delete`, {}, { preserveScroll: true })}><Trash2 size={13} /></button>
+                                        <button aria-label="Delete photo" className="absolute top-1 right-1 rounded bg-white/90 p-1" onClick={async () => { if (await confirmDialog({ title: 'Delete this photo?', message: 'It will be removed from this suite, including on the public website.', confirmLabel: 'Delete photo', danger: true })) router.post(`/admin/room-images/${i.id}/delete`, {}, { preserveScroll: true }); }}><Trash2 size={13} /></button>
                                     </figure>
                                 ))}
                             </div>
                         )}
-                    </Card>
-
-                    <Card title="Platform listing IDs" action={
-                        <ActionButton action={{ label: 'Add listing', url: `/admin/rooms/${room.id}/listings`, fields: [
-                            { name: 'provider', label: 'Platform', type: 'text', required: true, default: 'Airbnb' },
-                            { name: 'listing_id', label: 'Listing ID', type: 'text', required: true },
-                            { name: 'url', label: 'Listing URL', type: 'text', help: 'Optional. Must start with https://.' },
-                        ] }} />
-                    }>
-                        {listings.length === 0 ? <Empty>No listing IDs recorded.</Empty> : (
-                            <ul className="space-y-2 text-sm">
-                                {listings.map((l: any) => (
-                                    <li key={l.id} className="flex items-start justify-between gap-2">
-                                        <span className="min-w-0 break-words">{l.provider}: {l.url ? <a href={l.url} target="_blank" rel="noreferrer" className="underline">{l.listing_id}</a> : l.listing_id}</span>
-                                        <ActionButton action={{ label: 'Remove', url: `/admin/room-listings/${l.id}/delete`, confirm: 'Remove this listing ID?' }} />
-                                    </li>
-                                ))}
-                            </ul>
-                        )}
-                        <p className="mt-2 text-xs text-muted">For staff reference. This does not connect the room to the platform.</p>
                     </Card>
 
                     {(can.secretsReveal || can.secretsManage) && <SecretCard room={room} secret={secret} can={can} />}

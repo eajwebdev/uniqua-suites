@@ -6,11 +6,13 @@ use App\Http\Controllers\Controller;
 use App\Models\Booking;
 use App\Models\Property;
 use App\Models\Room;
+use App\Models\RoomBlock;
 use App\Support\Local;
 use App\Support\Settings;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Inertia\Inertia;
 
 class CalendarController extends Controller
@@ -49,6 +51,29 @@ class CalendarController extends Controller
             'rooms' => $rooms->map(fn ($r) => ['id' => $r->id, 'name' => $r->name, 'unit' => $r->unit_code, 'property' => $r->property->name, 'housekeeping' => $r->housekeeping_status]),
             'events' => $events,
             'blocks' => $blocks,
+            'closures' => $this->upcomingClosures(),
+            'closeRooms' => $request->user()->can('settings.manage') ? $rooms->map(fn ($r) => ['value' => $r->id, 'label' => $r->name])->values() : null,
         ]);
+    }
+
+    /** One line per closure, however many rooms it covers. */
+    private function upcomingClosures()
+    {
+        return RoomBlock::where('kind', RoomBlock::CLOSURE)->whereNull('released_at')->where('end_date', '>', Local::today())
+            ->with('room:id,name')->orderBy('start_date')->get()
+            ->groupBy('external_uid')
+            ->map(function ($rows, $group) {
+                $first = $rows->first();
+
+                return [
+                    'group' => Str::after((string) $group, 'closure:'),
+                    'reason' => $first->reason,
+                    'from' => $first->start_date->toDateString(),
+                    'last_night' => $first->end_date->copy()->subDay()->toDateString(),
+                    'end' => $first->end_date->toDateString(),
+                    'room_ids' => $rows->pluck('room_id')->values(),
+                    'rooms' => $rows->pluck('room.name')->sort()->values(),
+                ];
+            })->values();
     }
 }

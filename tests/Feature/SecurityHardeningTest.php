@@ -2,26 +2,14 @@
 
 namespace Tests\Feature;
 
-use App\Domain\Integrations\IcalSync;
-use App\Models\ExternalCalendarFeed;
-use App\Models\RoomBlock;
 use App\Models\User;
-use App\Support\PublicUrl;
 use App\Support\Settings;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Vite;
 use Tests\DomainTestCase;
 
 class SecurityHardeningTest extends DomainTestCase
 {
-    private const ICS = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nDTSTART;VALUE=DATE:20310303\r\nDTEND;VALUE=DATE:20310305\r\nUID:a\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
-
-    private function feed(): ExternalCalendarFeed
-    {
-        return ExternalCalendarFeed::create(['room_id' => $this->room('venice')->id, 'provider' => 'airbnb', 'url' => 'https://calendar.example.test/private.ics']);
-    }
-
     public function test_changing_a_password_ends_that_persons_other_sessions(): void
     {
         $user = User::factory()->create(['password' => 'old-password-123']);
@@ -78,69 +66,6 @@ class SecurityHardeningTest extends DomainTestCase
     {
         auth()->logout();
         $this->get('https://localhost/')->assertHeader('Strict-Transport-Security', 'max-age=31536000');
-    }
-
-    public function test_public_url_rejects_private_targets_and_plain_http(): void
-    {
-        $resolvesTo = fn (array $ips) => PublicUrl::$resolver = fn () => $ips;
-
-        $resolvesTo(['93.184.216.34']);
-        $this->assertTrue(PublicUrl::isSafe('https://calendar.example.test/a.ics'));
-        $this->assertFalse(PublicUrl::isSafe('http://calendar.example.test/a.ics'));
-        $this->assertFalse(PublicUrl::isSafe('file:///etc/passwd'));
-        $this->assertFalse(PublicUrl::isSafe('https://'));
-
-        foreach (['127.0.0.1', '10.0.0.5', '192.168.1.1', '169.254.169.254', '::1', 'fc00::1'] as $ip) {
-            $resolvesTo([$ip]);
-            $this->assertFalse(PublicUrl::isSafe('https://calendar.example.test/a.ics'), "{$ip} must be refused");
-        }
-
-        // One private answer among several public ones is enough to refuse.
-        $resolvesTo(['93.184.216.34', '10.0.0.5']);
-        $this->assertFalse(PublicUrl::isSafe('https://calendar.example.test/a.ics'));
-
-        $resolvesTo([]);
-        $this->assertFalse(PublicUrl::isSafe('https://nowhere.example.test/a.ics'));
-    }
-
-    public function test_a_feed_that_later_resolves_privately_is_not_fetched(): void
-    {
-        $feed = $this->feed();
-        Http::fake(['*' => Http::response(self::ICS)]);
-        PublicUrl::$resolver = fn () => ['169.254.169.254'];
-
-        app(IcalSync::class)->syncAll();
-
-        Http::assertNothingSent();
-        $this->assertSame('failed', $feed->fresh()->last_status);
-        $this->assertSame(0, RoomBlock::count());
-    }
-
-    public function test_a_feed_redirect_is_refused_rather_than_followed(): void
-    {
-        $feed = $this->feed();
-        Http::fake(['*' => Http::response('', 302, ['Location' => 'http://169.254.169.254/latest/meta-data'])]);
-
-        app(IcalSync::class)->syncAll();
-
-        Http::assertSentCount(1);
-        $this->assertSame('failed', $feed->fresh()->last_status);
-    }
-
-    public function test_settings_refuse_a_feed_pointing_at_the_local_network(): void
-    {
-        PublicUrl::$resolver = fn () => ['192.168.1.10'];
-
-        $this->post('/admin/settings/feeds', ['room_id' => $this->room('venice')->id, 'provider' => 'airbnb', 'url' => 'https://router.example.test/x.ics'])->assertSessionHas('error');
-
-        $this->assertSame(0, ExternalCalendarFeed::count());
-    }
-
-    public function test_calendar_events_with_impossible_dates_are_ignored(): void
-    {
-        $events = app(IcalSync::class)->parse("BEGIN:VEVENT\r\nDTSTART;VALUE=DATE:20310305\r\nDTEND;VALUE=DATE:20310303\r\nUID:bad\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nDTSTART;VALUE=DATE:20310305\r\nDTEND;VALUE=DATE:20310305\r\nUID:zero\r\nEND:VEVENT\r\n");
-
-        $this->assertSame([], $events);
     }
 
     public function test_failed_sign_ins_are_recorded(): void

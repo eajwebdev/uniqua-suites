@@ -34,6 +34,10 @@
             <tr><td>{{ $item->description }}</td><td class="r">{{ number_format($item->amount_cents / 100, 2) }}</td></tr>
         @endforeach
             <tr class="total"><td>Total</td><td class="r">{{ number_format($quote->total_cents / 100, 2) }}</td></tr>
+        @if($percent ?? null)
+            <tr><td>{{ $percent }}% downpayment</td><td class="r">{{ number_format($downpayment / 100, 2) }}</td></tr>
+            <tr><td>Balance upon check-in</td><td class="r">{{ number_format($balance / 100, 2) }}</td></tr>
+        @endif
         </tbody>
     </table>
 

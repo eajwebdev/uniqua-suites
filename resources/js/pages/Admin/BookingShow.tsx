@@ -1,8 +1,9 @@
 import { Link, useForm, usePage } from '@inertiajs/react';
 import { useState } from 'react';
 import { nextDay, RoomPicker, useRoomAvailability } from '@/components/RoomPicker';
-import { ActionButton, Button, Card, CopyButton, Empty, Field, FieldDef, Input, Modal, RowAction, StatusChip, buttonClass } from '@/components/ui';
+import { ActionButton, Button, Card, confirmDialog, CopyButton, Empty, Field, FieldDef, Input, Modal, RowAction, StatusChip, buttonClass } from '@/components/ui';
 import { dateOnly, dateTime, humanize, peso, time12 } from '@/lib/format';
+import { shrinkPhoto } from '@/lib/images';
 import AdminLayout from '@/layouts/AdminLayout';
 
 /** Changing a stay uses the same room picker as a new booking. The booking's own dates never count against it. */
@@ -20,9 +21,9 @@ function ChangeStay({ booking: b, rooms, url }: { booking: any; rooms: any[]; ur
                 <Modal open title="Change dates, room or party" onClose={() => setOpen(false)}>
                     <form
                         className="space-y-3"
-                        onSubmit={(ev) => {
+                        onSubmit={async (ev) => {
                             ev.preventDefault();
-                            if (window.confirm('This may change what the guest owes. Continue?')) form.post(`${url}/amend`, { preserveScroll: true, onSuccess: () => setOpen(false) });
+                            if (await confirmDialog({ title: 'Save these changes?', message: 'This may change what the guest owes.', confirmLabel: 'Save changes' })) form.post(`${url}/amend`, { preserveScroll: true, onSuccess: () => setOpen(false) });
                         }}
                     >
                         <div className="grid gap-3 sm:grid-cols-2">
@@ -47,7 +48,165 @@ function ChangeStay({ booking: b, rooms, url }: { booking: any; rooms: any[]; ur
     );
 }
 
-export default function BookingShow({ booking: b, charges, balance, receipts, settlements, refunds, events, snapshots, parking, messages, rooms }: any) {
+const METHODS = [{ value: 'cash', label: 'Cash' }, { value: 'gcash', label: 'GCash' }, { value: 'bank_transfer', label: 'Bank transfer' }, { value: 'other', label: 'Other' }];
+
+const toCents = (value: string) => {
+    const cents = Math.round(Number(value) * 100);
+
+    return Number.isFinite(cents) ? cents : 0;
+};
+const toPesos = (cents: number) => (cents / 100).toFixed(2);
+
+/** Filled in as far as it safely can be. The server makes the same checks, so a mistake is caught either way. */
+function RecordPayment({ booking: b, balance, downpaymentPercent, nowLocal, onClose }: { booking: any; balance: any; downpaymentPercent: number | null; nowLocal: string; onClose: () => void }) {
+    const form = useForm<any>({ booking_reference: b.reference, received_at: nowLocal, amount: '', method: 'cash', external_reference: '', evidence: null, confirm_unusual: false });
+    const e = form.errors as any;
+    const [shrinking, setShrinking] = useState(false);
+
+    const priced = balance.charges_cents > 0;
+    const remaining = Math.max(0, balance.balance_cents - balance.pending_cents);
+    const cents = toCents(form.data.amount);
+    const over = priced && cents > remaining;
+    const downpayment = downpaymentPercent && priced && balance.verified_cents === 0 && balance.pending_cents === 0 ? Math.round((balance.charges_cents * downpaymentPercent) / 100) : 0;
+    const needsProof = ['gcash', 'bank_transfer'].includes(form.data.method);
+
+    async function chooseProof(file?: File) {
+        if (!file) return form.setData('evidence', null);
+        if (!file.type.startsWith('image/')) return form.setData('evidence', file);
+        setShrinking(true);
+        form.setData('evidence', await shrinkPhoto(file));
+        setShrinking(false);
+    }
+
+    return (
+        <Modal open title="Record a payment" onClose={onClose}>
+            <form className="space-y-4" onSubmit={(ev) => { ev.preventDefault(); form.post('/admin/receipts', { forceFormData: true, preserveScroll: true, onSuccess: onClose }); }}>
+                <dl className="grid grid-cols-3 gap-2 rounded-lg bg-ivory p-3 text-sm">
+                    <div><dt className="text-xs text-muted">Total charges</dt><dd className="font-semibold tabular-nums">{peso(balance.charges_cents)}</dd></div>
+                    <div><dt className="text-xs text-muted">Waiting to verify</dt><dd className="font-semibold tabular-nums">{peso(balance.pending_cents)}</dd></div>
+                    <div><dt className="text-xs text-muted">Left to pay</dt><dd className="font-semibold tabular-nums">{peso(remaining)}</dd></div>
+                </dl>
+
+                <div>
+                    <Field label="Amount received (PHP)" required error={e.amount}>
+                        <Input required autoFocus inputMode="decimal" aria-invalid={!!e.amount} placeholder="0.00" value={form.data.amount} onChange={(ev) => form.setData('amount', ev.target.value)} />
+                    </Field>
+                    {remaining > 0 && (
+                        <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            <Button small onClick={() => form.setData('amount', toPesos(remaining))}>Full balance {peso(remaining)}</Button>
+                            {downpayment > 0 && downpayment < remaining && <Button small onClick={() => form.setData('amount', toPesos(downpayment))}>{downpaymentPercent}% downpayment {peso(downpayment)}</Button>}
+                        </div>
+                    )}
+                    {priced && cents > 0 && !over && <p className="mt-1.5 text-xs text-muted">After this payment is verified, {cents === remaining ? 'nothing is left to pay' : `${peso(remaining - cents)} is left to pay`}.</p>}
+                    {!priced && <p className="mt-1.5 text-xs text-muted">This booking is not priced yet, so there is no balance to compare with.</p>}
+                    {over && !e.amount && <p className="mt-1.5 text-xs font-medium text-amber-900">This is {peso(cents - remaining)} more than what is left to pay.</p>}
+                </div>
+
+                <fieldset>
+                    <legend className="mb-1 text-sm font-medium">How was it paid? <span className="text-red-800" aria-hidden>*</span></legend>
+                    <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+                        {METHODS.map((m) => (
+                            <button key={m.value} type="button" aria-pressed={form.data.method === m.value} onClick={() => form.setData('method', m.value)} className={`rounded-lg border px-2 py-2 text-sm font-medium transition-colors pointer-coarse:min-h-11 ${form.data.method === m.value ? 'border-chocolate bg-chocolate text-ivory' : 'border-line bg-white hover:border-gold'}`}>{m.label}</button>
+                        ))}
+                    </div>
+                    {e.method && <p role="alert" className="mt-1 text-xs text-red-800">{e.method}</p>}
+                </fieldset>
+
+                <Field label="Date and time received" required error={e.received_at} help="Change this only if the money came in earlier.">
+                    <Input required type="datetime-local" max={nowLocal} aria-invalid={!!e.received_at} value={form.data.received_at} onChange={(ev) => form.setData('received_at', ev.target.value)} />
+                </Field>
+
+                {form.data.method !== 'cash' && (
+                    <Field label="Reference number" error={e.external_reference} help={needsProof ? 'For GCash and bank payments, add this number or attach proof below.' : undefined}>
+                        <Input aria-invalid={!!e.external_reference} value={form.data.external_reference} onChange={(ev) => form.setData('external_reference', ev.target.value)} />
+                    </Field>
+                )}
+
+                <Field label="Proof (photo or PDF)" error={e.evidence} help={shrinking ? 'Making the photo smaller…' : 'Optional for cash.'}>
+                    <input type="file" accept="image/*,application/pdf" className="block w-full text-sm" onChange={(ev) => chooseProof(ev.target.files?.[0])} />
+                </Field>
+
+                {(e.confirm_unusual || form.data.confirm_unusual) && (
+                    <label className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+                        <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={form.data.confirm_unusual} onChange={(ev) => form.setData('confirm_unusual', ev.target.checked)} />
+                        <span>I checked the warning above, and this payment is correct. Save it anyway.</span>
+                    </label>
+                )}
+
+                <div className="flex justify-end gap-2">
+                    <Button onClick={onClose}>Cancel</Button>
+                    <Button type="submit" variant="primary" disabled={form.processing || shrinking}>{form.processing ? 'Saving…' : cents > 0 ? `Record ${peso(cents)}` : 'Record payment'}</Button>
+                </div>
+                <p className="text-xs text-muted">The payment counts toward the balance after it is verified.</p>
+            </form>
+        </Modal>
+    );
+}
+
+/** A guest can always leave. Leaving with money owed is allowed, but it is never silent: it needs a reason, which stays on the booking. */
+function CheckOut({ url, checkout, onRecordPayment }: { url: string; checkout: any; onRecordPayment?: () => void }) {
+    const [open, setOpen] = useState(false);
+    const form = useForm({ unpaid_reason: '' });
+    const e = form.errors as any;
+
+    if (!checkout.unpaid) {
+        return <ActionButton small={false} action={{ label: 'Check out', url: `${url}/check-out`, variant: 'primary', confirm: 'Check out? This marks the room dirty and creates turnover work.' }} />;
+    }
+
+    return (
+        <>
+            <Button variant="primary" onClick={() => setOpen(true)}>Check out</Button>
+            {open && (
+                <Modal open title="Check out with an unpaid balance?" onClose={() => setOpen(false)}>
+                    <form className="space-y-3" onSubmit={(ev) => { ev.preventDefault(); form.post(`${url}/check-out`, { preserveScroll: true, onSuccess: () => setOpen(false) }); }}>
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+                            {checkout.balance_cents !== null ? <p className="text-lg font-semibold tabular-nums">{peso(checkout.balance_cents)} still unpaid</p> : <p className="font-semibold">This booking still has an unpaid balance.</p>}
+                            {checkout.pending_cents > 0 && <p className="mt-1 text-xs">{peso(checkout.pending_cents)} of that is a payment waiting to be verified.</p>}
+                            <p className="mt-1 text-xs">The guest can still check out. The balance stays on this booking and on your list of money to collect, and you can record the payment any time.</p>
+                        </div>
+                        <Field label="Why is it not fully paid?" required error={e.unpaid_reason} help="For example: paying by bank transfer tomorrow. This is saved in the booking history.">
+                            <Input required autoFocus aria-invalid={!!e.unpaid_reason} value={form.data.unpaid_reason} onChange={(ev) => form.setData('unpaid_reason', ev.target.value)} />
+                        </Field>
+                        <div className="flex flex-wrap justify-end gap-2 pt-1">
+                            {onRecordPayment && <Button onClick={() => { setOpen(false); onRecordPayment(); }}>Record a payment first</Button>}
+                            <Button type="submit" variant="primary" disabled={form.processing}>{form.processing ? 'Checking out…' : 'Check out with balance'}</Button>
+                        </div>
+                    </form>
+                </Modal>
+            )}
+        </>
+    );
+}
+
+function ReceiptRow({ receipt: r, can }: { receipt: any; can: (p: string) => boolean }) {
+    const reversal = r.reverses_receipt_id !== null;
+
+    return (
+        <li className="space-y-1">
+            <div className="flex items-center justify-between gap-2">
+                <span className={r.verification_status === 'rejected' || r.reversed ? 'text-muted line-through' : ''}>{peso(r.amount_cents)}</span>
+                <StatusChip value={r.verification_status} label={reversal ? 'Reversal' : r.reversed ? 'Reversed' : undefined} />
+            </div>
+            <p className="text-xs text-muted">
+                {humanize(r.method)}, {dateOnly(r.receipt_date)}{r.external_reference ? ` · ${r.external_reference}` : ''}
+                {r.has_proof && <> · <a href={`/admin/files/receipt/${r.id}`} target="_blank" rel="noreferrer" className="underline">Proof</a></>}
+            </p>
+            {r.review_note && <p className="text-xs text-muted">{r.review_note}</p>}
+            {can('payments.verify') && r.verification_status === 'pending' && (
+                <div className="flex flex-wrap gap-1">
+                    <ActionButton action={{ label: 'Verify', url: `/admin/receipts/${r.id}/review`, data: { decision: 'verified' }, variant: 'primary', confirm: `Confirm ${peso(r.amount_cents)} was actually received?` }} />
+                    <ActionButton action={{ label: 'Reject', url: `/admin/receipts/${r.id}/review`, data: { decision: 'rejected' }, variant: 'danger', fields: [{ name: 'note', label: 'Why is this being rejected?', type: 'text', required: true, help: 'For example: entered twice, or the money never arrived.' }] }} />
+                </div>
+            )}
+            {can('payments.verify') && r.verification_status === 'verified' && !reversal && !r.reversed && (
+                <ActionButton action={{ label: 'Undo (reverse)', url: `/admin/receipts/${r.id}/reverse`, variant: 'danger', confirm: 'This adds a negative entry dated today, and the original stays on file. Continue?', fields: [{ name: 'reason', label: 'Why is this being reversed?', type: 'text', required: true }] }} />
+            )}
+        </li>
+    );
+}
+
+export default function BookingShow({ booking: b, charges, balance, receipts, checkout, nowLocal, downpaymentPercent, settlements, refunds, events, snapshots, parking, messages, rooms }: any) {
+    const [paying, setPaying] = useState(false);
     const perms: string[] = (usePage<any>().props as any).auth.user.permissions;
     const can = (p: string) => perms.includes(p);
     const url = `/admin/bookings/${b.id}`;
@@ -78,9 +237,6 @@ export default function BookingShow({ booking: b, charges, balance, receipts, se
             actions.push({ label: 'Check in', url: `${url}/check-in`, variant: 'primary', fields: fields.length ? fields : undefined });
             actions.push({ label: 'No-show', url: `${url}/no-show`, variant: 'danger', confirm: 'Mark this booking as a no-show? The room dates will be released.' });
         }
-        if (b.status === 'checked_in') {
-            actions.push({ label: 'Check out', url: `${url}/check-out`, variant: 'primary', confirm: 'Check out? This marks the room dirty and creates turnover work.' });
-        }
         if (['inquiry', 'tentative', 'confirmed', 'checked_in'].includes(b.status)) {
             amendable = true;
         }
@@ -97,6 +253,7 @@ export default function BookingShow({ booking: b, charges, balance, receipts, se
                 <div className="ml-auto flex flex-wrap gap-2">
                     {amendable && <ChangeStay booking={b} rooms={rooms} url={url} />}
                 {actions.map((a) => <ActionButton key={a.label} action={a} small={false} />)}
+                    {can('bookings.manage') && b.status === 'checked_in' && <CheckOut url={url} checkout={checkout} onRecordPayment={can('payments.record') && balance ? () => setPaying(true) : undefined} />}
                     {can('quotes.manage') && <Link className={buttonClass('secondary')} href={`/admin/quotes/create?room_id=${b.rooms[0]?.id ?? ''}&check_in=${b.check_in}&check_out=${b.check_out}&guests=${b.guest_count}&booking_id=${b.id}`}>New quote</Link>}
                 </div>
             </div>
@@ -204,25 +361,10 @@ export default function BookingShow({ booking: b, charges, balance, receipts, se
                     ) : null}
 
                     {can('payments.view') && (
-                        <Card title="Payments" action={can('payments.record') ? (
-                            <ActionButton action={{
-                                label: 'Record', url: '/admin/receipts', data: { booking_reference: b.reference }, fields: [
-                                    { name: 'received_at', label: 'Received at', type: 'datetime', required: true },
-                                    { name: 'amount', label: 'Amount (PHP)', type: 'money', required: true },
-                                    { name: 'method', label: 'Method', type: 'select', required: true, options: [{ value: 'cash', label: 'Cash' }, { value: 'gcash', label: 'GCash' }, { value: 'bank_transfer', label: 'Bank transfer' }, { value: 'other', label: 'Other' }] },
-                                    { name: 'external_reference', label: 'Reference', type: 'text' },
-                                    { name: 'evidence', label: 'Proof', type: 'file' },
-                                ],
-                            }} />
-                        ) : undefined}>
+                        <Card title="Payments" action={can('payments.record') && balance ? <Button small onClick={() => setPaying(true)}>Record payment</Button> : undefined}>
                             {receipts.length === 0 && settlements.length === 0 ? <Empty>No payments yet.</Empty> : (
-                                <ul className="space-y-2 text-sm">
-                                    {receipts.map((r: any) => (
-                                        <li key={r.id} className="flex items-center justify-between gap-2">
-                                            <span>{peso(r.amount_cents)} <span className="text-xs text-muted">{humanize(r.method)}, {dateOnly(r.receipt_date)}</span></span>
-                                            <StatusChip value={r.verification_status} />
-                                        </li>
-                                    ))}
+                                <ul className="space-y-3 text-sm">
+                                    {receipts.map((r: any) => <ReceiptRow key={r.id} receipt={r} can={can} />)}
                                     {settlements.map((s: any) => (
                                         <li key={`s${s.id}`} className="flex items-center justify-between gap-2">
                                             <span>{s.provider}: expected {peso(s.expected_net_cents)}</span>
@@ -272,6 +414,7 @@ export default function BookingShow({ booking: b, charges, balance, receipts, se
                     )}
                 </div>
             </div>
+            {paying && balance && <RecordPayment booking={b} balance={balance} downpaymentPercent={downpaymentPercent} nowLocal={nowLocal} onClose={() => setPaying(false)} />}
         </AdminLayout>
     );
 }

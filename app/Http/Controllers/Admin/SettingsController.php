@@ -2,17 +2,13 @@
 
 namespace App\Http\Controllers\Admin;
 
-use App\Domain\Availability\RoomConflict;
+use App\Domain\Bookings\MessageService;
 use App\Http\Controllers\Controller;
-use App\Models\ExternalCalendarFeed;
-use App\Models\IntegrationHealth;
 use App\Models\MessageTemplate;
 use App\Models\OwnerDecision;
-use App\Models\Room;
 use App\Models\TaxRule;
 use App\Support\Audit;
 use App\Support\Money;
-use App\Support\PublicUrl;
 use App\Support\Settings;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -20,7 +16,7 @@ use Inertia\Inertia;
 
 class SettingsController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
         $s = Settings::all();
 
@@ -30,6 +26,8 @@ class SettingsController extends Controller
                 'extra_guest' => Money::pesos($s['pricing.extra_guest_cents']),
                 'extra_guest_unit' => $s['pricing.extra_guest_unit'],
                 'early_fee' => Money::pesos($s['pricing.early_fee_cents_per_hour']),
+                'parking_rate' => Money::pesos($s['pricing.parking_night_cents']),
+                'downpayment_percent' => $s['finance.downpayment_percent'],
                 'standard_check_in' => $s['pricing.standard_check_in'],
                 'standard_check_out' => $s['pricing.standard_check_out'],
                 'late_fee' => Money::pesos($s['pricing.late_fee_cents_per_hour']),
@@ -47,12 +45,10 @@ class SettingsController extends Controller
                 'arrival_lead_days' => $s['alerts.arrival_lead_days'],
             ],
             'taxes' => TaxRule::orderByDesc('effective_from')->orderByDesc('id')->get()->map(fn ($t) => ['id' => $t->id, 'name' => $t->name, 'percent' => number_format($t->rate_basis_points / 100, 2, '.', ''), 'from' => $t->effective_from->toDateString(), 'to' => $t->effective_to?->toDateString()]),
-            'decisions' => OwnerDecision::orderByRaw("FIELD(status,'pending','approved','rejected')")->orderBy('id')->get(['id', 'title', 'detail', 'kind', 'status', 'resolution', 'decided_at']),
+            // Setup notes are for the Administrator. Not sent at all to anyone else, including the Owner.
+            'decisions' => $request->user()->hasRole('Administrator') ? OwnerDecision::orderBy('id')->get(['id', 'title', 'resolution']) : null,
             'templates' => MessageTemplate::orderBy('id')->get(['id', 'key', 'name', 'body']),
-            'integrations' => IntegrationHealth::orderBy('id')->get(['provider', 'status', 'detail', 'last_success_at', 'last_failure_at']),
-            // The private feed URL is write-only: never sent back to the browser.
-            'feeds' => ExternalCalendarFeed::with('room:id,name')->orderBy('id')->get()->map(fn ($f) => ['id' => $f->id, 'room' => $f->room->name, 'provider' => $f->provider, 'last_synced_at' => $f->last_synced_at, 'last_status' => $f->last_status]),
-            'rooms' => Room::orderBy('id')->get(['id', 'name']),
+            'placeholders' => MessageService::PLACEHOLDERS,
             'contact' => array_map(fn ($v) => (bool) $v, config('uniqa.contact')),
         ]);
     }
@@ -65,6 +61,8 @@ class SettingsController extends Controller
             'extra_guest' => ['required', Money::RULE],
             'extra_guest_unit' => 'nullable|in:per_night,per_stay',
             'early_fee' => ['required', Money::RULE],
+            'parking_rate' => ['nullable', Money::RULE],
+            'downpayment_percent' => 'nullable|integer|min:0|max:100',
             'standard_check_in' => 'required|date_format:H:i',
             'standard_check_out' => 'nullable|date_format:H:i',
             'late_fee' => ['nullable', Money::RULE],
@@ -85,6 +83,8 @@ class SettingsController extends Controller
         // An empty list stays "pending": no weekend pricing is a decision the owner has to make explicitly.
         $weekend = empty($d['weekend_days']) ? null : array_values(array_map('intval', $d['weekend_days']));
         $values = [
+            'pricing.parking_night_cents' => array_key_exists('parking_rate', $d) ? Money::cents($d['parking_rate']) : Settings::get('pricing.parking_night_cents'),
+            'finance.downpayment_percent' => array_key_exists('downpayment_percent', $d) ? (int) $d['downpayment_percent'] : Settings::get('finance.downpayment_percent'),
             'pricing.weekend_days' => $weekend,
             'pricing.extra_guest_cents' => Money::cents($d['extra_guest']),
             'pricing.extra_guest_unit' => $d['extra_guest_unit'] ?? null,
@@ -144,15 +144,6 @@ class SettingsController extends Controller
         return back()->with('success', "{$rule->name} ends on {$d['effective_to']}.");
     }
 
-    public function decide(Request $request, OwnerDecision $decision)
-    {
-        $d = $request->validate(['status' => 'required|in:approved,rejected,pending', 'resolution' => 'nullable|string|max:2000']);
-        $decision->update($d + ['decided_by' => $request->user()->id, 'decided_at' => now()]);
-        Audit::log('decision.recorded', $decision, $d);
-
-        return back()->with('success', 'Decision recorded.');
-    }
-
     public function updateTemplate(Request $request, MessageTemplate $template)
     {
         $template->update($request->validate(['body' => 'required|string|max:4000']));
@@ -161,25 +152,13 @@ class SettingsController extends Controller
         return back()->with('success', 'Template saved.');
     }
 
-    public function storeFeed(Request $request)
-    {
-        $d = $request->validate(['room_id' => 'required|exists:rooms,id', 'provider' => 'required|string|max:40', 'url' => 'required|url:https|max:1000']);
-        if (! PublicUrl::isSafe($d['url'])) {
-            throw new RoomConflict('The calendar URL must point to a public internet host.');
-        }
-        $feed = ExternalCalendarFeed::create($d);
-        Audit::log('feed.added', $feed, ['room_id' => $d['room_id'], 'provider' => $d['provider']]);
-
-        return back()->with('success', 'Calendar feed saved. It syncs hourly while the scheduler is running.');
-    }
-
     public function audit(Request $request)
     {
         $f = $request->validate(['action' => 'nullable|string|max:60']);
         $rows = DB::table('activity_logs as a')->leftJoin('users as u', 'u.id', '=', 'a.user_id')
             ->when($f['action'] ?? null, fn ($q, $v) => $q->where('a.action', 'like', "{$v}%"))
             ->orderByDesc('a.id')->select(['a.id', 'a.created_at', 'u.name as user', 'a.action', 'a.subject_type', 'a.subject_id', 'a.meta', 'a.ip'])
-            ->paginate(50)->withQueryString();
+            ->paginate(25)->withQueryString();
 
         return Inertia::render('Admin/Resource', [
             'title' => 'Audit Log',

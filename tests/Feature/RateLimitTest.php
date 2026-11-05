@@ -12,7 +12,7 @@ class RateLimitTest extends DomainTestCase
         auth()->logout();
 
         for ($i = 0; $i < 20; $i++) {
-            $this->get('/suites')->assertOk();
+            $this->get('/')->assertOk();
         }
 
         $this->post('/login', ['email' => 'nobody@example.test', 'password' => 'wrong'])->assertSessionHasErrors('email');

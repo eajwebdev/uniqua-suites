@@ -31,7 +31,7 @@ class ExpenseController extends Controller
         $rows = Expense::with(['category:id,name', 'room:id,name', 'property:id,name', 'vendor:id,name'])
             ->when($f['category'] ?? null, fn ($q, $v) => $q->where('expense_category_id', $v))
             ->when($f['status'] ?? null, fn ($q, $v) => $q->where('status', $v))
-            ->orderByDesc('expense_date')->orderByDesc('id')->paginate(30)->withQueryString();
+            ->orderByDesc('expense_date')->orderByDesc('id')->paginate(15)->withQueryString();
         $reversed = Expense::whereNotNull('reverses_expense_id')->pluck('reverses_expense_id');
         $categories = ExpenseCategory::orderBy('name')->get()->map(fn ($c) => ['value' => $c->id, 'label' => $c->name])->all();
 

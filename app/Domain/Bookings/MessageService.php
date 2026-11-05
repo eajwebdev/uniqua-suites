@@ -11,6 +11,26 @@ use App\Support\Settings;
 /** Renders copy-ready text for staff to send themselves. Nothing is delivered automatically. */
 class MessageService
 {
+    /**
+     * What staff can type into a template, shown under Settings. The Quotation template is filled by
+     * QuoteController and every other template by variables() below, so each has its own set.
+     */
+    public const PLACEHOLDERS = [
+        ['key' => 'guest', 'description' => 'Guest\'s name', 'where' => 'all'],
+        ['key' => 'room', 'description' => 'Suite name', 'where' => 'all'],
+        ['key' => 'check_in', 'description' => 'Check-in date. Quotations also show the time', 'where' => 'all'],
+        ['key' => 'check_out', 'description' => 'Check-out date. Quotations also show the time', 'where' => 'all'],
+        ['key' => 'guests', 'description' => 'Number of guests', 'where' => 'all'],
+        ['key' => 'total', 'description' => 'Total amount', 'where' => 'all'],
+        ['key' => 'reference', 'description' => 'Booking reference number', 'where' => 'booking'],
+        ['key' => 'property', 'description' => 'Building or location', 'where' => 'booking'],
+        ['key' => 'balance', 'description' => 'Balance still to pay', 'where' => 'booking'],
+        ['key' => 'check_in_time', 'description' => 'Standard check-in time', 'where' => 'booking'],
+        ['key' => 'nights', 'description' => 'Number of nights', 'where' => 'quote'],
+        ['key' => 'breakdown', 'description' => 'Rates and charges, line by line', 'where' => 'quote'],
+        ['key' => 'payment', 'description' => 'Downpayment and balance upon check-in', 'where' => 'quote'],
+    ];
+
     public function __construct(private FinanceService $finance)
     {
     }

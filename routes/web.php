@@ -5,11 +5,11 @@ use App\Http\Controllers\Admin\BookingController;
 use App\Http\Controllers\Admin\CalendarController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\ExpenseController;
+use App\Http\Controllers\Admin\ClosureController;
 use App\Http\Controllers\Admin\FileController;
 use App\Http\Controllers\Admin\FinanceController;
 use App\Http\Controllers\Admin\GuestController;
 use App\Http\Controllers\Admin\HousekeepingController;
-use App\Http\Controllers\Admin\ImportController;
 use App\Http\Controllers\Admin\InventoryController;
 use App\Http\Controllers\Admin\MaintenanceController;
 use App\Http\Controllers\Admin\ParkingController;
@@ -66,6 +66,7 @@ Route::middleware(['auth', 'auth.session', 'active', 'mfa.enrolled'])->prefix('a
     });
     Route::middleware('perm:bookings.manage')->group(function () {
         Route::get('/bookings/create', [BookingController::class, 'create']);
+        Route::get('/bookings/form-options', [BookingController::class, 'formOptions']);
         Route::get('/bookings/availability', [BookingController::class, 'availability']);
         Route::post('/bookings', [BookingController::class, 'store']);
         Route::post('/bookings/{booking}/hold', [BookingController::class, 'hold']);
@@ -101,13 +102,13 @@ Route::middleware(['auth', 'auth.session', 'active', 'mfa.enrolled'])->prefix('a
         Route::post('/rooms/{room}/publish', [RoomController::class, 'togglePublish']);
         Route::post('/rooms/{room}/images', [RoomController::class, 'addImage']);
         Route::post('/room-images/{image}/delete', [RoomController::class, 'deleteImage']);
-        Route::post('/rooms/{room}/listings', [RoomController::class, 'addListing']);
-        Route::post('/room-listings/{listing}/delete', [RoomController::class, 'deleteListing']);
     });
     Route::post('/rooms/{room}/rates', [RoomController::class, 'addRate'])->middleware('perm:rates.manage');
     Route::post('/rooms/{room}/overrides', [RoomController::class, 'addOverride'])->middleware('perm:rates.manage');
     Route::post('/rooms/{room}/blocks', [RoomController::class, 'addBlock'])->middleware('perm:bookings.manage');
     Route::post('/blocks/{block}/release', [RoomController::class, 'releaseBlock'])->middleware('perm:bookings.manage');
+    Route::post('/closures', [ClosureController::class, 'store'])->middleware('perm:settings.manage');
+    Route::post('/closures/{group}/reopen', [ClosureController::class, 'reopen'])->whereUuid('group')->middleware('perm:settings.manage');
     Route::get('/rooms/{room}/secret', [RoomController::class, 'secret'])->middleware('perm:secrets.reveal');
     Route::post('/rooms/{room}/secret', [RoomController::class, 'saveSecret'])->middleware('perm:secrets.manage');
 
@@ -139,8 +140,12 @@ Route::middleware(['auth', 'auth.session', 'active', 'mfa.enrolled'])->prefix('a
     Route::middleware('perm:housekeeping.own|housekeeping.manage')->group(function () {
         Route::post('/tasks/{task}/start', [HousekeepingController::class, 'start']);
         Route::post('/tasks/{task}/complete', [HousekeepingController::class, 'complete']);
+        Route::post('/tasks/{task}/photos', [HousekeepingController::class, 'addPhotos']);
     });
     Route::post('/tasks/auto-assign', [HousekeepingController::class, 'autoAssign'])->middleware('perm:housekeeping.manage');
+    Route::post('/tasks/plan', [HousekeepingController::class, 'plan'])->middleware('perm:housekeeping.manage');
+    Route::post('/tasks', [HousekeepingController::class, 'store'])->middleware('perm:housekeeping.manage');
+    Route::post('/tasks/{task}/cancel', [HousekeepingController::class, 'cancel'])->middleware('perm:housekeeping.manage');
     Route::post('/tasks/{task}/assign', [HousekeepingController::class, 'assign'])->middleware('perm:housekeeping.manage');
     Route::post('/tasks/{task}/inspect', [HousekeepingController::class, 'inspect'])->middleware('perm:housekeeping.inspect');
     Route::get('/laundry', [HousekeepingController::class, 'laundry'])->middleware('perm:housekeeping.manage');
@@ -177,30 +182,18 @@ Route::middleware(['auth', 'auth.session', 'active', 'mfa.enrolled'])->prefix('a
         Route::post('/advances/repayments', [AdvanceController::class, 'storeRepayment']);
     });
 
-    Route::middleware('perm:imports.manage')->group(function () {
-        Route::get('/imports', [ImportController::class, 'index']);
-        Route::post('/imports', [ImportController::class, 'store']);
-        Route::get('/imports/{batch}', [ImportController::class, 'show']);
-        Route::post('/imports/{batch}/commit', [ImportController::class, 'commit']);
-        Route::post('/imports/{batch}/rollback', [ImportController::class, 'rollback']);
-        Route::post('/imports/{batch}/hold-future', [ImportController::class, 'holdFutureDates']);
-        Route::post('/imports/mappings/{mapping}', [ImportController::class, 'decideMapping']);
-        Route::post('/imports/rows/{row}/review', [ImportController::class, 'reviewRow']);
-    });
-
     Route::get('/team', [TeamController::class, 'index'])->middleware('perm:team.manage');
     Route::get('/team/create', [TeamController::class, 'create'])->middleware('perm:team.manage');
     Route::post('/team', [TeamController::class, 'store'])->middleware('perm:team.manage');
     Route::get('/team/{user}/edit', [TeamController::class, 'edit'])->middleware('perm:team.manage');
     Route::post('/team/{user}', [TeamController::class, 'update'])->middleware('perm:team.manage');
     Route::post('/team/{user}/reset-two-factor', [TeamController::class, 'resetTwoFactor'])->middleware('perm:team.manage');
+    Route::post('/team/{user}/temporary-password', [TeamController::class, 'temporaryPassword'])->middleware('perm:team.manage');
 
     Route::middleware('perm:settings.manage')->group(function () {
         Route::get('/settings', [SettingsController::class, 'index']);
         Route::post('/settings', [SettingsController::class, 'update']);
-        Route::post('/settings/decisions/{decision}', [SettingsController::class, 'decide']);
         Route::post('/settings/templates/{template}', [SettingsController::class, 'updateTemplate']);
-        Route::post('/settings/feeds', [SettingsController::class, 'storeFeed']);
         Route::post('/settings/taxes', [SettingsController::class, 'storeTax']);
         Route::post('/settings/taxes/{rule}/end', [SettingsController::class, 'endTax']);
     });

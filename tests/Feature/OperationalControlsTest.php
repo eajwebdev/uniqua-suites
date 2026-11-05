@@ -9,7 +9,6 @@ use App\Models\ExternalSettlement;
 use App\Models\PeriodLock;
 use App\Models\Receipt;
 use App\Models\Refund;
-use App\Models\RoomListing;
 use App\Models\User;
 use App\Support\Settings;
 use Illuminate\Support\Facades\DB;
@@ -84,7 +83,7 @@ class OperationalControlsTest extends DomainTestCase
     public function test_second_reviewer_blocks_self_review_only_when_turned_on(): void
     {
         $booking = $this->confirmed();
-        $receiptData = ['booking_reference' => $booking->reference, 'received_at' => '2031-03-01T10:00', 'amount' => '100.00', 'method' => 'cash'];
+        $receiptData = ['booking_reference' => $booking->reference, 'received_at' => \App\Support\Local::now()->format('Y-m-d\TH:i'), 'amount' => '100.00', 'method' => 'cash', 'confirm_unusual' => true];
 
         $this->post('/admin/receipts', $receiptData);
         $this->post('/admin/receipts/'.Receipt::latest('id')->first()->id.'/review', ['decision' => 'verified'])->assertSessionMissing('error');
@@ -188,27 +187,4 @@ class OperationalControlsTest extends DomainTestCase
         $this->assertEqualsCanonicalizing([$venice, $this->room('roma')->id], Booking::find($booking->id)->activeRooms()->pluck('room_id')->all());
     }
 
-    public function test_room_listing_ids_are_staff_records_and_unique_per_platform(): void
-    {
-        $venice = $this->room('venice');
-
-        $this->post("/admin/rooms/{$venice->id}/listings", ['provider' => 'Airbnb', 'listing_id' => 'SYN-100', 'url' => 'http://insecure.example'])->assertSessionHasErrors('url');
-        $this->post("/admin/rooms/{$venice->id}/listings", ['provider' => 'Airbnb', 'listing_id' => 'SYN-100', 'url' => 'https://example.test/rooms/100'])->assertSessionMissing('error');
-        $this->post('/admin/rooms/'.$this->room('bali')->id.'/listings', ['provider' => 'Airbnb', 'listing_id' => 'SYN-100'])->assertSessionHas('error');
-        $this->assertSame(1, RoomListing::count());
-
-        $this->get("/admin/rooms/{$venice->id}/edit")->assertInertia(fn ($p) => $p->where('listings.0.listing_id', 'SYN-100'));
-
-        $venice->update(['is_published' => true]);
-        auth()->logout();
-        $this->assertStringNotContainsString('SYN-100', $this->get('/suites/venice')->assertOk()->getContent());
-
-        $reception = User::factory()->create();
-        $reception->assignRole('Booking / Reception');
-        $this->actingAs($reception)->post("/admin/rooms/{$venice->id}/listings", ['provider' => 'Airbnb', 'listing_id' => 'SYN-200'])->assertForbidden();
-        $this->post('/admin/room-listings/'.RoomListing::first()->id.'/delete')->assertForbidden();
-
-        $this->actingAs($this->owner)->post('/admin/room-listings/'.RoomListing::first()->id.'/delete')->assertSessionMissing('error');
-        $this->assertSame(0, RoomListing::count());
-    }
 }

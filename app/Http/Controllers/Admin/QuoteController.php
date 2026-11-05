@@ -15,6 +15,7 @@ use App\Models\Room;
 use App\Support\Audit;
 use App\Support\Local;
 use App\Support\Money;
+use App\Support\Settings;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
 use Carbon\CarbonImmutable;
@@ -32,7 +33,7 @@ class QuoteController extends Controller
 
     public function index()
     {
-        $rows = Quote::with('room:id,name')->orderByDesc('id')->paginate(30);
+        $rows = Quote::with('room:id,name')->orderByDesc('id')->paginate(15);
 
         return Inertia::render('Admin/Resource', [
             'title' => 'Quotes',
@@ -73,6 +74,8 @@ class QuoteController extends Controller
             'source_id' => 'nullable|integer',
             'discount' => ['nullable', Money::RULE],
             'parking' => ['nullable', Money::RULE],
+            'parking_nights' => 'nullable|integer|min:0|max:365',
+            'parking_rate' => ['nullable', Money::RULE],
         ]);
 
         $preview = null;
@@ -83,8 +86,9 @@ class QuoteController extends Controller
                 if ($problem) {
                     throw new \App\Domain\Availability\RoomConflict($problem);
                 }
-                $preview = $this->calculate($room, $f, $f['guests'] ?? 1);
-                $preview['copyText'] = $this->message($room->name, $f['check_in'], $f['check_out'], (int) ($f['guests'] ?? 1), '{{guest}}', $preview['total_cents'], collect($preview['lines']));
+                $percent = $this->downpaymentPercent($f['source_id'] ?? null);
+                $preview = $this->withPayment($this->calculate($room, $f, $f['guests'] ?? 1), $percent);
+                $preview['copyText'] = $this->message($room->name, $f['check_in'], $f['check_out'], (int) ($f['guests'] ?? 1), '{{guest}}', $preview['total_cents'], collect($preview['lines']), $percent);
             } catch (\App\Domain\Availability\RoomConflict $e) {
                 $preview = ['error' => $e->getMessage()];
             }
@@ -101,6 +105,7 @@ class QuoteController extends Controller
             'preview' => $preview,
             'vacancy' => $vacancy,
             'bookingId' => $request->integer('booking_id') ?: null,
+            'parkingRate' => Money::pesos((int) Settings::get('pricing.parking_night_cents')),
         ]);
     }
 
@@ -116,6 +121,8 @@ class QuoteController extends Controller
             'source_id' => 'nullable|exists:booking_sources,id',
             'discount' => ['nullable', Money::RULE],
             'parking' => ['nullable', Money::RULE],
+            'parking_nights' => 'nullable|integer|min:0|max:365',
+            'parking_rate' => ['nullable', Money::RULE],
             'booking_id' => 'nullable|exists:bookings,id',
             'reference' => 'nullable|string|exists:quotes,reference',
         ]);
@@ -145,6 +152,7 @@ class QuoteController extends Controller
                 'guest_count' => $data['guests'],
                 'early_time' => $data['early_time'] ?? null,
                 'total_cents' => $calc['total_cents'],
+                'downpayment_percent' => $this->downpaymentPercent($data['source_id'] ?? null),
                 'warnings' => $calc['warnings'],
                 'created_by' => $request->user()->id,
             ]);
@@ -203,6 +211,9 @@ class QuoteController extends Controller
                 'source_id' => $quote->booking_source_id,
                 'early_time' => $quote->early_time ? substr($quote->early_time, 0, 5) : null,
                 'total_cents' => (int) $quote->total_cents,
+                'downpayment_percent' => $quote->downpayment_percent ? (int) $quote->downpayment_percent : null,
+                'downpayment_cents' => $quote->downpayment_percent ? $this->split((int) $quote->total_cents, (int) $quote->downpayment_percent)[0] : null,
+                'balance_cents' => $quote->downpayment_percent ? $this->split((int) $quote->total_cents, (int) $quote->downpayment_percent)[1] : null,
                 'warnings' => $quote->warnings ?? [],
                 'items' => $quote->items,
             ],
@@ -215,7 +226,10 @@ class QuoteController extends Controller
     {
         $quote->load(['items', 'room.property']);
 
-        return Pdf::loadView('pdf.quote', ['quote' => $quote, 'logo' => public_path('brand/uniqa-wordmark.png')])
+        $percent = $quote->downpayment_percent ? (int) $quote->downpayment_percent : null;
+        [$down, $balance] = $percent ? $this->split((int) $quote->total_cents, $percent) : [null, null];
+
+        return Pdf::loadView('pdf.quote', ['quote' => $quote, 'logo' => public_path('brand/uniqa-wordmark.png'), 'percent' => $percent, 'downpayment' => $down, 'balance' => $balance])
             ->download("UNIQA-{$quote->reference}-v{$quote->version}.pdf");
     }
 
@@ -231,34 +245,95 @@ class QuoteController extends Controller
             'early_time' => $f['early_time'] ?? null,
             'discount_cents' => Money::cents($f['discount'] ?? null) ?? 0,
             'parking_cents' => Money::cents($f['parking'] ?? null) ?? 0,
+            'parking_nights' => (int) ($f['parking_nights'] ?? 0),
+            'parking_rate_cents' => Money::cents($f['parking_rate'] ?? null) ?? 0,
         ];
     }
 
     private function copyText(Quote $quote): string
     {
-        return $this->message($quote->room->name, $quote->check_in->toDateString(), $quote->check_out->toDateString(), (int) $quote->guest_count, $quote->guest_name ?: 'there', (int) $quote->total_cents, $quote->items);
+        return $this->message($quote->room->name, $quote->check_in->toDateString(), $quote->check_out->toDateString(), (int) $quote->guest_count, $quote->guest_name ?: 'there', (int) $quote->total_cents, $quote->items, $quote->downpayment_percent ? (int) $quote->downpayment_percent : null);
     }
 
-    /** What the guest reads: the owner's template, then each charge in plain words. */
-    private function message(string $room, string $checkIn, string $checkOut, int $guests, string $guest, int $totalCents, $lines): string
+    /** What the guest reads: the owner's template, filled in with the stay, the charges and what to pay now. */
+    private function message(string $room, string $checkIn, string $checkOut, int $guests, string $guest, int $totalCents, $lines, ?int $percent): string
     {
-        $text = $this->messages->render(MessageTemplate::where('key', 'quote')->value('body') ?? '', [
+        $times = fn (string $date, mixed $time) => CarbonImmutable::parse($date)->format('M j, Y').($time ? ' ('.CarbonImmutable::parse("2000-01-01 {$time}")->format('g:i A').')' : '');
+        $breakdown = $this->breakdown($lines);
+        $payment = '';
+        if ($percent) {
+            [$down, $balance] = $this->split($totalCents, $percent);
+            $payment = "{$percent}% Downpayment: ".Money::plain($down)."\nBalance upon check-in: ".Money::plain($balance);
+        }
+
+        $template = MessageTemplate::where('key', 'quote')->value('body') ?? '';
+        $text = $this->messages->render($template, [
             'guest' => $guest,
             'room' => $room,
-            'check_in' => CarbonImmutable::parse($checkIn)->format('M j, Y'),
-            'check_out' => CarbonImmutable::parse($checkOut)->format('M j, Y'),
+            'check_in' => $times($checkIn, Settings::get('pricing.standard_check_in')),
+            'check_out' => $times($checkOut, Settings::get('pricing.standard_check_out')),
+            'nights' => (string) CarbonImmutable::parse($checkIn)->diffInDays($checkOut),
             'guests' => (string) $guests,
-            'total' => Money::format($totalCents),
+            'total' => Money::plain($totalCents),
+            'breakdown' => $breakdown,
+            'payment' => $payment,
         ]);
-        $breakdown = collect($lines)->map(function ($line) {
-            $description = data_get($line, 'description');
-            if (preg_match('/^(\d{4}-\d{2}-\d{2}) · (.+)$/u', $description, $night)) {
-                $description = CarbonImmutable::parse($night[1])->format('M j (D)').', '.mb_strtolower($night[2]);
+
+        // A template someone rewrote may not ask for these, and a quote must still show them.
+        if (! str_contains($template, '{{breakdown}}')) {
+            $text .= "\n\nRATE BREAKDOWN\n{$breakdown}";
+        }
+        if ($payment && ! str_contains($template, '{{payment}}')) {
+            $text .= "\n\n{$payment}";
+        }
+
+        return trim(preg_replace("/\n{3,}/", "\n\n", $text));
+    }
+
+    /** Nights at the same rate are one line, then each other charge in plain words. */
+    private function breakdown($lines): string
+    {
+        $nights = [];
+        $others = [];
+        foreach ($lines as $line) {
+            $description = (string) data_get($line, 'description');
+            $amount = (int) data_get($line, 'amount_cents');
+
+            if (data_get($line, 'type') === 'accommodation') {
+                $label = str_replace(' rate', '', preg_replace('/^\d{4}-\d{2}-\d{2} · /u', '', $description));
+                $key = $label.'|'.$amount;
+                $nights[$key] = ['label' => $label, 'unit' => $amount, 'count' => ($nights[$key]['count'] ?? 0) + 1];
+                continue;
             }
+            $others[] = (data_get($line, 'type') === 'extra_guest' ? 'Additional guests' : $description).': '.Money::plain($amount);
+        }
 
-            return '- '.$description.': '.Money::format((int) data_get($line, 'amount_cents'));
-        })->join("\n");
+        return collect($nights)->map(fn ($n) => "{$n['label']} ({$n['count']} × ".Money::plain($n['unit']).'): '.Money::plain($n['count'] * $n['unit']))->values()->concat($others)->join("\n");
+    }
 
-        return $text."\n\nBreakdown:\n".$breakdown;
+    /** @return array{0: int, 1: int} Rounded half up in whole centavos. The two always add up to the total. */
+    private function split(int $totalCents, int $percent): array
+    {
+        $down = intdiv($totalCents * $percent + 50, 100);
+
+        return [$down, $totalCents - $down];
+    }
+
+    /** Airbnb guests pay Airbnb, so there is nothing for them to put down here. */
+    private function downpaymentPercent(mixed $sourceId): ?int
+    {
+        $percent = (int) Settings::get('finance.downpayment_percent');
+        if ($percent <= 0 || ($sourceId && BookingSource::whereKey($sourceId)->value('code') === 'airbnb')) {
+            return null;
+        }
+
+        return $percent;
+    }
+
+    private function withPayment(array $calc, ?int $percent): array
+    {
+        [$down, $balance] = $percent ? $this->split($calc['total_cents'], $percent) : [null, null];
+
+        return $calc + ['downpayment_percent' => $percent, 'downpayment_cents' => $down, 'balance_cents' => $balance];
     }
 }

@@ -12,7 +12,6 @@ use App\Models\RateRule;
 use App\Models\Room;
 use App\Models\RoomBlock;
 use App\Models\RoomImage;
-use App\Models\RoomListing;
 use App\Models\RoomSecret;
 use App\Models\RoomStatusEvent;
 use App\Support\Audit;
@@ -91,7 +90,6 @@ class RoomController extends Controller
             'rates' => $room->rateRules->map(fn ($r) => ['id' => $r->id, 'from' => $r->effective_from->toDateString(), 'to' => $r->effective_to?->toDateString(), 'weekday_cents' => (int) $r->weekday_cents, 'weekend_cents' => (int) $r->weekend_cents, 'note' => $r->source_note]),
             'overrides' => RateOverride::where('room_id', $room->id)->orderByDesc('date_from')->with('source:id,name')->get()->map(fn ($o) => ['id' => $o->id, 'from' => $o->date_from->toDateString(), 'to' => $o->date_to->toDateString(), 'cents' => (int) $o->nightly_cents, 'label' => $o->label, 'source' => $o->source?->name]),
             'blocks' => $room->blocks->map(fn ($b) => ['id' => $b->id, 'start' => $b->start_date->toDateString(), 'end' => $b->end_date->toDateString(), 'kind' => $b->kind, 'reason' => $b->reason]),
-            'listings' => $room->listings()->orderBy('provider')->get(['id', 'provider', 'listing_id', 'url']),
             'amenities' => Amenity::orderBy('name')->get(['id', 'name']),
             'sources' => BookingSource::orderBy('name')->get(['id', 'name']),
             // Metadata only: the password is fetched through the audited reveal endpoint.
@@ -171,24 +169,6 @@ class RoomController extends Controller
         return back()->with('success', 'Photo removed.');
     }
 
-    /** Reference only: a listing ID connects nothing and sends nothing to the platform. */
-    public function addListing(Request $request, Room $room)
-    {
-        $data = $request->validate(['provider' => 'required|string|max:60', 'listing_id' => 'required|string|max:120', 'url' => 'nullable|url:https|max:500']);
-        $listing = $room->listings()->create($data + ['created_by' => $request->user()->id]);
-        Audit::log('room.listing_added', $listing, ['room' => $room->name, 'provider' => $data['provider'], 'listing_id' => $data['listing_id']]);
-
-        return back()->with('success', 'Listing ID saved.');
-    }
-
-    public function deleteListing(RoomListing $listing)
-    {
-        Audit::log('room.listing_removed', $listing, ['provider' => $listing->provider, 'listing_id' => $listing->listing_id]);
-        $listing->delete();
-
-        return back()->with('success', 'Listing ID removed.');
-    }
-
     /** A new rule never edits an old one, so past stays keep their dated rate. */
     public function addRate(Request $request, Room $room)
     {
@@ -242,6 +222,8 @@ class RoomController extends Controller
 
     public function releaseBlock(Request $request, RoomBlock $block)
     {
+        // Whoever may close the property decides when it reopens, not everyone who takes bookings.
+        abort_if($block->kind === RoomBlock::CLOSURE && ! $request->user()->can('settings.manage'), 403);
         $block->update(['released_at' => now(), 'released_by' => $request->user()->id]);
         Audit::log('room.block_released', $block);
 

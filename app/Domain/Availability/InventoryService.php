@@ -4,6 +4,7 @@ namespace App\Domain\Availability;
 
 use App\Models\Booking;
 use App\Models\Room;
+use App\Models\RoomBlock;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Collection;
@@ -77,10 +78,11 @@ class InventoryService
             ->whereNull('released_at')
             ->where('start_date', '<', $end)
             ->where('end_date', '>', $start)
-            ->get(['kind', 'start_date', 'end_date'])
+            ->get(['kind', 'reason', 'start_date', 'end_date'])
             ->map(fn ($r) => [
                 'type' => 'block',
-                'label' => 'Room block: '.$r->kind,
+                'closure' => $r->kind === RoomBlock::CLOSURE,
+                'label' => $r->kind === RoomBlock::CLOSURE ? 'Closed: '.$r->reason : 'Room block: '.$r->kind,
                 'start' => $r->start_date,
                 'end' => $r->end_date,
             ]);
@@ -107,6 +109,9 @@ class InventoryService
 
         if ($conflicts->isNotEmpty()) {
             $first = $conflicts->first();
+            if ($first['closure'] ?? false) {
+                throw new RoomConflict("{$room->name} is closed for those dates. {$first['label']}, {$first['start']} to {$first['end']}.");
+            }
             throw new RoomConflict("{$room->name} is not available for {$start} to {$end}: {$first['label']} occupies {$first['start']} to {$first['end']}.");
         }
     }
@@ -156,8 +161,7 @@ class InventoryService
     }
 
     /**
-     * Stays and blocks that overlap, from today on. Should always be empty for bookings; an
-     * external calendar can still clash, because Airbnb does not ask this system first.
+     * Stays and blocks that overlap, from today on. Should always be empty.
      */
     public function overlaps(string $today): Collection
     {

@@ -27,6 +27,12 @@ class Money
         return $sign.'₱'.number_format(abs($cents) / 100, 2);
     }
 
+    /** For messages to guests: ₱13,300 rather than ₱13,300.00, keeping centavos only when there are some. */
+    public static function plain(int $cents): string
+    {
+        return ($cents < 0 ? '-' : '').'₱'.number_format(abs($cents) / 100, abs($cents) % 100 === 0 ? 0 : 2);
+    }
+
     public static function pesos(?int $cents): ?string
     {
         return $cents === null ? null : number_format($cents / 100, 2, '.', '');

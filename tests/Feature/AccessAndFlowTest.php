@@ -37,7 +37,7 @@ class AccessAndFlowTest extends DomainTestCase
     public function test_every_admin_page_renders_for_the_owner(): void
     {
         $booking = $this->confirmed();
-        foreach (['/admin', '/admin/calendar', '/admin/bookings', '/admin/bookings/create', "/admin/bookings/{$booking->id}", '/admin/guests', "/admin/guests/{$booking->guest_id}", '/admin/quotes', '/admin/quotes/create', '/admin/rooms', '/admin/rooms/'.$this->room('venice')->id.'/edit', '/admin/payments', '/admin/settlements', '/admin/reconciliation', '/admin/expenses', '/admin/cashbook', '/admin/reports', '/admin/housekeeping', '/admin/laundry', '/admin/work-orders', '/admin/incidents', '/admin/inventory', '/admin/parking', '/admin/advances', '/admin/imports', '/admin/team', '/admin/settings', '/admin/audit', '/admin/account'] as $url) {
+        foreach (['/admin', '/admin/calendar', '/admin/bookings', "/admin/bookings/{$booking->id}", '/admin/guests', "/admin/guests/{$booking->guest_id}", '/admin/quotes', '/admin/quotes/create', '/admin/rooms', '/admin/rooms/'.$this->room('venice')->id.'/edit', '/admin/payments', '/admin/settlements', '/admin/reconciliation', '/admin/expenses', '/admin/cashbook', '/admin/reports', '/admin/housekeeping', '/admin/laundry', '/admin/work-orders', '/admin/incidents', '/admin/inventory', '/admin/parking', '/admin/advances', '/admin/imports', '/admin/team', '/admin/settings', '/admin/audit', '/admin/account'] as $url) {
             $this->get($url)->assertOk();
         }
     }
@@ -50,7 +50,7 @@ class AccessAndFlowTest extends DomainTestCase
         $this->confirmed('venice', '2031-03-03', '2031-03-05');
         auth()->logout();
 
-        foreach (['/', '/suites', '/suites?guests=2', '/suites/venice', '/policies'] as $url) {
+        foreach (['/', '/suites/venice', '/policies'] as $url) {
             $body = $this->get($url)->assertOk()->getContent();
             $this->assertStringNotContainsString('WIFI-PASSWORD-MARKER', $body);
             $this->assertStringNotContainsString('NET-MARKER', $body);
@@ -161,7 +161,7 @@ class AccessAndFlowTest extends DomainTestCase
         $booking = Booking::firstOrFail();
         $this->assertSame(Booking::TENTATIVE, $booking->status);
 
-        $this->post('/admin/receipts', ['booking_reference' => $booking->reference, 'received_at' => '2031-03-01T10:00', 'amount' => '3400.00', 'method' => 'gcash', 'external_reference' => 'GC-JOURNEY'])->assertRedirect();
+        $this->post('/admin/receipts', ['booking_reference' => $booking->reference, 'received_at' => \App\Support\Local::now()->format('Y-m-d\TH:i'), 'amount' => '3400.00', 'method' => 'gcash', 'external_reference' => 'GC-JOURNEY'])->assertRedirect();
         $receipt = Receipt::firstOrFail();
         $this->post("/admin/receipts/{$receipt->id}/review", ['decision' => 'verified'])->assertRedirect();
 
@@ -180,7 +180,8 @@ class AccessAndFlowTest extends DomainTestCase
         $this->post("/admin/tasks/{$task->id}/inspect", ['accepted' => true])->assertRedirect();
         $this->assertSame('ready', $venice->fresh()->housekeeping_status);
 
-        $this->get('/admin/reports?from=2031-03-01&to=2031-03-31')->assertOk()->assertInertia(fn ($p) => $p
+        // From today, so the range holds both the payment (received now) and the stay (in 2031).
+        $this->get('/admin/reports?from='.\App\Support\Local::today().'&to=2031-03-31')->assertOk()->assertInertia(fn ($p) => $p
             ->where('kpis.earned_cents', 340000)
             ->where('kpis.collected_cents', 340000)
             ->where('kpis.occupied_room_nights', 2));

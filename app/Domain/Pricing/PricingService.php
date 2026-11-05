@@ -7,6 +7,7 @@ use App\Models\RateOverride;
 use App\Models\RateRule;
 use App\Models\Room;
 use App\Models\TaxRule;
+use App\Support\Money;
 use App\Support\Settings;
 use Carbon\CarbonImmutable;
 
@@ -15,7 +16,7 @@ class PricingService
     /**
      * Calculates a stay. All money is integer centavos.
      *
-     * @param  array{source_id?:?int, early_time?:?string, discount_cents?:int, discount_reason?:?string, parking_cents?:int, service_cents?:int}  $opts
+     * @param  array{source_id?:?int, early_time?:?string, discount_cents?:int, discount_reason?:?string, parking_cents?:int, parking_nights?:int, parking_rate_cents?:int, service_cents?:int}  $opts
      * @return array{lines: list<array>, nights: list<array>, total_cents: int, warnings: list<string>}
      */
     public function quote(Room $room, string $checkIn, string $checkOut, int $guests, array $opts = []): array
@@ -82,6 +83,21 @@ class PricingService
         // Worked out before parking, services and discounts, so repricing a stay gives the same tax.
         $taxable = array_sum(array_column($lines, 'amount_cents'));
 
+        $parkingNights = (int) ($opts['parking_nights'] ?? 0);
+        if ($parkingNights > count($nights)) {
+            throw new RoomConflict('Parking nights cannot be more than the nights in the stay.');
+        }
+        if ($parkingNights > 0 && ($opts['parking_rate_cents'] ?? 0) > 0) {
+            $rate = (int) $opts['parking_rate_cents'];
+            $lines[] = [
+                'type' => 'parking',
+                'description' => 'Parking ('.$parkingNights.' '.($parkingNights === 1 ? 'night' : 'nights').' × '.Money::plain($rate).')',
+                'quantity' => $parkingNights,
+                'unit_cents' => $rate,
+                'amount_cents' => $parkingNights * $rate,
+                'charge_date' => $checkIn,
+            ];
+        }
         if (($opts['parking_cents'] ?? 0) > 0) {
             $lines[] = ['type' => 'parking', 'description' => 'Parking', 'quantity' => 1, 'unit_cents' => $opts['parking_cents'], 'amount_cents' => $opts['parking_cents'], 'charge_date' => $checkIn];
         }

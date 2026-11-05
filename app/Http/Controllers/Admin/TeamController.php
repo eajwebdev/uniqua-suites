@@ -17,11 +17,13 @@ use Inertia\Inertia;
 
 class TeamController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
+        $editor = $request->user();
+
         return Inertia::render('Admin/Resource', [
             'title' => 'Team & Permissions',
-            'subtitle' => 'Click a name to choose the pages that person can open. Invited staff set their own password through a reset link. Deactivating removes access on the next request.',
+            'subtitle' => 'Click a name to choose the pages that person can open. '.(config('mail.default') === 'log' ? 'New staff get a temporary password to hand over, shown once.' : 'Invited staff set their own password through a reset link.').' Deactivating removes access on the next request.',
             'columns' => [['key' => 'name', 'label' => 'Name', 'type' => 'link'], ['key' => 'email', 'label' => 'Email'], ['key' => 'role', 'label' => 'Role'], ['key' => 'access', 'label' => 'Access'], ['key' => 'state', 'label' => 'Status', 'type' => 'status'], ['key' => 'two_factor', 'label' => 'Two-factor']],
             'rows' => User::with('roles')->orderBy('name')->get()->map(fn ($u) => [
                 'id' => $u->id,
@@ -31,12 +33,19 @@ class TeamController extends Controller
                 'access' => $this->accessLabel($u),
                 'state' => $u->is_active ? 'active' : 'deactivated',
                 'two_factor' => $u->hasTwoFactor() ? 'On' : 'Off',
-                '_actions' => $u->hasTwoFactor() ? [[
-                    'label' => 'Reset two-factor',
-                    'url' => "/admin/team/{$u->id}/reset-two-factor",
-                    'confirm' => "Turn off two-factor sign-in for {$u->name}? Use this only after confirming their identity, for example a lost phone.",
-                    'variant' => 'danger',
-                ]] : [],
+                '_actions' => [
+                    ...($this->mayIssuePassword($editor, $u) ? [[
+                        'label' => 'Temporary password',
+                        'url' => "/admin/team/{$u->id}/temporary-password",
+                        'confirm' => "Create a new password for {$u->name}? Their current password stops working and they are signed out everywhere.",
+                    ]] : []),
+                    ...($u->hasTwoFactor() ? [[
+                        'label' => 'Reset two-factor',
+                        'url' => "/admin/team/{$u->id}/reset-two-factor",
+                        'confirm' => "Turn off two-factor sign-in for {$u->name}? Use this only after confirming their identity, for example a lost phone.",
+                        'variant' => 'danger',
+                    ]] : []),
+                ],
             ]),
             'headerLink' => ['label' => 'Invite staff', 'href' => '/admin/team/create'],
         ]);
@@ -70,10 +79,33 @@ class TeamController extends Controller
 
         $user = User::create(['name' => $data['name'], 'email' => $data['email'], 'password' => Str::random(40)]);
         Permissions::apply($user, $data['role'], $pages);
-        Password::sendResetLink(['email' => $user->email]);
         Audit::log('team.invited', $user, ['role' => $data['role'], 'pages' => $pages]);
 
+        // While mail only goes to the log file an invitation reaches nobody, so hand over a password instead.
+        if (config('mail.default') === 'log') {
+            return redirect('/admin/team')->with('credential', $this->issueTemporaryPassword($user));
+        }
+        Password::sendResetLink(['email' => $user->email]);
+
         return redirect('/admin/team')->with('success', "Invitation sent to {$user->email}.");
+    }
+
+    public function temporaryPassword(Request $request, User $user)
+    {
+        $this->assertCanManage($request->user(), $user);
+        abort_if($request->user()->is($user), 403, 'Change your own password under Account.');
+        Audit::log('team.temporary_password', $user);
+
+        return back()->with('credential', $this->issueTemporaryPassword($user));
+    }
+
+    /** Only the hash is stored. The plain password appears once, for the person handing it over. */
+    private function issueTemporaryPassword(User $user): array
+    {
+        $password = Str::password(12, symbols: false);
+        $user->update(['password' => $password]);
+
+        return ['name' => $user->name, 'email' => $user->email, 'password' => $password];
     }
 
     public function update(Request $request, User $user)
@@ -141,12 +173,21 @@ class TeamController extends Controller
     /** Only an Owner may change an Owner, and only full-access people may change an Administrator. */
     private function assertCanManage(User $editor, User $target): void
     {
-        $allowed = match (true) {
+        abort_unless($this->mayManage($editor, $target), 403, "You cannot change {$target->name}'s access.");
+    }
+
+    private function mayManage(User $editor, User $target): bool
+    {
+        return match (true) {
             $target->hasRole('Owner') => $editor->hasRole('Owner'),
             $target->hasRole('Administrator') => $editor->hasAnyRole(Permissions::FULL_ACCESS),
             default => true,
         };
-        abort_unless($allowed, 403, "You cannot change {$target->name}'s access.");
+    }
+
+    private function mayIssuePassword(User $editor, User $target): bool
+    {
+        return ! $editor->is($target) && $this->mayManage($editor, $target);
     }
 
     /**

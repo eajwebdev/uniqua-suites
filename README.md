@@ -12,7 +12,7 @@ Booking, sales and property operations system for UNIQA SUITES, Cagayan de Oro. 
 
 The public site lets guests browse the suites and see which dates are taken. **Book Now** opens a chat with the official Facebook page only for free dates, re-checked live (`UNIQA_MESSENGER_URL=https://m.me/uniqasuitescdo` in `.env`; without it the buttons stay hidden). It shows no prices, and guests cannot reserve or pay on it. Staff find vacant units and prices on the quotation screen, send the quote and enter the booking.
 
-**Schedule conflicts** are stopped in layers: taken dates cannot be picked on the site; the server re-reads live inventory before Book Now unlocks; every staff action runs under a room lock that refuses any overlap; and `room_night_claims` has a unique key per room and night, so the database itself refuses a double booking. Holds count as taken until they expire. Committing a workbook import blocks its future stays on the calendar. Other channels are the exception: Airbnb does not ask this system, so connect its calendar under **Settings**, or its stays will not show. The dashboard and `uniqa:doctor` report any overlap.
+**Schedule conflicts** are stopped in layers: taken dates cannot be picked on the site; the server re-reads live inventory before Book Now unlocks; every staff action runs under a room lock that refuses any overlap; and `room_night_claims` has a unique key per room and night, so the database itself refuses a double booking. Holds count as taken until they expire. Other channels are the exception: Airbnb does not ask this system, so enter those stays promptly or they will not show. The dashboard and `uniqa:doctor` report any overlap.
 
 ## Verify the environment
 
@@ -60,7 +60,7 @@ Photos, current rates, capacities and amenities come from the flyers and HD phot
 | Queue worker | `php artisan queue:work` |
 | Scheduler | `php artisan schedule:work` |
 
-XAMPP does not run the scheduler for you. Hold expiry, daily alerts, month-end notices and calendar sync only happen while it is running, and the dashboard warns the owner if it has stopped. For a machine that should keep running, install it as a Windows scheduled task:
+XAMPP does not run the scheduler for you. Hold expiry, daily alerts, and month-end notices only happen while it is running, and the dashboard warns the owner if it has stopped. For a machine that should keep running, install it as a Windows scheduled task:
 
 ```powershell
 .\scripts\install-scheduler.ps1                # from an Administrator window

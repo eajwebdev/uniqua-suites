@@ -23,7 +23,7 @@ Do these in the system, under **Settings** and **Rooms**, unless noted.
 
 History is kept separate from live data. It never creates bookings, receipts or guests.
 
-1. Open **Import & Data Quality** and upload the sales workbook. Past rows then appear in **Reports > Sales recording**, labelled unverified.
+1. The former workbook import screen is retired. Keep the original sales workbook as an offline source record and enter every future stay as a normal reservation before go-live.
 2. Review the flagged rows. Decide what each room label means, especially 2221, 2510 and 14Q.
 3. Compare the month and room totals with the workbook. Differences are shown, not corrected.
 4. Commit the import. If it looks wrong, roll it back: re-importing the same file adds no duplicates.

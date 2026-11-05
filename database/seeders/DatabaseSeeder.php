@@ -8,7 +8,6 @@ use App\Models\InventoryItem;
 use App\Models\MessageTemplate;
 use App\Models\OwnerDecision;
 use App\Models\PaymentAccount;
-use App\Models\IntegrationHealth;
 use App\Models\ParkingSpace;
 use App\Models\Property;
 use App\Models\RateRule;
@@ -16,6 +15,7 @@ use App\Models\Room;
 use App\Models\RoomType;
 use App\Models\User;
 use App\Support\Permissions;
+use App\Support\OwnerDefaults;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
@@ -106,16 +106,13 @@ class DatabaseSeeder extends Seeder
             ParkingSpace::firstOrCreate(['property_id' => $property->id, 'code' => $code], ['rate_cents' => $rate, 'restrictions' => 'From PARKING DETAILS; confirm date and vendor before use']);
         }
 
-        foreach (['Airbnb iCal' => 'Not connected: no feed URL has been supplied.', 'Meta Messenger API' => 'Not connected: copy-and-send messages are used instead.', 'Payment gateway' => 'Not connected: out of scope; receipts are recorded by staff.'] as $provider => $detail) {
-            IntegrationHealth::firstOrCreate(['provider' => $provider], ['status' => 'not_connected', 'detail' => $detail]);
-        }
-
         $this->templates();
         $this->decisions();
 
         // Tests stay pinned to the room list's rates, and would otherwise copy every photo per test.
         if (! app()->environment('testing')) {
             $this->call(SuiteCatalogSeeder::class);
+            OwnerDefaults::apply();
         }
 
         if (! User::exists() && app()->environment('local')) {
@@ -130,7 +127,7 @@ class DatabaseSeeder extends Seeder
     {
         $templates = [
             'inquiry_response' => ['Inquiry response', "Hi {{guest}}! Thank you for your interest in UNIQA SUITES. {{room}} for {{check_in}} to {{check_out}} ({{guests}} guests) looks possible, subject to confirmation. May I send your quotation?"],
-            'quote' => ['Quotation', "Hi {{guest}}, here is your quotation for {{room}}:\n{{check_in}} to {{check_out}}, {{guests}} guests\nTotal: {{total}}\nThis quotation does not reserve the room until we confirm a hold or booking."],
+            'quote' => ['Quotation', OwnerDefaults::QUOTE_TEMPLATE],
             'confirmation' => ['Booking confirmation', "Hi {{guest}}, your booking {{reference}} is confirmed: {{room}}, {{check_in}} to {{check_out}}.\nTotal {{total}}, balance {{balance}}.\nStandard check-in is {{check_in_time}}."],
             'payment_instructions' => ['Payment instructions', "Hi {{guest}}, for booking {{reference}} the amount due is {{balance}}. Please send payment to the account we will share here, then send us your proof of payment. We will confirm once received."],
             'balance_reminder' => ['Balance reminder', "Hi {{guest}}, a reminder that booking {{reference}} ({{check_in}}) has a balance of {{balance}}."],

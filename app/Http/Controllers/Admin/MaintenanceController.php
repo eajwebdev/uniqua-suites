@@ -30,7 +30,7 @@ class MaintenanceController extends Controller
         $manager = $user->can('maintenance.manage');
         $rows = WorkOrder::with(['room:id,name', 'assignee:id,name', 'vendor:id,name'])
             ->when(! $manager, fn ($q) => $q->where('assigned_to', $user->id))
-            ->orderByRaw("FIELD(status,'open','in_progress','resolved','closed')")->orderByDesc('safety_block')->orderByDesc('id')->paginate(30);
+            ->orderByRaw("FIELD(status,'open','in_progress','resolved','closed')")->orderByDesc('safety_block')->orderByDesc('id')->paginate(15);
 
         return Inertia::render('Admin/Resource', [
             'title' => 'Maintenance',
@@ -122,7 +122,7 @@ class MaintenanceController extends Controller
     public function incidents(Request $request)
     {
         $user = $request->user();
-        $rows = Incident::with(['room:id,name', 'booking:id,reference', 'guest:id,full_name', 'evidence:id,incident_id'])->orderByDesc('id')->paginate(30);
+        $rows = Incident::with(['room:id,name', 'booking:id,reference', 'guest:id,full_name', 'evidence:id,incident_id'])->orderByDesc('id')->paginate(15);
 
         return Inertia::render('Admin/Resource', [
             'title' => 'Damage & incidents',

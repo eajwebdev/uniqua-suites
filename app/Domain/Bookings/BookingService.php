@@ -110,7 +110,9 @@ class BookingService
                 $this->event($fresh, Booking::TENTATIVE, Booking::TENTATIVE, 'Confirmed after hold lapse; availability rechecked');
             }
 
+            // An Airbnb guest paid Airbnb, and the payout arrives later: there is nothing to verify at this point.
             if (Settings::get('finance.require_verification_to_confirm')
+                && $fresh->source?->code !== 'airbnb'
                 && ! $fresh->receipts()->where('verification_status', 'verified')->exists()) {
                 throw new RoomConflict('Policy requires a verified payment before confirmation.');
             }
@@ -184,6 +186,7 @@ class BookingService
                 $this->reprice($fresh, $pricingOpts, $data['reason'] ?? 'Amendment');
             }
             $this->inventory->syncClaims($fresh);
+            $this->turnover->syncWaiting($fresh);
             $this->event($fresh, $fresh->status, $fresh->status, 'Amended: '.($data['reason'] ?? 'dates, rooms or party'));
             Audit::log('booking.amended', $fresh, ['check_in' => $checkIn, 'check_out' => $checkOut, 'room_ids' => $roomIds]);
 
@@ -201,6 +204,7 @@ class BookingService
             $from = $fresh->status;
             $fresh->update(['status' => Booking::CANCELLED, 'cancellation_reason' => $reason, 'hold_expires_at' => null]);
             $fresh->activeRooms()->update(['released_at' => now()]);
+            $this->turnover->syncWaiting($fresh);
             $this->event($fresh, $from, Booking::CANCELLED, $reason);
 
             return $fresh;
@@ -217,6 +221,7 @@ class BookingService
             $this->finance->assertStayOpen($fresh->check_in->toDateString(), $fresh->check_out->toDateString());
             $fresh->update(['status' => Booking::NO_SHOW]);
             $fresh->activeRooms()->update(['released_at' => now()]);
+            $this->turnover->syncWaiting($fresh);
             $this->event($fresh, Booking::CONFIRMED, Booking::NO_SHOW, $note ?? 'No show');
 
             return $fresh;
@@ -231,6 +236,12 @@ class BookingService
             foreach ($rooms as $room) {
                 if ($room->hasOpenSafetyBlock()) {
                     throw new RoomConflict("{$room->name} has an unresolved safety-critical work order.");
+                }
+                // A room can show as clean while its last guest has not left. No override: two parties cannot share a room.
+                $stillIn = Booking::where('status', Booking::CHECKED_IN)->whereKeyNot($fresh->id)
+                    ->whereHas('activeRooms', fn ($stay) => $stay->where('room_id', $room->id))->first();
+                if ($stillIn) {
+                    throw new RoomConflict("{$room->name} still has a guest checked in ({$stillIn->reference}). Check them out first.");
                 }
                 if ($room->housekeeping_status !== 'ready' && ! $overrideReadiness) {
                     throw new RoomConflict("{$room->name} is vacant but not ready (housekeeping: {$room->housekeeping_status}). Complete turnover and inspection first.");
@@ -248,15 +259,15 @@ class BookingService
     }
 
     /** Safe to retry: a repeated checkout returns without duplicating turnover work. */
-    public function checkOut(Booking $booking): Booking
+    public function checkOut(Booking $booking, ?string $note = null): Booking
     {
-        return $this->lockForBooking($booking, function ($fresh, $rooms) {
+        return $this->lockForBooking($booking, function ($fresh, $rooms) use ($note) {
             if ($fresh->status === Booking::CHECKED_OUT) {
                 return $fresh;
             }
             $this->assertStatus($fresh, [Booking::CHECKED_IN], 'check out');
             $fresh->update(['status' => Booking::CHECKED_OUT, 'actual_check_out_at' => now()]);
-            $this->event($fresh, Booking::CHECKED_IN, Booking::CHECKED_OUT, 'Checked out');
+            $this->event($fresh, Booking::CHECKED_IN, Booking::CHECKED_OUT, $note ?? 'Checked out');
 
             foreach ($rooms as $room) {
                 $this->turnover->onCheckout($fresh, $room);

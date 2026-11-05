@@ -18,6 +18,8 @@ class Settings
         'pricing.standard_check_in' => '14:00',
         'pricing.standard_check_out' => null, // source does not establish this
         'pricing.late_fee_cents_per_hour' => null,
+        'pricing.parking_night_cents' => 30000,
+        'finance.downpayment_percent' => 50, // 0 turns it off
         'holds.default_hours' => 24,
         'laundry.auto_create' => true,
         'finance.require_verification_to_confirm' => false,

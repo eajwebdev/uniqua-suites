@@ -2,7 +2,7 @@ import { Link, router, usePage } from '@inertiajs/react';
 import { ColumnDef, flexRender, getCoreRowModel, getSortedRowModel, SortingState, useReactTable } from '@tanstack/react-table';
 import { ArrowLeft, ArrowUpDown, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { ActionButton, Button, buttonClass, Empty, FieldDef, FormModal, Input, Pagination, RowAction, Select, Stat, StatusChip, Tabs } from '@/components/ui';
+import { ActionButton, Button, buttonClass, ClientPager, Empty, FieldDef, FormModal, Input, Pagination, RowAction, Select, Stat, StatusChip, Tabs, tableClass, tdClass, thClass, theadClass, trClass, usePaged } from '@/components/ui';
 import { dateOnly, dateTime, peso } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
 
@@ -16,7 +16,7 @@ type Props = {
     backHref?: string;
     tabs?: { label: string; href: string }[];
     columns: Column[];
-    rows: any[] | { data: any[]; links: any[] };
+    rows: any[] | { data: any[]; links: any[]; from?: number | null; to?: number | null; total?: number };
     create?: CreateDef | null;
     secondaryCreate?: CreateDef | null;
     headerLink?: { label: string; href: string };
@@ -44,7 +44,8 @@ function Cell({ column, value }: { column: Column; value: any }) {
                 <Link href={value.href} className="inline-block font-medium underline pointer-coarse:py-3">{value.label}</Link>
             );
         default:
-            return <span className="break-words">{value ?? '—'}</span>;
+            // Notes and descriptions stay readable in full rather than being cut off.
+            return String(value ?? '').length > 40 ? <span className="block w-64 whitespace-normal wrap-break-word">{value}</span> : <>{value ?? '—'}</>;
     }
 }
 
@@ -54,7 +55,8 @@ export default function Resource(props: Props) {
     const [sorting, setSorting] = useState<SortingState>([]);
     const [term, setTerm] = useState(props.search?.value ?? '');
     const rows = Array.isArray(props.rows) ? props.rows : props.rows.data;
-    const links = Array.isArray(props.rows) ? undefined : props.rows.links;
+    const paginator = Array.isArray(props.rows) ? undefined : props.rows;
+    const links = paginator?.links;
     const hasActions = rows.some((r) => r._actions?.length);
 
     const columns = useMemo<ColumnDef<any>[]>(() => {
@@ -70,7 +72,7 @@ export default function Resource(props: Props) {
                 header: () => <span className="sr-only">Actions</span>,
                 enableSorting: false,
                 cell: (info) => (
-                    <div className="flex justify-end gap-1.5">
+                    <div className="flex flex-nowrap justify-end gap-1">
                         {(info.row.original._actions as RowAction[] | undefined)?.map((a, i) => <ActionButton key={i} action={a} />)}
                     </div>
                 ),
@@ -80,6 +82,8 @@ export default function Resource(props: Props) {
     }, [props.columns, hasActions]);
 
     const table = useReactTable({ data: rows, columns, state: { sorting }, onSortingChange: setSorting, getCoreRowModel: getCoreRowModel(), getSortedRowModel: getSortedRowModel() });
+    // Lists the server pages already arrive as one page. Everything else pages here, after sorting.
+    const pager = usePaged(table.getRowModel().rows, { enabled: !links });
 
     function applyFilter(name: string, value: string) {
         router.get(path, { ...Object.fromEntries(new URLSearchParams(window.location.search)), [name]: value || undefined, page: undefined }, { preserveState: true, preserveScroll: true, replace: true });
@@ -130,18 +134,19 @@ export default function Resource(props: Props) {
                 </div>
             )}
 
-            <div className="relative overflow-x-auto rounded-xl border border-line/80 bg-white shadow-xs">
+            <div className="overflow-hidden rounded-xl border border-line/80 bg-white shadow-xs">
                 {rows.length === 0 ? (
                     <Empty>Nothing here yet.</Empty>
                 ) : (
-                    <table className="w-full text-left text-sm">
-                        <thead className="bg-ivory/70 text-xs text-muted">
+                    <div className="relative overflow-x-auto">
+                    <table className={tableClass}>
+                        <thead className={theadClass}>
                             {table.getHeaderGroups().map((hg) => (
                                 <tr key={hg.id}>
                                     {hg.headers.map((h) => (
-                                        <th key={h.id} scope="col" aria-sort={h.column.getIsSorted() === 'asc' ? 'ascending' : h.column.getIsSorted() === 'desc' ? 'descending' : undefined} className="px-4 py-2.5 font-medium whitespace-nowrap">
+                                        <th key={h.id} scope="col" aria-sort={h.column.getIsSorted() === 'asc' ? 'ascending' : h.column.getIsSorted() === 'desc' ? 'descending' : undefined} className={thClass}>
                                             {h.column.getCanSort() ? (
-                                                <button className="inline-flex items-center gap-1 pointer-coarse:min-h-11" onClick={h.column.getToggleSortingHandler()}>
+                                                <button className="inline-flex items-center gap-1 uppercase pointer-coarse:min-h-11" onClick={h.column.getToggleSortingHandler()}>
                                                     {flexRender(h.column.columnDef.header, h.getContext())} <ArrowUpDown size={11} aria-hidden />
                                                 </button>
                                             ) : (
@@ -153,18 +158,19 @@ export default function Resource(props: Props) {
                             ))}
                         </thead>
                         <tbody>
-                            {table.getRowModel().rows.map((row) => (
-                                <tr key={row.id} className="border-t border-line/70 align-top transition-colors hover:bg-ivory/60">
+                            {pager.rows.map((row) => (
+                                <tr key={row.id} className={trClass}>
                                     {row.getVisibleCells().map((cell) => (
-                                        <td key={cell.id} className="max-w-xs px-4 py-2.5">{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
+                                        <td key={cell.id} className={`max-w-xs ${tdClass}`}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
                                     ))}
                                 </tr>
                             ))}
                         </tbody>
                     </table>
+                    </div>
                 )}
+                {rows.length > 0 && (links ? <Pagination links={links} from={paginator?.from} to={paginator?.to} total={paginator?.total} /> : <ClientPager pager={pager} />)}
             </div>
-            <Pagination links={links} />
 
             {modal && <FormModal title={modal.label} url={modal.url} fields={modal.fields} confirm={modal.confirm} onClose={() => setModal(null)} />}
         </AdminLayout>

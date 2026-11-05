@@ -6,6 +6,9 @@ use Illuminate\Database\Eloquent\Model;
 
 class RoomBlock extends Model
 {
+    /** The owner closing for an event. One row per room, tied together by a shared external_uid. */
+    public const CLOSURE = 'closure';
+
     protected $guarded = [];
 
     protected $casts = [

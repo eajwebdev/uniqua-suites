@@ -3,7 +3,7 @@ import { CornerDownLeft, Search } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/components/ui';
 
-export type QuickItem = { label: string; href: string; icon: any; group: string };
+export type QuickItem = { label: string; href: string; icon: any; group: string; onSelect?: () => void };
 
 /** Find any page or person by typing, so nobody has to remember where things live. Ctrl+K opens it anywhere. */
 export default function QuickFind({ items, searches }: { items: QuickItem[]; searches: { label: string; href: (q: string) => string; icon: any }[] }) {
@@ -39,9 +39,10 @@ export default function QuickFind({ items, searches }: { items: QuickItem[]; sea
         return [...pages, ...people];
     }, [term, items, searches]);
 
-    const go = (href: string) => {
+    const go = (item: { href: string; onSelect?: () => void }) => {
         dialog.current?.close();
-        router.visit(href);
+        if (item.onSelect) item.onSelect();
+        else router.visit(item.href);
     };
 
     const current = Math.min(index, Math.max(results.length - 1, 0));
@@ -74,7 +75,11 @@ export default function QuickFind({ items, searches }: { items: QuickItem[]; sea
                                 e.preventDefault();
                                 setIndex((current - 1 + results.length) % Math.max(results.length, 1));
                             }
-                            if (e.key === 'Enter' && results[current]) go(results[current].href);
+                            if (e.key === 'Enter' && results[current]) {
+                                // Otherwise this same press lands on whatever takes focus next, such as a dialog's Close button.
+                                e.preventDefault();
+                                go(results[current]);
+                            }
                         }}
                         role="combobox"
                         aria-expanded
@@ -92,7 +97,7 @@ export default function QuickFind({ items, searches }: { items: QuickItem[]; sea
 
                         return (
                             <li key={r.href} id={`quick-find-${i}`} role="option" aria-selected={i === current}>
-                                <button type="button" tabIndex={-1} onMouseEnter={() => setIndex(i)} onClick={() => go(r.href)} className={cn('flex min-h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm', i === current && 'bg-beige')}>
+                                <button type="button" tabIndex={-1} onMouseEnter={() => setIndex(i)} onClick={() => go(r)} className={cn('flex min-h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm', i === current && 'bg-beige')}>
                                     <Icon size={16} strokeWidth={1.75} className="shrink-0 text-muted" aria-hidden />
                                     <span className="min-w-0 flex-1 truncate">{r.label}</span>
                                     <span className="text-xs text-muted">{r.group}</span>

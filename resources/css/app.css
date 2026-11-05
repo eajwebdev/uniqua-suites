@@ -102,6 +102,18 @@ label {
 
 dialog::backdrop {
     background: rgb(36 26 21 / 0.55);
+    backdrop-filter: blur(1px);
+}
+
+.dialog-pop[open] {
+    animation: dialog-pop 160ms ease-out;
+}
+
+@keyframes dialog-pop {
+    from {
+        opacity: 0;
+        transform: translateY(6px) scale(0.98);
+    }
 }
 
 @media (prefers-reduced-motion: reduce) {

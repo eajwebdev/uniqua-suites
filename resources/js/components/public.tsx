@@ -1,10 +1,20 @@
 import { Link, usePage } from '@inertiajs/react';
 import { ArrowRight, BriefcaseMedical, CalendarCheck, CalendarX, Check, ChevronLeft, ChevronRight, CookingPot, Dices, Dumbbell, Loader2, MessageCircle, Shirt, Tv, Waves, Wifi, Wind } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
-import { cn, Input, Modal } from '@/components/ui';
-import { shortDate } from '@/lib/format';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { cn, Input, Modal, Select } from '@/components/ui';
+import { shortDate, time12 } from '@/lib/format';
 
 export const PAGE_WIDTH = 'mx-auto w-full max-w-7xl px-5 sm:px-8';
+
+/** On a phone: a swipeable row that shows the next card peeking in. From tablet width: an ordinary grid. */
+export const SWIPE_ROW = '-mx-5 flex snap-x snap-mandatory scroll-px-5 gap-4 overflow-x-auto px-5 pb-3 sm:mx-0 sm:grid sm:snap-none sm:overflow-visible sm:px-0 sm:pb-0';
+export const SWIPE_CARD = 'w-[85%] max-w-[22rem] shrink-0 snap-start sm:w-auto sm:max-w-none';
+
+export function SwipeHint({ count }: { count: number }) {
+    if (count < 2) return null;
+
+    return <p className="mt-2 flex items-center gap-1.5 text-xs text-muted sm:hidden">Swipe to see all {count} suites <ArrowRight size={13} strokeWidth={1.5} aria-hidden /></p>;
+}
 
 const AMENITY_ICONS: Record<string, any> = {
     'Wi-Fi': Wifi,
@@ -36,9 +46,9 @@ export function useChatLink(): string | null {
 }
 
 /** Only m.me links can carry a first message, and the guest can still edit it before sending. */
-function chatAboutDates(url: string, room: string, checkIn: string, checkOut: string): string {
+function chatAboutDates(url: string, room: string, checkIn: string, checkOut: string, guests?: string): string {
     if (!/^https:\/\/(www\.)?m\.me\//.test(url)) return url;
-    const text = `Hi! I would like to book ${room}, check-in ${shortDate(checkIn)}, check-out ${shortDate(checkOut)}. Number of guests: `;
+    const text = `Hi! I would like to book ${room}, check-in ${shortDate(checkIn)}, check-out ${shortDate(checkOut)}. Number of guests: ${Number(guests) > 0 ? Number(guests) : ''}`;
 
     return `${url}${url.includes('?') ? '&' : '?'}text=${encodeURIComponent(text)}`;
 }
@@ -116,20 +126,21 @@ export function useStayDates() {
 }
 
 /** The guest's dates. Whatever lists suites beside it filters itself as soon as both are chosen. */
-export function DateFilter({ stay, className }: { stay: ReturnType<typeof useStayDates>; className?: string }) {
+export function DateFilter({ stay, className, bare }: { stay: ReturnType<typeof useStayDates>; className?: string; bare?: boolean }) {
     const today = todayInManila();
     const label = 'flex flex-col gap-1.5 text-xs font-medium tracking-[0.14em] text-muted uppercase';
-    const input = 'w-44 font-normal tracking-normal normal-case';
+    const input = 'w-full min-w-0 font-normal tracking-normal normal-case sm:w-44';
 
     return (
-        <div className={cn('flex flex-wrap items-end gap-x-4 gap-y-3', className)}>
-            <label className={label}>Your check-in
+        // Bare: the fields join a parent's own layout, as on the Suites filter panel.
+        <div className={cn(bare ? 'contents' : 'grid grid-cols-2 items-end gap-x-3 gap-y-3 sm:flex sm:flex-wrap sm:gap-x-4', className)}>
+            <label className={cn(label, 'min-w-0')}>Your check-in
                 <Input type="date" min={today} className={input} value={stay.checkIn} onChange={(e) => stay.setCheckIn(e.target.value)} />
             </label>
-            <label className={label}>Your check-out
+            <label className={cn(label, 'min-w-0')}>Your check-out
                 <Input type="date" min={stay.checkIn ? addDays(stay.checkIn, 1) : today} className={input} value={stay.checkOut} onChange={(e) => stay.setCheckOut(e.target.value)} />
             </label>
-            {(stay.checkIn || stay.checkOut) && <button type="button" onClick={stay.clear} className="min-h-11 text-sm font-medium text-bronze hover:underline">Clear dates</button>}
+            {(stay.checkIn || stay.checkOut) && <button type="button" onClick={stay.clear} className="col-span-2 min-h-11 justify-self-start text-sm font-medium text-bronze hover:underline">Clear dates</button>}
         </div>
     );
 }
@@ -203,7 +214,7 @@ export function MonthGrid({ room, month, checkIn, checkOut }: { room: any; month
  * Three checks stand between a guest and the chat: taken dates cannot be picked here, the server
  * re-reads live inventory before Book Now unlocks, and staff are still refused any overlap when they enter it.
  */
-export function BookingPanel({ room, initialIn = '', initialOut = '' }: { room: any; initialIn?: string; initialOut?: string }) {
+export function BookingPanel({ room, initialIn = '', initialOut = '', guests }: { room: any; initialIn?: string; initialOut?: string; guests?: string }) {
     const today = todayInManila();
     const chat = useChatLink();
     const taken = useMemo(() => takenNights(room), [room]);
@@ -287,7 +298,7 @@ export function BookingPanel({ room, initialIn = '', initialOut = '' }: { room: 
             </div>
 
             {result.state === 'free' && chat ? (
-                <a href={chatAboutDates(chat, room.name, checkIn, checkOut)} target="_blank" rel="noreferrer" aria-label={`Book ${room.name} now on Messenger`} className={cn(linkButton('dark'), 'mt-3 w-full')}>
+                <a href={chatAboutDates(chat, room.name, checkIn, checkOut, guests)} target="_blank" rel="noreferrer" aria-label={`Book ${room.name} now on Messenger`} className={cn(linkButton('dark'), 'mt-3 w-full')}>
                     <MessageCircle size={17} strokeWidth={1.5} aria-hidden /> Book Now
                 </a>
             ) : (
@@ -298,7 +309,7 @@ export function BookingPanel({ room, initialIn = '', initialOut = '' }: { room: 
     );
 }
 
-export function BookNow({ room, initialIn, initialOut, small = true, tone = 'dark', className }: { room: any; initialIn?: string; initialOut?: string; small?: boolean; tone?: keyof typeof BUTTON_TONES; className?: string }) {
+export function BookNow({ room, initialIn, initialOut, guests, small = true, tone = 'dark', className }: { room: any; initialIn?: string; initialOut?: string; guests?: string; small?: boolean; tone?: keyof typeof BUTTON_TONES; className?: string }) {
     const [open, setOpen] = useState(false);
 
     if (!useChatLink() || room.closed) return null;
@@ -308,7 +319,7 @@ export function BookNow({ room, initialIn, initialOut, small = true, tone = 'dar
             <button type="button" aria-label={`Book ${room.name} now: choose your dates`} onClick={() => setOpen(true)} className={cn(linkButton(tone, small), className)}>
                 <MessageCircle size={small ? 15 : 17} strokeWidth={1.5} aria-hidden /> Book Now
             </button>
-            {open && <Modal open title={`Book ${room.name}`} onClose={() => setOpen(false)}><BookingPanel room={room} initialIn={initialIn} initialOut={initialOut} /></Modal>}
+            {open && <Modal open title={`Book ${room.name}`} onClose={() => setOpen(false)}><BookingPanel room={room} initialIn={initialIn} initialOut={initialOut} guests={guests} /></Modal>}
         </>
     );
 }
@@ -340,28 +351,184 @@ export function SuitePhoto({ image, name, className, eager }: { image?: { url: s
     );
 }
 
-export function RoomCard({ room, feature, checkIn, checkOut }: { room: any; feature?: boolean; checkIn?: string; checkOut?: string }) {
-    const href = `/suites/${room.slug}`;
+export type SuiteFilters = { location: string; type: string; guests: string; bathrooms: string; balcony: boolean };
+
+const NO_FILTERS: SuiteFilters = { location: '', type: '', guests: '', bathrooms: '', balcony: false };
+
+export function roomMatches(room: any, f: SuiteFilters): boolean {
+    return (!f.location || room.location_slug === f.location)
+        && (!f.type || room.type_slug === f.type)
+        && (!f.guests || room.max_guests >= Number(f.guests))
+        && (!f.bathrooms || room.bathrooms >= Number(f.bathrooms))
+        && (!f.balcony || !!room.has_balcony);
+}
+
+/** Starts from the address, so a menu link or a shared link can open the list already narrowed. Filtering never reloads the page. */
+export function useSuiteFilters() {
+    const [filters, setFilters] = useState<SuiteFilters>(() => {
+        const q = new URLSearchParams(window.location.search);
+
+        return { location: q.get('location') ?? '', type: q.get('type') ?? '', guests: q.get('guests') ?? '', bathrooms: q.get('bathrooms') ?? '', balcony: q.get('balcony') === '1' };
+    });
+
+    useEffect(() => {
+        const q = new URLSearchParams();
+        Object.entries(filters).forEach(([key, value]) => {
+            if (value) q.set(key, value === true ? '1' : String(value));
+        });
+        const search = q.toString();
+        window.history.replaceState(window.history.state, '', `${window.location.pathname}${search ? `?${search}` : ''}${window.location.hash}`);
+    }, [filters]);
+
+    return {
+        filters,
+        setFilter: (key: keyof SuiteFilters, value: string | boolean) => setFilters((current) => ({ ...current, [key]: value })),
+        clearFilters: () => setFilters(NO_FILTERS),
+        active: Object.values(filters).some(Boolean),
+    };
+}
+
+const FILTER_LABEL = 'flex min-w-0 flex-col gap-1.5 text-xs font-medium tracking-[0.14em] text-muted uppercase [&>*]:font-normal [&>*]:tracking-normal [&>*]:normal-case';
+
+export function SuiteFilterPanel({ stay, filters, setFilter, properties, types, className }: { stay: ReturnType<typeof useStayDates>; filters: SuiteFilters; setFilter: (key: keyof SuiteFilters, value: string | boolean) => void; properties: any[]; types: any[]; className?: string }) {
+    return (
+        <div className={cn('grid grid-cols-2 items-end gap-x-3 gap-y-4 border border-line bg-white p-4 sm:flex sm:flex-wrap sm:gap-x-5 sm:p-5', className)}>
+            <DateFilter stay={stay} bare />
+            <label className={FILTER_LABEL}>Location
+                <Select className="w-full sm:w-auto sm:min-w-44" placeholder="Any" options={properties.map((p: any) => ({ value: p.slug, label: p.name }))} value={filters.location} onChange={(e) => setFilter('location', e.target.value)} />
+            </label>
+            <label className={FILTER_LABEL}>Type
+                <Select className="w-full sm:w-auto sm:min-w-36" placeholder="Any" options={types.map((t: any) => ({ value: t.slug, label: t.name }))} value={filters.type} onChange={(e) => setFilter('type', e.target.value)} />
+            </label>
+            <label className={FILTER_LABEL}>Guests
+                <Input type="number" min={1} max={20} inputMode="numeric" className="w-full sm:w-20" value={filters.guests} onChange={(e) => setFilter('guests', e.target.value)} />
+            </label>
+            <label className={FILTER_LABEL}>Bathrooms
+                <Select className="w-full sm:w-auto sm:min-w-24" placeholder="Any" options={[{ value: 1, label: '1+' }, { value: 2, label: '2+' }]} value={filters.bathrooms} onChange={(e) => setFilter('bathrooms', e.target.value)} />
+            </label>
+            <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={filters.balcony} onChange={(e) => setFilter('balcony', e.target.checked)} /> Balcony</label>
+        </div>
+    );
+}
+
+const SWIPE_PHOTO_PX = 40;
+
+function PhotoViewer({ images, name }: { images: { url: string; alt: string }[]; name: string }) {
+    const [index, setIndex] = useState(0);
+    const touchStart = useRef<number | null>(null);
+    const many = images.length > 1;
+    const step = (by: number) => setIndex((current) => (current + by + images.length) % images.length);
+
+    if (images.length === 0) return <SuitePhoto name={name} className="aspect-[3/2]" />;
 
     return (
-        <article className={cn('group flex flex-col', feature && 'lg:grid lg:grid-cols-12 lg:items-center lg:gap-14')}>
-            <Link href={href} className={cn('block', feature && 'lg:col-span-8')} tabIndex={-1} aria-hidden>
+        <div>
+            <div
+                className="relative"
+                onTouchStart={(e) => { touchStart.current = e.touches[0].clientX; }}
+                onTouchEnd={(e) => {
+                    if (touchStart.current === null) return;
+                    const moved = e.changedTouches[0].clientX - touchStart.current;
+                    touchStart.current = null;
+                    if (many && Math.abs(moved) > SWIPE_PHOTO_PX) step(moved < 0 ? 1 : -1);
+                }}
+            >
+                <SuitePhoto key={images[index].url} image={images[index]} name={name} eager className="aspect-[3/2]" />
+                {many && (
+                    <>
+                        <button type="button" onClick={() => step(-1)} aria-label="Previous photo" className="absolute top-1/2 left-2 flex size-11 -translate-y-1/2 items-center justify-center rounded-full bg-chocolate/70 text-ivory transition-colors hover:bg-chocolate"><ChevronLeft size={22} strokeWidth={1.5} aria-hidden /></button>
+                        <button type="button" onClick={() => step(1)} aria-label="Next photo" className="absolute top-1/2 right-2 flex size-11 -translate-y-1/2 items-center justify-center rounded-full bg-chocolate/70 text-ivory transition-colors hover:bg-chocolate"><ChevronRight size={22} strokeWidth={1.5} aria-hidden /></button>
+                        <p className="absolute right-2 bottom-2 rounded-full bg-chocolate/70 px-2.5 py-0.5 text-xs text-ivory" aria-live="polite">{index + 1} of {images.length}</p>
+                    </>
+                )}
+            </div>
+            {many && (
+                <ul className="mt-2 flex gap-2 overflow-x-auto pb-1">
+                    {images.map((image, n) => (
+                        <li key={image.url} className="shrink-0">
+                            <button type="button" onClick={() => setIndex(n)} aria-label={`Show photo ${n + 1}: ${image.alt}`} aria-current={n === index ? 'true' : undefined} className={cn('block w-20 overflow-hidden border-2 transition-opacity', n === index ? 'border-gold-dark' : 'border-transparent opacity-70 hover:opacity-100')}>
+                                <SuitePhoto image={image} name={name} className="aspect-[4/3]" />
+                            </button>
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </div>
+    );
+}
+
+/** Everything about a suite, without leaving the list. */
+function SuiteDetails({ room, checkIn, checkOut, guests, onClose }: { room: any; checkIn?: string; checkOut?: string; guests?: string; onClose: () => void }) {
+    const { policy } = usePage<any>().props as any;
+
+    return (
+        <Modal open wide title={room.name} onClose={onClose}>
+            <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_20rem]">
+                <div className="min-w-0 space-y-5">
+                    <PhotoViewer images={room.images ?? []} name={room.name} />
+                    <div>
+                        <Eyebrow className="mb-2 tracking-[0.22em]">{room.location}</Eyebrow>
+                        {room.description && <p className="font-serif text-xl leading-snug font-light sm:text-2xl">{room.description}</p>}
+                    </div>
+                    <ul className="flex flex-wrap gap-x-5 gap-y-1 border-y border-line py-3 text-sm">
+                        {roomFacts(room).map((fact) => <li key={fact}>{fact}</li>)}
+                    </ul>
+                    {room.inclusions && (
+                        <section>
+                            <h3 className="mb-1 font-serif text-xl font-normal">Beds and inclusions</h3>
+                            <p className="text-sm leading-relaxed whitespace-pre-line text-muted">{room.inclusions}</p>
+                        </section>
+                    )}
+                    {room.amenities?.length > 0 && (
+                        <section>
+                            <h3 className="mb-2 font-serif text-xl font-normal">Amenities</h3>
+                            <ul className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                                {room.amenities.map((name: string) => <li key={name} className="flex items-center gap-2"><AmenityIcon name={name} size={18} className="shrink-0 text-bronze" /> {name}</li>)}
+                            </ul>
+                        </section>
+                    )}
+                    {policy && (
+                        <section>
+                            <h3 className="mb-1 font-serif text-xl font-normal">Check-in</h3>
+                            <p className="text-sm leading-relaxed text-muted">Standard check-in: {time12(policy.standard_check_in)}{policy.standard_check_out ? ` · Check-out: ${time12(policy.standard_check_out)}` : ''}. Need to arrive earlier? Please ask us.</p>
+                            {room.policies && <p className="mt-1 text-sm whitespace-pre-line text-muted">{room.policies}</p>}
+                        </section>
+                    )}
+                </div>
+                <aside className="min-w-0 md:sticky md:top-0 md:self-start">
+                    <div className="border border-line bg-ivory/40 p-4">
+                        <h3 className="mb-2 font-serif text-xl font-normal">Check dates and book</h3>
+                        <BookingPanel room={room} initialIn={checkIn} initialOut={checkOut} guests={guests} />
+                    </div>
+                </aside>
+            </div>
+        </Modal>
+    );
+}
+
+export function RoomCard({ room, feature, checkIn, checkOut, guests }: { room: any; feature?: boolean; checkIn?: string; checkOut?: string; guests?: string }) {
+    const [viewing, setViewing] = useState(false);
+
+    return (
+        <article className={cn('group flex flex-1 flex-col', feature && 'lg:grid lg:grid-cols-12 lg:items-center lg:gap-14')}>
+            <button type="button" onClick={() => setViewing(true)} aria-label={`View ${room.name} photos and details`} className={cn('block w-full text-left', feature && 'lg:col-span-8')}>
                 <SuitePhoto image={room.images?.[0]} name={room.name} className={feature ? 'aspect-[3/2] lg:aspect-[16/9]' : 'aspect-[3/2]'} />
-            </Link>
+            </button>
             <div className={cn('flex flex-1 flex-col pt-5', feature && 'lg:col-span-4 lg:pt-0')}>
                 <Eyebrow className="mb-2 tracking-[0.22em]">{room.location}</Eyebrow>
                 <h3 className={cn('font-serif font-normal tracking-[0.08em] uppercase', feature ? 'text-4xl sm:text-5xl' : 'text-3xl')}>
-                    <Link href={href} className="inline-block transition-colors hover:text-bronze pointer-coarse:py-1">{room.name}</Link>
+                    <button type="button" onClick={() => setViewing(true)} className="text-left tracking-[inherit] uppercase transition-colors hover:text-bronze pointer-coarse:py-1">{room.name}</button>
                 </h3>
                 {room.description && <p className={cn('mt-2 text-muted', feature ? 'text-base leading-relaxed' : 'text-sm leading-relaxed')}>{room.description}</p>}
                 <p className="mt-2 text-sm text-muted">{roomFacts(room).join(' · ')}</p>
                 <div className="mt-auto flex flex-wrap items-center gap-x-6 gap-y-2 pt-5">
-                    <BookNow key={`${checkIn}-${checkOut}`} room={room} initialIn={checkIn} initialOut={checkOut} />
-                    <Link href={href} className="inline-flex items-center gap-1.5 text-[0.8125rem] font-medium tracking-[0.14em] uppercase transition-colors hover:text-bronze pointer-coarse:min-h-11" aria-label={`View ${room.name}`}>
+                    <BookNow key={`${checkIn}-${checkOut}`} room={room} initialIn={checkIn} initialOut={checkOut} guests={guests} />
+                    <button type="button" onClick={() => setViewing(true)} aria-label={`View ${room.name}`} className="inline-flex items-center gap-1.5 text-[0.8125rem] font-medium tracking-[0.14em] uppercase transition-colors hover:text-bronze pointer-coarse:min-h-11">
                         View suite <ArrowRight size={14} strokeWidth={1.5} aria-hidden />
-                    </Link>
+                    </button>
                 </div>
             </div>
+            {viewing && <SuiteDetails room={room} checkIn={checkIn} checkOut={checkOut} guests={guests} onClose={() => setViewing(false)} />}
         </article>
     );
 }

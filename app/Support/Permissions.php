@@ -21,7 +21,6 @@ class Permissions
         'parking.view', 'parking.manage',
         'secrets.reveal', 'secrets.manage',
         'advances.manage',
-        'imports.manage',
         'team.manage', 'settings.manage', 'audit.view',
     ];
 
@@ -49,7 +48,6 @@ class Permissions
         'expenses' => ['Expenses & Cashbook', 'Pages', ['expenses.view', 'expenses.manage']],
         'reports' => ['Reports', 'Pages', ['reports.view']],
         'advances' => ['Staff Advances', 'Pages', ['advances.manage']],
-        'imports' => ['Import & Data Quality', 'Pages', ['imports.manage']],
         'team' => ['Team & Permissions', 'Pages', ['team.manage']],
         'settings' => ['Settings', 'Pages', ['settings.manage']],
         'audit' => ['Audit Log', 'Pages', ['audit.view']],

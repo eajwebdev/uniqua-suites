@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>UNIQA SUITES — Owner’s System Handbook</title>
+<style>
+  :root{--ink:#2c201a;--muted:#6e625b;--gold:#b6914b;--cream:#f7f2e8;--line:#ded5c8;--green:#276749;--red:#9b2c2c;--blue:#285e8e}
+  *{box-sizing:border-box} html{font-family:Arial,"Segoe UI",sans-serif;color:var(--ink);font-size:10.2pt;line-height:1.46}
+  body{margin:0;background:#fff} h1,h2,h3,h4{font-family:Georgia,"Times New Roman",serif;margin:0;color:var(--ink);line-height:1.15}
+  h1{font-size:34pt;letter-spacing:-.02em} h2{font-size:22pt;border-bottom:2px solid var(--gold);padding-bottom:7px;margin-bottom:14px}
+  h3{font-size:15pt;margin:19px 0 7px} h4{font-size:11.5pt;margin:13px 0 4px} p{margin:0 0 8px} ul,ol{margin:5px 0 10px;padding-left:21px} li{margin:3px 0}
+  .cover{height:263mm;padding:25mm 20mm;position:relative;background:linear-gradient(145deg,#241813 0 48%,#3a2921 48% 67%,#f7f2e8 67%);color:#fff;page-break-after:always}
+  .cover img{width:72mm;height:auto;margin-bottom:25mm}.cover h1{color:#fff;max-width:145mm}.cover .kicker{color:#ddbd79;text-transform:uppercase;letter-spacing:.18em;font-size:9pt;font-weight:700;margin-bottom:10px}
+  .cover .subtitle{font-size:15pt;max-width:135mm;margin-top:15px;color:#efe7dc}.cover .meta{position:absolute;bottom:24mm;left:20mm;color:#3a2921;font-size:10pt}.cover .edition{font-weight:700;color:#7b5b28}
+  main{padding:0 3mm}.chapter{page-break-before:always}.chapter.first{page-break-before:auto}.eyebrow{text-transform:uppercase;letter-spacing:.14em;color:#8a6a32;font-size:8pt;font-weight:700;margin-bottom:5px}
+  .lead{font-size:12pt;color:#4b3d35;margin-bottom:14px}.callout{border-left:4px solid var(--gold);background:var(--cream);padding:10px 12px;margin:12px 0;break-inside:avoid}
+  .warning{border-color:var(--red);background:#fff5f5}.success{border-color:var(--green);background:#f0fff4}.info{border-color:var(--blue);background:#f2f8fc}
+  .module{border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:11px 0;break-inside:avoid}.module h3{margin:0 0 6px}.purpose{font-weight:700;color:#7b5b28}
+  table{width:100%;border-collapse:collapse;margin:8px 0 14px;font-size:9.2pt;break-inside:auto} tr{break-inside:avoid} th{background:#33241d;color:#fff;text-align:left;padding:7px 8px;font-size:8.5pt} td{border:1px solid var(--line);padding:7px 8px;vertical-align:top} tr:nth-child(even) td{background:#fbf8f2}
+  .toc{columns:2;column-gap:18mm}.toc ol{list-style:none;padding:0}.toc li{border-bottom:1px dotted #b7aa9c;padding:5px 0;break-inside:avoid}.toc .num{display:inline-block;width:8mm;color:#9b7939;font-weight:700}
+  .workflow{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:10px 0}.step{border:1px solid var(--line);padding:9px;border-radius:7px;background:#fff}.step b{display:block;color:#8a6a32;margin-bottom:3px}
+  .pill{display:inline-block;border:1px solid var(--line);border-radius:99px;padding:1px 7px;font-size:8.5pt;background:#fff}.small{font-size:8.5pt;color:var(--muted)}
+  .checklist{list-style:none;padding-left:0}.checklist li{padding-left:19px;position:relative}.checklist li:before{content:"□";position:absolute;left:0;color:#8a6a32;font-weight:700}
+  .avoid{break-inside:avoid}.page-note{font-size:8.5pt;color:var(--muted);border-top:1px solid var(--line);padding-top:6px;margin-top:12px}
+  header.print-header{position:fixed;top:-13mm;left:0;right:0;height:8mm;border-bottom:1px solid var(--line);font-size:8pt;color:var(--muted);display:flex;justify-content:space-between;align-items:center}
+  footer{position:fixed;bottom:-13mm;left:0;right:0;height:8mm;border-top:1px solid var(--line);font-size:8pt;color:var(--muted);display:flex;justify-content:space-between;align-items:center}
+  @page{size:A4;margin:18mm 16mm 19mm} @page:first{margin:0}
+  @media print{.cover{margin:-18mm -16mm -19mm}.no-print{display:none}}
+</style>
+</head>
+<body>
+<header class="print-header"><span>UNIQA SUITES</span><span>Owner’s System Handbook</span></header>
+<footer><span>Confidential — Owner Operations</span><span>Edition 1.0 · 5 November 2026</span></footer>
+
+<section class="cover">
+  <img src="../public/brand/uniqa-wordmark.png" alt="UNIQA SUITES">
+  <div class="kicker">Owner operations manual</div>
+  <h1>Owner’s System Handbook</h1>
+  <p class="subtitle">A practical guide to managing bookings, rooms, people, operations, finances, controls and policy settings.</p>
+  <div class="meta"><div class="edition">EDITION 1.0</div><div>Prepared for UNIQA SUITES ownership</div><div>5 November 2026</div></div>
+</section>
+
+<main>
+<section class="chapter first">
+  <div class="eyebrow">How to use this handbook</div><h2>Purpose and scope</h2>
+  <p class="lead">This handbook explains every active owner-side module in the UNIQA SUITES system. It focuses on what each page is for, what the Owner can control, how information flows between modules, and which decisions require extra care.</p>
+  <div class="callout info"><strong>Owner access.</strong> The Owner role has full access to all active operational and administrative pages. Staff see only the pages and actions assigned to them. “Import &amp; Data Quality” has been retired and is intentionally excluded from this handbook.</div>
+  <h3>Table of contents</h3>
+  <div class="toc"><ol>
+    <li><span class="num">01</span>System navigation and control principles</li><li><span class="num">02</span>Dashboard</li><li><span class="num">03</span>Booking Calendar</li><li><span class="num">04</span>Reservations &amp; Inquiries</li><li><span class="num">05</span>Quotes &amp; Messages</li><li><span class="num">06</span>Guests</li><li><span class="num">07</span>Rooms &amp; Properties</li><li><span class="num">08</span>Cleaning &amp; Laundry</li><li><span class="num">09</span>Maintenance &amp; Damage</li><li><span class="num">10</span>Inventory</li><li><span class="num">11</span>Parking</li><li><span class="num">12</span>Payments, Settlements &amp; Reconciliation</li><li><span class="num">13</span>Expenses &amp; Cashbook</li><li><span class="num">14</span>Reports &amp; Analytics</li><li><span class="num">15</span>Staff Advances</li><li><span class="num">16</span>Team &amp; Permissions</li><li><span class="num">17</span>Settings</li><li><span class="num">18</span>Audit Log</li><li><span class="num">19</span>Account &amp; Notifications</li><li><span class="num">20</span>Owner operating routines</li>
+  </ol></div>
+  <h3>Core control principles</h3>
+  <ul>
+    <li><strong>Availability is authoritative.</strong> Holds, confirmed stays, room blocks and safety closures prevent overlapping occupancy.</li>
+    <li><strong>Confirmed prices are snapshots.</strong> Later changes to rates or policies affect new quotes and repriced bookings, not an already confirmed price.</li>
+    <li><strong>Evidence is not settlement.</strong> A payment screenshot is recorded first and counts only after verification. A platform-paid booking becomes cash only when the channel payout arrives.</li>
+    <li><strong>Corrections preserve history.</strong> Financial mistakes are reversed with a new opposite entry; originals remain visible.</li>
+    <li><strong>Permissions follow the person.</strong> Pages and sensitive actions can be granted individually. Owners and Administrators retain full access.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">Chapter 1</div><h2>Navigation and common tools</h2>
+  <table><thead><tr><th>Tool</th><th>What it does</th><th>Owner guidance</th></tr></thead><tbody>
+    <tr><td>Left menu</td><td>Groups the system into Bookings, Property, Money and Admin.</td><td>Use the group structure as the operating sequence: sell the stay, prepare the property, account for money, then review controls.</td></tr>
+    <tr><td>Quick Find / Ctrl+K</td><td>Opens pages and searches guests or bookings.</td><td>Use a guest name or booking reference to move directly to the relevant record.</td></tr>
+    <tr><td>New booking</td><td>Starts a booking from the global command or an empty calendar date.</td><td>Enter dates first so the system can disable unavailable rooms before selection.</td></tr>
+    <tr><td>Notification bell</td><td>Shows unread operational alerts and links to the affected record.</td><td>Review alerts at the start and end of each working day.</td></tr>
+    <tr><td>Account menu</td><td>Controls password, two-factor security, recovery codes and notification preferences.</td><td>Keep two-factor authentication enabled and recovery codes stored securely offline.</td></tr>
+  </tbody></table>
+  <div class="callout warning"><strong>Important:</strong> The system prepares messages and records actions; it does not automatically send a guest message or transfer money. The person responsible must still send the message or complete the real-world payment.</div>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">Chapter 2</div><h2>Dashboard</h2>
+  <p class="lead">The Dashboard is the Owner’s control center. It summarizes current activity, highlights matters requiring attention, and provides performance views without changing underlying records.</p>
+  <table><thead><tr><th>Dashboard tab</th><th>Owner interpretation</th></tr></thead><tbody>
+    <tr><td>Overview</td><td>Today’s arrivals and departures, room readiness, money at a glance, 14-day occupancy, upcoming activity, booking-source mix and decisions waiting for action.</td></tr>
+    <tr><td>Bookings</td><td>Reservation volume, status mix, lead time and booking performance for the selected period.</td></tr>
+    <tr><td>Rooms</td><td>Live room state, occupancy by room and month, room performance and the next 14 days of demand.</td></tr>
+    <tr><td>Income</td><td>Earned revenue, verified collections, channel inflows, refunds and the largest unpaid balances.</td></tr>
+    <tr><td>Expenses</td><td>Expense totals by category and room, monthly movement, bills still unpaid and major cost items.</td></tr>
+    <tr><td>Operations</td><td>Cleaning progress, urgent repairs, supply shortages and team workload indicators.</td></tr>
+  </tbody></table>
+  <p><strong>Period filters:</strong> This month, last month and the last 90 days. “Earned,” “collected” and “expenses” use different date bases and should not be expected to match exactly.</p>
+  <div class="callout success"><strong>Recommended daily use:</strong> Begin with “Action needed,” then check arrivals, departures, rooms not ready, unpaid balances, open repairs and low inventory. Open the underlying record before making a decision.</div>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">Chapters 3–6</div><h2>Bookings and guest management</h2>
+  <div class="module"><h3>Booking Calendar</h3><p><span class="purpose">Purpose:</span> A visual timeline of room occupancy, holds, blocks and operational status.</p><ul><li>Move between date ranges and properties, then read each room across the timeline.</li><li>Click a stay to open the booking. Click an empty date to begin a booking for that room.</li><li>Use room blocks for maintenance, owner use or other periods when a room must not be sold.</li><li>Housekeeping indicators show whether a room is ready, dirty, in progress or awaiting inspection.</li></ul><p class="small">The calendar is a planning view; booking, hold and room-block records are the controls that actually protect dates.</p></div>
+  <div class="module"><h3>Reservations &amp; Inquiries</h3><p><span class="purpose">Purpose:</span> The complete reservation register, from first inquiry through checkout or cancellation.</p><ul><li><strong>Inquiry:</strong> records interest but does not reserve dates.</li><li><strong>Tentative/hold:</strong> protects selected dates until the configured expiry time.</li><li><strong>Confirmed:</strong> commits the room and stores the price snapshot.</li><li><strong>Checked in / checked out:</strong> controls the live stay and triggers turnover work.</li><li><strong>Cancelled / no-show:</strong> records the outcome while preserving history.</li></ul><p>The booking detail page brings together stay information, charges, balance, receipts, refunds, parking, copy-ready guest messages and the complete status history. Amend dates, rooms or party size through the booking action so conflicts and repricing are rechecked.</p></div>
+  <div class="module"><h3>Quotes &amp; Messages</h3><p><span class="purpose">Purpose:</span> Calculate an accurate proposal for available rooms and create consistent guest-facing wording.</p><ol><li>Enter stay dates, guest count, source and optional extras.</li><li>Review every vacant unit and the calculated price; unavailable units state the reason.</li><li>Select the preferred room, inspect the line-by-line estimate, then save the quote.</li><li>Copy the message for Messenger or produce the quote PDF.</li><li>Create a booking when the guest proceeds.</li></ol><p>Updating a saved quote creates a new version under the same reference. Earlier versions remain available. A quote alone never reserves a room.</p></div>
+  <div class="module"><h3>Guests</h3><p><span class="purpose">Purpose:</span> Maintain reusable guest contact and identity information with links to booking history.</p><ul><li>Search by name or contact details; open a guest record to review related stays.</li><li>Keep one accurate profile per guest wherever possible to avoid fragmented history.</li><li>Update contact information carefully; do not place sensitive data in general notes unless operationally necessary.</li></ul></div>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">Chapter 7</div><h2>Rooms &amp; Properties</h2>
+  <p class="lead">This module is the master catalog for each saleable suite. It controls what staff can book, what the public site can display, and how nightly prices are calculated.</p>
+  <table><thead><tr><th>Area</th><th>Owner control</th></tr></thead><tbody>
+    <tr><td>Room details</td><td>Name, unit code, property, floor, capacity, included guests, description, amenities and room-level stay limits.</td></tr>
+    <tr><td>Approval and publishing</td><td>Approval confirms the catalog record; publishing makes an approved room visible on the public site.</td></tr>
+    <tr><td>Effective-dated rates</td><td>Weekday and weekend rates beginning on a stated date. New rules preserve earlier pricing history.</td></tr>
+    <tr><td>Season, promotion and channel overrides</td><td>Temporary nightly prices for a date range, optionally limited to a booking source. A matching override takes priority over the standard rate.</td></tr>
+    <tr><td>Room blocks</td><td>Prevent sale for maintenance, owner use or another stated reason. Releasing the block returns the dates to availability.</td></tr>
+    <tr><td>Photos</td><td>Manage the images presented to staff and, for published rooms, to public visitors.</td></tr>
+    <tr><td>Wi-Fi and access</td><td>Restricted secrets available only to specifically authorized people. Secrets are encrypted using the application key.</td></tr>
+  </tbody></table>
+  <div class="callout warning"><strong>Rate-change rule:</strong> Never edit history by overwriting an earlier period. Add a new effective-dated rate or override. Confirmed bookings keep their saved pricing snapshot unless deliberately amended and repriced.</div>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">Chapters 8–11</div><h2>Property operations</h2>
+  <div class="module"><h3>Cleaning</h3><p><span class="purpose">Purpose:</span> Plan, assign, perform and inspect turnover or manual cleaning tasks.</p><ul><li>View work by date and stage: unassigned, assigned, in progress, awaiting inspection and finished.</li><li>Create or plan a task, assign a cleaner manually, or distribute tasks by current workload.</li><li>Cleaners start and finish work, complete the checklist, add photos and record supplies used.</li><li>Inspection passes the room to ready status. A failed inspection returns the task with the reason.</li><li>Urgency and due time help prioritize arriving rooms.</li></ul></div>
+  <div class="module"><h3>Laundry</h3><p><span class="purpose">Purpose:</span> Track linen work associated with checkout and other operational needs.</p><p>When automatic suggestion is enabled, checkout proposes a laundry job. Staff then record quantity, provider, status and cost. Laundry cost remains operationally separate from room readiness unless staff link the workflow through their procedures.</p></div>
+  <div class="module"><h3>Maintenance &amp; Damage</h3><p><span class="purpose">Purpose:</span> Separate repair work from guest-related incidents while keeping a documented decision trail.</p><ul><li><strong>Work orders:</strong> assign a repair, severity, responsible person, status, cost and notes. Safety-critical work can stop a room from being sold or marked ready.</li><li><strong>Damage &amp; incidents:</strong> document the room, item, event, evidence and communications. Reporting an incident does not automatically charge a guest.</li><li><strong>Owner decision:</strong> approve or reject damage outcomes only after reviewing evidence and the communication history.</li></ul></div>
+  <div class="module"><h3>Inventory &amp; Refills</h3><p><span class="purpose">Purpose:</span> Maintain stock-on-hand for amenities, cleaning materials, linen and consumables.</p><ul><li>Add an item with its unit and reorder level.</li><li>Record every receipt, issue, consumption or correction as a movement.</li><li>Cleaning-task consumption reduces stock only when the user records it.</li><li>Review low-stock alerts before they become service interruptions.</li></ul></div>
+  <div class="module"><h3>Parking</h3><p><span class="purpose">Purpose:</span> Manage parking spaces and date-bound assignments.</p><p>The list view manages spaces and assignments; the calendar shows occupancy by stall across a month. The system refuses overlapping assignments for the same space. Link assignments to the booking or clearly identify the holder and vehicle.</p></div>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">Chapters 12–13</div><h2>Money and financial controls</h2>
+  <div class="module"><h3>Payments — Receipts</h3><p><span class="purpose">Purpose:</span> Record money reported as received and verify it against the real account.</p><div class="workflow"><div class="step"><b>1 · Record</b>Enter booking reference, date, amount, method, receiving account, external reference and evidence.</div><div class="step"><b>2 · Verify</b>A separate authorized review confirms cleared funds or rejects the receipt with a reason.</div><div class="step"><b>3 · Correct</b>Reverse an incorrect verified receipt; the system posts a negative entry and preserves the original.</div></div></div>
+  <div class="module"><h3>Channel settlements</h3><p><span class="purpose">Purpose:</span> Reconcile Airbnb or other platforms from gross booking value to actual bank payout.</p><p>Record provider gross, fees, adjustments and expected net separately. When funds arrive, record actual payout, date and receiving account. Any difference remains visible for investigation.</p></div>
+  <div class="module"><h3>Reconciliation</h3><p><span class="purpose">Purpose:</span> Surface exceptions and close a reviewed accounting period.</p><ul><li>Review missing proof, unusual or duplicate references, unmatched amounts and unpaid channel settlements.</li><li>Lock a month only after the exceptions and supporting records have been reviewed.</li><li>A locked month accepts no silent historical edits. Corrections are new adjustments dated in an open period.</li></ul></div>
+  <div class="module"><h3>Expenses</h3><p><span class="purpose">Purpose:</span> Record operating costs by category and allocate them to a room, property or general overhead.</p><ul><li>Distinguish <strong>incurred</strong> from <strong>paid</strong>. An unpaid bill is an expense but is not yet cash out.</li><li>Attach proof, identify the vendor and record payment method when paid.</li><li>Costs at or above the configured threshold require approval before payment.</li><li>Reverse mistakes instead of deleting or editing financial history.</li></ul></div>
+  <div class="module"><h3>Cashbook</h3><p><span class="purpose">Purpose:</span> Show actual money movement for a selected date range.</p><p>Money in includes verified receipts and channel payouts received. Money out includes paid expenses and executed refunds. The page summarizes inflow, outflow and net movement.</p></div>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">Chapters 14–16</div><h2>Reporting, people and governance</h2>
+  <div class="module"><h3>Reports &amp; Analytics</h3><p><span class="purpose">Purpose:</span> Analyze performance using an explicit period, scope and date basis.</p><ul><li>Filter by dates, property, room, booking source and report type as available.</li><li>Use the displayed definition to understand whether figures follow stay date, receipt date, payout date, created date or expense date.</li><li>Review KPI cards, 12-month trends, room/channel rankings and the detailed table.</li><li>Export authorized reports to PDF, CSV or Excel-compatible formats for complete datasets.</li></ul><p class="small">Different report bases answer different questions. A stay-date revenue report should not be forced to reconcile with receipt-date cash collections.</p></div>
+  <div class="module"><h3>Staff Advances</h3><p><span class="purpose">Purpose:</span> Track cash advanced to employees and repayments against each balance.</p><p>Add the employee record, record each advance with date and reason, then post repayments as they occur. Review outstanding balances routinely and retain supporting authorization outside or attached to the organization’s approved process.</p></div>
+  <div class="module"><h3>Team &amp; Permissions</h3><p><span class="purpose">Purpose:</span> Control who can enter the system and exactly what each person may see or do.</p><ul><li>Invite a person, select a starting role, and then review every page and extra-action checkbox.</li><li>Grant only the access required for the person’s current duties.</li><li>Deactivate access promptly when a person leaves or no longer needs the system.</li><li>Reset two-factor enrollment only after verifying identity.</li><li>Temporary passwords are shown once; deliver them privately and require the user to change the password.</li><li>Only an Owner can change another Owner’s protected access.</li></ul></div>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">Chapter 17</div><h2>Settings — Pricing and operations policy</h2>
+  <p class="lead">These inputs define the organization-wide defaults used by pricing, availability, booking confirmation, housekeeping, finance, security and guest communications. Save changes only after considering their operational effect.</p>
+  <div class="callout warning"><strong>Effective-change principle:</strong> Policy changes apply to new calculations. Confirmed bookings retain their stored price snapshot. A later booking amendment may trigger availability checks and repricing.</div>
+  <h3>Pricing inputs</h3>
+  <table><thead><tr><th>Input</th><th>What it controls</th><th>Detailed owner guidance</th></tr></thead><tbody>
+    <tr><td>Nights charged at the weekend rate</td><td>Which ISO weekdays use each room’s weekend nightly rate.</td><td>Select every night treated as weekend. The date is the occupied night, not the checkout morning. At least one day is required; without it, quotation pricing is disabled because the system cannot decide between weekday and weekend rates.</td></tr>
+    <tr><td>Extra-guest fee (PHP)</td><td>The charge for each guest above the room’s included-guest count.</td><td>This amount is used only when Extra-guest billing is set. It does not increase the room’s maximum capacity. Capacity remains controlled on the room record.</td></tr>
+    <tr><td>Extra-guest billing</td><td>Whether the fee is charged per extra guest per night, per extra guest per stay, or not at all.</td><td><strong>Per guest, per night:</strong> extra guests × stay nights × fee. <strong>Per guest, per stay:</strong> extra guests × fee once. <strong>Blank:</strong> no automatic fee. Review saved quotes before changing this policy.</td></tr>
+    <tr><td>Early check-in fee per started hour (PHP)</td><td>Charge for each started hour before the Standard check-in time.</td><td>The system rounds any part of an hour upward. Example: if standard check-in is 2:00 PM, a 12:30 PM request is two started hours. Early arrival still depends on availability, room readiness and staff approval.</td></tr>
+    <tr><td>Parking rate per night (PHP)</td><td>Default parking amount placed into a new quote.</td><td>Staff may change it on an individual quote. Parking nights cannot exceed stay nights. A parking charge does not itself allocate a physical stall; use the Parking module for the assignment.</td></tr>
+    <tr><td>Downpayment (%)</td><td>Suggested deposit and remaining balance displayed on new non-Airbnb quotes.</td><td>Allowed range is 0–100. Use 0 for no downpayment. Saved quotes preserve their percentage. The value is a payment schedule presentation, not a receipt and not proof that money was paid.</td></tr>
+  </tbody></table>
+  <h3>Time, availability and workflow inputs</h3>
+  <table><thead><tr><th>Input</th><th>What it controls</th><th>Detailed owner guidance</th></tr></thead><tbody>
+    <tr><td>Standard check-in</td><td>Reference time used in stay information and automatic early check-in calculation.</td><td>Required. Changing it changes future early-arrival calculations. Communicate the same time consistently in templates and public policies.</td></tr>
+    <tr><td>Standard check-out</td><td>Default departure time presented in operations and guest information.</td><td>Keep enough time between checkout and the next standard check-in to complete turnover. This field does not automatically create a late-checkout charge.</td></tr>
+    <tr><td>Default hold length (hours)</td><td>How long a temporary booking hold protects dates before scheduled expiry.</td><td>Valid range is 1–336 hours. Shorter holds improve inventory turnover; longer holds give guests more time. Hold expiry depends on the system scheduler running.</td></tr>
+    <tr><td>Turnover due within (hours)</td><td>Target time for completing a checkout cleaning task.</td><td>Valid range is 1–72 hours. Choose a target that supports same-day arrivals. The due time drives urgency and monitoring; inspection still determines readiness.</td></tr>
+    <tr><td>Minimum stay (nights)</td><td>Property-wide minimum number of nights accepted.</td><td>Blank means no property-wide minimum. A value on an individual room takes priority. This rule blocks a stay that is shorter than the applicable minimum.</td></tr>
+    <tr><td>Book at most this many days ahead</td><td>Property-wide maximum advance booking window.</td><td>Blank means no limit. A room-level value takes priority. The rule compares the requested check-in date with today plus the configured number of days.</td></tr>
+    <tr><td>Arrival reminder (days before)</td><td>How far before check-in the system raises the arrival reminder.</td><td>Allowed range is 1–14 days. Choose enough lead time to confirm payment, guest details, room readiness and access instructions without creating alert fatigue.</td></tr>
+  </tbody></table>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">Chapter 17 continued</div><h2>Settings — Controls and policies</h2>
+  <h3>Financial and security controls</h3>
+  <table><thead><tr><th>Input</th><th>What it controls</th><th>Detailed owner guidance</th></tr></thead><tbody>
+    <tr><td>Expense approval threshold (PHP)</td><td>Amount at or above which an expense requires approval before it can be paid.</td><td>Blank means no expense requires threshold approval. Set a level consistent with the Owner’s delegation policy. The expense may be recorded as incurred while approval is pending.</td></tr>
+    <tr><td>Require a verified payment before confirming a booking</td><td>Prevents confirmation until at least one payment is verified.</td><td>Enable when confirmation must follow cleared funds. A recorded but pending receipt is insufficient. Consider how complimentary, owner-use or pay-on-arrival stays will be handled before enabling.</td></tr>
+    <tr><td>Require a second person to verify receipts and approve refunds and expenses they did not record</td><td>Enforces separation between record creation and approval.</td><td>Recommended when at least two authorized people are available. The recorder cannot approve their own affected transaction. Do not enable in a one-person operation unless another reviewer is reliably available.</td></tr>
+    <tr><td>Require two-factor sign-in for staff with finance, security or administrator access</td><td>Forces sensitive-access users to enroll an authenticator before using protected pages.</td><td>Strongly recommended. Confirm every affected person has an authenticator and understands recovery codes. Preserve the application key because encrypted authenticator secrets depend on it.</td></tr>
+  </tbody></table>
+  <h3>Operational switches</h3>
+  <table><thead><tr><th>Input</th><th>What it controls</th><th>Detailed owner guidance</th></tr></thead><tbody>
+    <tr><td>Suggest a laundry job at every checkout</td><td>Creates or proposes a laundry workflow when a stay is checked out.</td><td>Enable when every turnover normally requires linen processing. Staff must still enter quantity, provider, cost and completion information.</td></tr>
+  </tbody></table>
+  <h3>Public policy wording</h3>
+  <table><thead><tr><th>Input</th><th>What it controls</th><th>Detailed owner guidance</th></tr></thead><tbody>
+    <tr><td>Cancellation policy</td><td>Text displayed on the public Policies page once supplied.</td><td>State deadlines, refund treatment, no-show rules, rescheduling conditions and any channel exceptions clearly. Blank publishes no cancellation wording. Obtain legal/accounting review where appropriate.</td></tr>
+    <tr><td>House rules</td><td>Text displayed on the public Policies page once supplied.</td><td>Cover occupancy, visitors, noise, smoking, pets, prohibited activity, property care and check-in/out responsibilities. Use plain, enforceable language. Blank publishes no house-rule wording.</td></tr>
+  </tbody></table>
+  <h3>Related Settings sections</h3>
+  <table><thead><tr><th>Section</th><th>How it works</th></tr></thead><tbody>
+    <tr><td>Taxes and fees</td><td>Add a named percentage with an effective check-in date. It applies to accommodation, extra-guest and early check-in charges before discounts; parking and other services are excluded. Taxes are kept out of revenue figures. End a rule with a final applicable check-in date instead of deleting history.</td></tr>
+    <tr><td>Message templates</td><td>Edit reusable quote and booking messages. Placeholders such as guest, room, dates, total and payment information are replaced when copied. Use only the placeholders offered for that template and preserve their double braces.</td></tr>
+    <tr><td>Public contact channels</td><td>Shows whether official Messenger, Facebook and other contact values are configured. These are environment settings, not edited in the page. The website prioritizes Messenger, then Facebook.</td></tr>
+  </tbody></table>
+  <div class="callout success"><strong>Before saving policy:</strong> review one realistic weekday stay, weekend stay, extra-guest stay, early arrival and channel booking. This exposes unintended combinations before staff issue new quotes.</div>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">Chapters 18–19</div><h2>Audit, account and notifications</h2>
+  <div class="module"><h3>Audit Log</h3><p><span class="purpose">Purpose:</span> Provide a chronological record of important actions, the person responsible and supporting details.</p><ul><li>Use it to investigate changes, approvals, reversals and security-sensitive events.</li><li>The audit log supports accountability; it does not replace the source booking, receipt, expense or incident record.</li><li>Review suspicious or unexpected actions promptly and secure the affected account if necessary.</li></ul></div>
+  <div class="module"><h3>Account</h3><p><span class="purpose">Purpose:</span> Manage the signed-in Owner’s credentials and personal preferences.</p><ul><li>Change the password using a unique, private value.</li><li>Enable two-factor authentication, confirm the setup and store recovery codes securely.</li><li>Regenerate recovery codes if they may have been exposed; the old set then becomes invalid.</li><li>Choose which supported operational events should create personal notifications.</li></ul></div>
+  <div class="module"><h3>Notifications</h3><p><span class="purpose">Purpose:</span> Draw attention to events that may require review.</p><p>The bell lists recent notifications and links to the relevant record. Marking an item read clears the attention state but does not resolve the underlying operational issue. Open the record, complete the required action, and use the Dashboard to confirm that the exception has cleared.</p></div>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">Chapter 20</div><h2>Owner operating routines</h2>
+  <h3>Daily</h3><ul class="checklist"><li>Review Dashboard “Action needed,” arrivals, departures and room readiness.</li><li>Check pending receipts, outstanding balances and channel payouts received.</li><li>Review urgent cleaning, safety-critical repairs and inventory below reorder level.</li><li>Read notifications and open the underlying records.</li><li>Confirm near-term Airbnb or external-channel stays have been entered.</li></ul>
+  <h3>Weekly</h3><ul class="checklist"><li>Review the Booking Calendar for gaps, overlaps, extended blocks and expiring holds.</li><li>Inspect room and source performance, unpaid balances and expense concentration.</li><li>Review open incidents, repair aging, cleaning inspection failures and staff workload.</li><li>Check outstanding employee advances and parking conflicts.</li><li>Review active staff access against current duties.</li></ul>
+  <h3>Month-end</h3><ul class="checklist"><li>Resolve reconciliation exceptions and verify evidence for material transactions.</li><li>Confirm channel gross, fees, adjustments and actual payouts.</li><li>Review incurred-versus-paid expenses and execute approved refunds already sent.</li><li>Export and retain the required management reports.</li><li>Lock the month only after review; document any later correction as a new open-period adjustment.</li><li>Run and copy backups away from the system computer; preserve a separate secure copy of the application key.</li></ul>
+  <h3>Before changing pricing policy</h3><ul class="checklist"><li>Confirm the business decision and effective timing.</li><li>Check room-level rates and stay limits that may override the general setting.</li><li>Test common quote scenarios and read the complete line-item breakdown.</li><li>Brief the staff who create quotes and bookings.</li><li>Keep the prior policy and effective date in the Owner’s management record.</li></ul>
+  <div class="callout info"><strong>System health:</strong> Holds, alerts and scheduled reminders depend on the scheduler. Backups and the application key are management responsibilities. If system health warnings appear, resolve them before relying on unattended automation.</div>
+  <p class="page-note">End of handbook · UNIQA SUITES Owner’s System Handbook · Edition 1.0</p>
+</section>
+</main>
+</body>
+</html>

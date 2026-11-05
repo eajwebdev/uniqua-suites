@@ -44,6 +44,8 @@ return new class extends Migration
             $t->id();
             $t->foreignId('housekeeping_task_id')->constrained()->cascadeOnDelete();
             $t->string('path');
+            $t->unsignedInteger('byte_size')->nullable();
+            $t->string('mime_type', 50)->nullable();
             $t->string('stage')->default('after'); // before | after
             $t->foreignId('user_id')->nullable()->constrained()->nullOnDelete();
             $t->timestamps();

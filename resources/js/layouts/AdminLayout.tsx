@@ -1,11 +1,12 @@
 import { Head, Link, router, usePage } from '@inertiajs/react';
 import {
-    Bell, BookOpen, Building2, CalendarDays, Car, ChevronsLeft, ChevronsRight, ClipboardList, Coins, FileSpreadsheet, HandCoins, LayoutDashboard, LogOut, Menu, MessageSquareText, Package, Plus,
+    Bell, BookOpen, Building2, CalendarDays, Car, ChevronsLeft, ChevronsRight, ClipboardList, Coins, HandCoins, LayoutDashboard, LogOut, Menu, MessageSquareText, Package, Plus,
     ScrollText, Settings, Sparkles, Users, UsersRound, Wallet, Wrench, BarChart3, X,
 } from 'lucide-react';
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import NewBookingHost, { openNewBooking } from '@/components/NewBooking';
 import QuickFind, { QuickItem } from '@/components/QuickFind';
-import { cn } from '@/components/ui';
+import { Button, cn, CopyButton, Modal } from '@/components/ui';
 
 const NAV_GROUPS: { label: string; items: { label: string; href: string; icon: any; any: string[] }[] }[] = [
     {
@@ -22,7 +23,7 @@ const NAV_GROUPS: { label: string; items: { label: string; href: string; icon: a
         label: 'Property',
         items: [
             { label: 'Rooms & Properties', href: '/admin/rooms', icon: Building2, any: ['rooms.view'] },
-            { label: 'Housekeeping', href: '/admin/housekeeping', icon: Sparkles, any: ['housekeeping.own', 'housekeeping.manage', 'housekeeping.inspect'] },
+            { label: 'Cleaning', href: '/admin/housekeeping', icon: Sparkles, any: ['housekeeping.own', 'housekeeping.manage', 'housekeeping.inspect'] },
             { label: 'Maintenance & Damage', href: '/admin/work-orders', icon: Wrench, any: ['maintenance.own', 'maintenance.manage'] },
             { label: 'Damage Claims', href: '/admin/incidents', icon: BookOpen, any: ['__incidents_only'] },
             { label: 'Inventory', href: '/admin/inventory', icon: Package, any: ['inventory.view'] },
@@ -41,7 +42,6 @@ const NAV_GROUPS: { label: string; items: { label: string; href: string; icon: a
     {
         label: 'Admin',
         items: [
-            { label: 'Import & Data Quality', href: '/admin/imports', icon: FileSpreadsheet, any: ['imports.manage'] },
             { label: 'Team & Permissions', href: '/admin/team', icon: UsersRound, any: ['team.manage'] },
             { label: 'Settings', href: '/admin/settings', icon: Settings, any: ['settings.manage'] },
             { label: 'Audit Log', href: '/admin/audit', icon: ScrollText, any: ['audit.view'] },
@@ -82,11 +82,136 @@ function FlashMessage({ flash }: { flash: any }) {
 
     return (
         <div role={isError ? 'alert' : 'status'} className={cn('sticky top-16 z-[25] mb-4 flex items-start justify-between gap-2 rounded-lg border px-4 py-2.5 text-sm shadow-md', isError ? 'border-red-200 bg-red-50 text-red-900' : 'border-emerald-200 bg-emerald-50 text-emerald-900')}>
-            <span className="min-w-0">{message}</span>
+            <span className="min-w-0">{message}{flash?.action && <Link href={flash.action.href} className="ml-2 font-medium underline">{flash.action.label}</Link>}</span>
             <button aria-label="Dismiss message" className="-my-1 -mr-2 flex size-8 shrink-0 items-center justify-center rounded pointer-coarse:size-11" onClick={() => setVisible(false)}>
                 <X size={15} aria-hidden />
             </button>
         </div>
+    );
+}
+
+const NOTICE_CHECK_MS = 30000;
+const NOTICE_VISIBLE_MS = 10000;
+
+/**
+ * Checks for new notices while the page is on screen, and shows the newest one as it arrives.
+ * A hidden tab does not check, so an unattended phone stays quiet and its session can still time out.
+ */
+function LiveNotice({ notice }: { notice?: { id: string; title: string; url?: string | null } | null }) {
+    const seen = useRef(notice?.id);
+    const [shown, setShown] = useState<typeof notice>(null);
+
+    useEffect(() => {
+        const check = () => {
+            if (document.visibilityState === 'visible') router.reload({ only: ['auth'] });
+        };
+        const timer = setInterval(check, NOTICE_CHECK_MS);
+        document.addEventListener('visibilitychange', check);
+
+        return () => {
+            clearInterval(timer);
+            document.removeEventListener('visibilitychange', check);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (notice?.id && notice.id !== seen.current) setShown(notice);
+        seen.current = notice?.id;
+    }, [notice?.id]);
+
+    // It must not sit over the buttons underneath. The bell keeps the message.
+    useEffect(() => {
+        if (!shown) return;
+        const timer = setTimeout(() => setShown(null), NOTICE_VISIBLE_MS);
+
+        return () => clearTimeout(timer);
+    }, [shown]);
+
+    if (!shown) return null;
+
+    return (
+        <div role="status" className="dialog-pop fixed top-16 right-4 z-50 flex w-[calc(100%-2rem)] max-w-sm items-start gap-3 rounded-xl border border-line bg-white p-4 shadow-2xl lg:top-20">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-beige text-gold-dark"><Bell size={17} strokeWidth={1.75} aria-hidden /></span>
+            <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium">{shown.title}</p>
+                {shown.url && <Link href={shown.url} onClick={() => setShown(null)} className="mt-1 inline-block text-xs font-medium text-bronze underline pointer-coarse:py-2">Open</Link>}
+            </div>
+            <button aria-label="Dismiss notice" className="-m-1 flex size-8 shrink-0 items-center justify-center rounded text-muted pointer-coarse:size-11" onClick={() => setShown(null)}><X size={15} aria-hidden /></button>
+        </div>
+    );
+}
+
+function NotificationsDropdown({ user }: { user: any }) {
+    const [open, setOpen] = useState(false);
+    const wrapper = useRef<HTMLDivElement>(null);
+    const notifications = user?.notifications ?? [];
+
+    useEffect(() => {
+        if (!open) return;
+        const closeOnOutsideClick = (event: MouseEvent) => {
+            if (!wrapper.current?.contains(event.target as Node)) setOpen(false);
+        };
+        const closeOnEscape = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') setOpen(false);
+        };
+        document.addEventListener('mousedown', closeOnOutsideClick);
+        document.addEventListener('keydown', closeOnEscape);
+
+        return () => {
+            document.removeEventListener('mousedown', closeOnOutsideClick);
+            document.removeEventListener('keydown', closeOnEscape);
+        };
+    }, [open]);
+
+    return (
+        <div ref={wrapper} className="relative">
+            <button type="button" aria-label={`Notifications, ${user?.unread ?? 0} unread`} aria-expanded={open} aria-controls="notifications-menu" onClick={() => setOpen((current) => !current)} className="relative flex size-9 items-center justify-center rounded-lg transition-colors hover:bg-beige pointer-coarse:size-11">
+                <Bell size={18} strokeWidth={1.75} />
+                {user?.unread > 0 && <span className="absolute top-0.5 right-0.5 min-w-4 rounded-full bg-red-800 px-1 text-center text-[10px] leading-4 font-semibold text-white">{user.unread}</span>}
+            </button>
+
+            {open && (
+                <div id="notifications-menu" role="dialog" aria-label="Notifications" className="dialog-pop absolute top-full right-0 z-50 mt-2 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-line bg-white shadow-2xl">
+                    <div className="flex items-center justify-between border-b border-line px-4 py-3">
+                        <h2 className="text-sm font-semibold">Notifications</h2>
+                        {user?.unread > 0 && <button type="button" onClick={() => router.post('/admin/notifications/read', {}, { preserveScroll: true })} className="text-xs font-medium text-bronze hover:underline">Mark all read</button>}
+                    </div>
+                    {notifications.length === 0 ? (
+                        <p className="px-4 py-6 text-center text-sm text-muted">No notifications.</p>
+                    ) : (
+                        <div className="max-h-80 overflow-y-auto">
+                            {notifications.map((notice: any) => (
+                                <Link key={notice.id} href={notice.url || '/admin/account'} onClick={() => setOpen(false)} className="flex gap-3 border-b border-line px-4 py-3 text-sm last:border-b-0 hover:bg-beige/60">
+                                    <span className={cn('mt-1 size-2 shrink-0 rounded-full', notice.unread ? 'bg-red-700' : 'bg-transparent')} aria-hidden />
+                                    <span className={cn('min-w-0 leading-snug', notice.unread && 'font-medium')}>{notice.title}</span>
+                                </Link>
+                            ))}
+                        </div>
+                    )}
+                    <Link href="/admin/account" onClick={() => setOpen(false)} className="block border-t border-line px-4 py-3 text-center text-sm font-medium text-bronze hover:bg-beige/60">View all notifications</Link>
+                </div>
+            )}
+        </div>
+    );
+}
+
+/** Shown once: only the hash is kept, so closing this means making a new one. */
+function CredentialDialog({ credential }: { credential?: { name: string; email: string; password: string } | null }) {
+    const [dismissed, setDismissed] = useState<string | null>(null);
+    if (!credential || dismissed === credential.password) return null;
+
+    return (
+        <Modal open title={`Sign-in details for ${credential.name}`} onClose={() => setDismissed(credential.password)}>
+            <p className="mb-3 text-sm text-muted">Give these to {credential.name} in person or by private message. This password is shown only once. Ask them to change it under Account after signing in.</p>
+            <dl className="space-y-2 rounded-lg bg-ivory p-3 text-sm">
+                <div className="flex items-center justify-between gap-2"><dt className="text-muted">Email</dt><dd className="font-medium break-all">{credential.email}</dd></div>
+                <div className="flex items-center justify-between gap-2"><dt className="text-muted">Password</dt><dd className="font-mono font-semibold break-all">{credential.password}</dd></div>
+            </dl>
+            <div className="mt-4 flex justify-end gap-2">
+                <CopyButton small={false} text={`Sign in at ${window.location.origin}/login\nEmail: ${credential.email}\nPassword: ${credential.password}`} label="Copy details" />
+                <Button variant="primary" onClick={() => setDismissed(credential.password)}>Done</Button>
+            </div>
+        </Modal>
     );
 }
 
@@ -137,10 +262,10 @@ export default function AdminLayout({ title, heading, subtitle, showSection = tr
     const phoneTabs = PHONE_TABS.map((href) => allItems.find((i) => i.href === href)).filter(Boolean).slice(0, 4) as typeof allItems;
 
     const quickItems = useMemo<QuickItem[]>(() => [
-        ...(perms.includes('bookings.manage') ? [{ label: 'New booking', href: '/admin/bookings/create', icon: Plus, group: 'Create' }] : []),
+        ...(perms.includes('bookings.manage') ? [{ label: 'New booking', href: '/admin/bookings/create', icon: Plus, group: 'Create', onSelect: () => openNewBooking() }] : []),
         ...(perms.includes('quotes.manage') ? [{ label: 'New quote: find vacant units and prices', href: '/admin/quotes/create', icon: Plus, group: 'Create' }] : []),
         ...allItems.map((i) => ({ label: i.label, href: i.href, icon: i.icon, group: i.group })),
-        { label: 'My account and notifications', href: '/admin/account', icon: Bell, group: 'Account' },
+        { label: 'My notifications', href: '/admin/account#notifications', icon: Bell, group: 'Account' },
     ], [perms.join(',')]);
 
     const quickSearches = useMemo(() => [
@@ -210,10 +335,7 @@ export default function AdminLayout({ title, heading, subtitle, showSection = tr
                     </button>
                     <QuickFind items={quickItems} searches={quickSearches} />
                     <div className="ml-auto flex items-center gap-1 sm:gap-2">
-                        <Link href="/admin/account" aria-label={`Notifications, ${auth.user?.unread ?? 0} unread`} className="relative flex size-9 items-center justify-center rounded-lg transition-colors hover:bg-beige pointer-coarse:size-11">
-                            <Bell size={18} strokeWidth={1.75} />
-                            {auth.user?.unread > 0 && <span className="absolute top-0.5 right-0.5 min-w-4 rounded-full bg-red-800 px-1 text-center text-[10px] leading-4 font-semibold text-white">{auth.user.unread}</span>}
-                        </Link>
+                        <NotificationsDropdown user={auth.user} />
                         <Link href="/admin/account" aria-label={`Your account, ${auth.user?.name ?? ''}`} className="flex items-center gap-2 rounded-lg px-1 py-1 transition-colors hover:bg-beige pointer-coarse:min-h-11 sm:px-2">
                             <span className="flex size-8 items-center justify-center rounded-full bg-chocolate text-xs font-semibold text-gold" aria-hidden>{initials}</span>
                             <span className="hidden text-left leading-tight lg:block">
@@ -229,6 +351,9 @@ export default function AdminLayout({ title, heading, subtitle, showSection = tr
 
                 <main id="main" tabIndex={-1} className={cn('mx-auto w-full max-w-[90rem] flex-1 p-4 outline-none sm:p-6 lg:p-8', phoneTabs.length >= 2 && 'pb-24 lg:pb-8')}>
                     <FlashMessage flash={flash} />
+                    <LiveNotice notice={auth.user?.latest_notice} />
+                    <CredentialDialog credential={flash?.credential} />
+                    {can('bookings.manage') && <NewBookingHost />}
                     <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
                         <div className="min-w-0">
                             {section && showSection && <p className="text-xs font-medium tracking-wide text-muted">{section}</p>}

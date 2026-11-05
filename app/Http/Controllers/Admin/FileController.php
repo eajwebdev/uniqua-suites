@@ -20,12 +20,17 @@ class FileController extends Controller
             'receipt' => [Receipt::class, 'evidence_path', 'payments.view'],
             'expense' => [Expense::class, 'proof_path', 'expenses.view'],
             'incident' => [IncidentEvidence::class, 'path', 'incidents.view'],
-            'task' => [TaskAttachment::class, 'path', 'housekeeping.manage'],
+            'task' => [TaskAttachment::class, 'path', null],
             default => abort(404),
         };
-        abort_unless($request->user()->can($permission), 403);
+        abort_unless($permission === null || $request->user()->can($permission), 403);
 
         $record = $model::findOrFail($id);
+        if ($kind === 'task') {
+            // Whoever checks the room, and the cleaner who is doing it. Not the other cleaners.
+            $user = $request->user();
+            abort_unless($user->can('housekeeping.manage') || $user->can('housekeeping.inspect') || $record->task?->assigned_to === $user->id, 403);
+        }
         $path = $record->{$column};
         abort_unless($path && Storage::disk('local')->exists($path), 404);
         Audit::log('file.viewed', $record, ['kind' => $kind]);

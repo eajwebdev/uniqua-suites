@@ -19,6 +19,8 @@ use Illuminate\Support\Str;
 
 class FinanceService
 {
+    private const OLD_RECEIPT_DAYS = 30;
+
     /** A receipt counts toward the balance only after verification; a screenshot is not cleared funds. */
     public function recordReceipt(array $data): Receipt
     {
@@ -41,6 +43,62 @@ class FinanceService
         Audit::log('receipt.recorded', $receipt, ['amount_cents' => $receipt->amount_cents, 'method' => $receipt->method]);
 
         return $receipt;
+    }
+
+    /**
+     * Things that are almost certainly a typing mistake, so nobody can save them. Keyed by form field.
+     *
+     * @return array<string, string>
+     */
+    public function receiptMistakes(int $cents, CarbonImmutable $receivedAt, string $method, ?string $reference, bool $hasProof): array
+    {
+        $mistakes = [];
+        if ($cents <= 0) {
+            $mistakes['amount'] = 'Enter an amount above zero.';
+        }
+        if ($receivedAt->isAfter(Local::now()->addMinutes(5))) {
+            $mistakes['received_at'] = 'This date is in the future. Enter when the money actually came in.';
+        }
+        if (in_array($method, ['gcash', 'bank_transfer'], true) && blank($reference) && ! $hasProof) {
+            $mistakes['external_reference'] = 'For GCash and bank payments, add the reference number or attach proof.';
+        }
+
+        return $mistakes;
+    }
+
+    /**
+     * Things that can be genuine but are usually a mistake, so someone has to look twice. Keyed by form field.
+     *
+     * @return array<string, string>
+     */
+    public function receiptWarnings(?Booking $booking, int $cents, CarbonImmutable $receivedAt, ?string $reference): array
+    {
+        $warnings = [];
+        $live = fn () => Receipt::where('verification_status', '!=', 'rejected')->whereNull('reverses_receipt_id')
+            ->whereNotIn('id', Receipt::whereNotNull('reverses_receipt_id')->select('reverses_receipt_id'));
+
+        if ($receivedAt->lt(Local::now()->subDays(self::OLD_RECEIPT_DAYS))) {
+            $warnings['received_at'] = 'This date is more than '.self::OLD_RECEIPT_DAYS.' days ago. Please check the month and year.';
+        }
+        if (filled($reference) && ($same = $live()->where('external_reference', trim($reference))->first())) {
+            $warnings['external_reference'] = "This reference is already on payment {$same->reference}.";
+        }
+        if ($booking) {
+            $twin = $live()->where('booking_id', $booking->id)->where('amount_cents', $cents)->where('receipt_date', $receivedAt->toDateString())->first();
+            $balance = $this->balance($booking);
+            $left = max(0, $balance['balance_cents'] - $balance['pending_cents']);
+
+            if ($twin) {
+                $warnings['amount'] = 'The same amount was already recorded for this booking that day ('.$twin->reference.'). It may have been entered twice.';
+            } elseif ($balance['charges_cents'] > 0 && $cents > $left) {
+                $warnings['amount'] = 'This is '.Money::format($cents - $left).' more than the '.Money::format($left).' left to pay.';
+            }
+            if (in_array($booking->status, [Booking::CANCELLED, Booking::NO_SHOW, Booking::EXPIRED], true)) {
+                $warnings['booking_reference'] = 'This booking is not active. Check that this is the right booking.';
+            }
+        }
+
+        return $warnings;
     }
 
     public function review(Receipt $receipt, bool $verified, ?string $note = null): void

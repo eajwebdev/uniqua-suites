@@ -42,7 +42,7 @@ Run on a scratch database and then wiped. Nothing was loaded into `db_uniquasuit
 
 ## Conflicts for the owner to resolve
 
-All of these are listed in the app under **Settings > Assumptions and decisions register**, and room labels are resolved once under **Import & Data Quality**.
+All of these are listed for administrators under the Settings setup decisions register. Historical room-label mappings remain in storage; the former owner-facing import screen is retired.
 
 1. **What is unit 2221?** January to June sheets head it `LOOP 2221 - STUDIO`, and it stops in July, when `2520 - STUDIO` first appears. The brief suggests it may be NEW YORK 2224, but that is a **2-bedroom**. The sheets fit BALI 2520 or a separate former unit better. Its 161 sales rows stay unlinked until confirmed.
 2. **2510 vs 2520.** The parking calendar reads "UNIQA BALI, 25TH FLOOR - 2510". Every other sheet uses 2520.

@@ -2,7 +2,6 @@
 
 use App\Domain\Bookings\BookingService;
 use App\Domain\Finance\FinanceService;
-use App\Domain\Integrations\IcalSync;
 use App\Models\Booking;
 use App\Models\HousekeepingTask;
 use App\Models\InventoryItem;
@@ -57,10 +56,6 @@ Artisan::command('uniqa:daily-alerts', function () {
     }
     $this->info('Daily alerts done.');
 })->purpose('Prepare arrival, overdue-task and restock alerts');
-
-Artisan::command('uniqa:sync-ical', function (IcalSync $sync) {
-    $this->info($sync->syncAll().' feed(s) processed.');
-})->purpose('Read blocked dates from configured external calendars');
 
 // Prepares the owner's review only. It never locks a period: that stays a person's decision.
 Artisan::command('uniqa:month-end {--period= : Month to prepare as YYYY-MM; defaults to last month}', function (FinanceService $finance) {
@@ -132,7 +127,11 @@ if (app()->environment('testing')) {
     require __DIR__.'/test-console.php';
 }
 
+// The simulation commands do not exist anywhere but the simulation database.
+if (str_ends_with((string) config('database.connections.'.config('database.default').'.database'), '_sim')) {
+    require __DIR__.'/simulation-console.php';
+}
+
 Schedule::command('uniqa:expire-holds')->everyMinute()->withoutOverlapping();
 Schedule::command('uniqa:daily-alerts')->dailyAt('07:00')->timezone(config('uniqa.display_timezone'));
-Schedule::command('uniqa:sync-ical')->hourly()->withoutOverlapping();
 Schedule::command('uniqa:month-end')->monthlyOn(1, '07:30')->timezone(config('uniqa.display_timezone'));

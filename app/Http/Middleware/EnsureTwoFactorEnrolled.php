@@ -9,7 +9,7 @@ use Illuminate\Http\Request;
 /** When the owner requires it, staff with sensitive access can only reach Account until they enrol. */
 class EnsureTwoFactorEnrolled
 {
-    private const PRIVILEGED = ['team.manage', 'settings.manage', 'payments.verify', 'refunds.approve', 'periods.lock', 'secrets.reveal', 'secrets.manage', 'advances.manage', 'imports.manage'];
+    private const PRIVILEGED = ['team.manage', 'settings.manage', 'payments.verify', 'refunds.approve', 'periods.lock', 'secrets.reveal', 'secrets.manage', 'advances.manage'];
 
     public function handle(Request $request, Closure $next)
     {

@@ -10,9 +10,13 @@ use App\Models\PaymentAccount;
 use App\Models\PeriodLock;
 use App\Models\Receipt;
 use App\Models\Refund;
+use App\Support\Audit;
 use App\Support\Local;
 use App\Support\Money;
+use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 
 class FinanceController extends Controller
@@ -33,7 +37,7 @@ class FinanceController extends Controller
         $user = $request->user();
         $rows = Receipt::with(['booking:id,reference', 'account:id,name', 'enteredBy:id,name'])
             ->when($status, fn ($q, $v) => $q->where('verification_status', $v))
-            ->orderByDesc('id')->paginate(30)->withQueryString();
+            ->orderByDesc('id')->paginate(15)->withQueryString();
         $reversed = Receipt::whereNotNull('reverses_receipt_id')->pluck('reverses_receipt_id');
 
         return Inertia::render('Admin/Resource', [
@@ -89,20 +93,41 @@ class FinanceController extends Controller
             'payment_account_id' => 'nullable|exists:payment_accounts,id',
             'external_reference' => 'nullable|string|max:120',
             'evidence' => 'nullable|file|mimes:jpg,jpeg,png,webp,pdf|max:10240',
+            'confirm_unusual' => 'nullable|boolean',
         ]);
-        $path = $request->hasFile('evidence') ? $request->file('evidence')->store('evidence/receipts', 'local') : null;
+        $cents = Money::cents($data['amount']);
+        $receivedAt = CarbonImmutable::parse($data['received_at'], Local::tz());
+        $reference = isset($data['external_reference']) ? trim($data['external_reference']) : null;
 
-        $this->finance->recordReceipt([
-            'booking_id' => ! empty($data['booking_reference']) ? Booking::where('reference', $data['booking_reference'])->value('id') : null,
-            'received_at' => $data['received_at'],
-            'amount_cents' => Money::cents($data['amount']),
-            'method' => $data['method'],
-            'payment_account_id' => $data['payment_account_id'] ?? null,
-            'external_reference' => $data['external_reference'] ?? null,
-            'evidence_path' => $path,
-        ]);
+        $mistakes = $this->finance->receiptMistakes($cents, $receivedAt, $data['method'], $reference, $request->hasFile('evidence'));
+        if ($mistakes) {
+            throw ValidationException::withMessages($mistakes);
+        }
 
-        return back()->with('success', 'Payment recorded and queued for verification.');
+        // The booking row is locked, so two quick clicks are checked one after the other and the second sees the first.
+        DB::transaction(function () use ($request, $data, $cents, $receivedAt, $reference) {
+            $booking = ! empty($data['booking_reference']) ? Booking::where('reference', $data['booking_reference'])->lockForUpdate()->first() : null;
+
+            $warnings = $this->finance->receiptWarnings($booking, $cents, $receivedAt, $reference);
+            if ($warnings && ! $request->boolean('confirm_unusual')) {
+                throw ValidationException::withMessages($warnings + ['confirm_unusual' => 'Please check the warning. If the payment is correct, tick this box and save again.']);
+            }
+
+            $receipt = $this->finance->recordReceipt([
+                'booking_id' => $booking?->id,
+                'received_at' => $data['received_at'],
+                'amount_cents' => $cents,
+                'method' => $data['method'],
+                'payment_account_id' => $data['payment_account_id'] ?? null,
+                'external_reference' => $reference ?: null,
+                'evidence_path' => $request->hasFile('evidence') ? $request->file('evidence')->store('evidence/receipts', 'local') : null,
+            ]);
+            if ($warnings) {
+                Audit::log('receipt.warning_confirmed', $receipt, ['warnings' => array_values($warnings)]);
+            }
+        });
+
+        return back()->with('success', 'Payment recorded. It counts toward the balance once it is verified.');
     }
 
     public function reviewReceipt(Request $request, Receipt $receipt)
@@ -139,7 +164,7 @@ class FinanceController extends Controller
     public function settlements(Request $request)
     {
         $user = $request->user();
-        $rows = ExternalSettlement::with(['booking:id,reference', 'account:id,name'])->orderByDesc('id')->paginate(30);
+        $rows = ExternalSettlement::with(['booking:id,reference', 'account:id,name'])->orderByDesc('id')->paginate(15);
 
         return Inertia::render('Admin/Resource', [
             'title' => 'Channel settlements',
@@ -264,6 +289,7 @@ class FinanceController extends Controller
             ['name' => 'payment_account_id', 'label' => 'Receiving account', 'type' => 'select', 'options' => $this->accounts()],
             ['name' => 'external_reference', 'label' => 'GCash or bank reference', 'type' => 'text'],
             ['name' => 'evidence', 'label' => 'Proof (image or PDF)', 'type' => 'file'],
+            ['name' => 'confirm_unusual', 'label' => 'If a warning appears: I checked it, and this payment is correct', 'type' => 'checkbox'],
         ];
     }
 

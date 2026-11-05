@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Domain\Availability\RoomConflict;
 use App\Domain\Bookings\BookingService;
 use App\Domain\Bookings\MessageService;
 use App\Domain\Finance\FinanceService;
@@ -15,6 +16,7 @@ use App\Models\Room;
 use App\Support\Audit;
 use App\Support\Local;
 use App\Support\Money;
+use App\Support\Settings;
 use Illuminate\Http\Request;
 use App\Domain\Bookings\VacancySearch;
 use Illuminate\Validation\ValidationException;
@@ -36,7 +38,7 @@ class BookingController extends Controller
             ->when($f['room'] ?? null, fn ($q, $v) => $q->whereHas('activeRooms', fn ($r) => $r->where('room_id', $v)))
             ->when(($f['arrivals'] ?? null) === 'today', fn ($q) => $q->where('check_in', Local::today())->where('status', Booking::CONFIRMED))
             ->when($f['q'] ?? null, fn ($q, $v) => $q->where(fn ($w) => $w->where('reference', 'like', "%{$v}%")->orWhereHas('guest', fn ($g) => $g->where('full_name', 'like', "%{$v}%"))))
-            ->orderByDesc('id')->paginate(30)->withQueryString();
+            ->orderByDesc('id')->paginate(15)->withQueryString();
 
         $rows->getCollection()->transform(fn ($b) => [
             'id' => $b->id,
@@ -59,15 +61,20 @@ class BookingController extends Controller
         ]);
     }
 
+    /** The form is a modal now. Old links and bookmarks open it on Reservations. */
     public function create(Request $request)
     {
-        return Inertia::render('Admin/BookingForm', [
+        return redirect('/admin/bookings?'.http_build_query(['new' => 1] + $request->only(['room_id', 'check_in', 'check_out'])));
+    }
+
+    public function formOptions()
+    {
+        return response()->json([
             'rooms' => Room::where('operational_status', '!=', 'retired')->with('property:id,name')->orderBy('id')->get()
                 ->map(fn ($r) => ['id' => $r->id, 'label' => "{$r->name} ({$r->unit_code}), {$r->property->name}", 'max' => $r->max_guests, 'included' => $r->included_guests]),
-            'sources' => BookingSource::where('is_active', true)->where('is_legacy_only', false)->orderBy('id')->get(['id', 'name']),
+            'sources' => BookingSource::where('is_active', true)->where('is_legacy_only', false)->orderBy('id')->get(['id', 'code', 'name']),
             'guests' => Guest::orderByDesc('id')->limit(200)->get(['id', 'full_name', 'phone']),
-            'prefill' => $request->only(['room_id', 'check_in', 'check_out']),
-        ]);
+        ])->header('Cache-Control', 'no-store');
     }
 
     /** Which rooms cannot take these dates, and why. Capacity is left out: a group can share several rooms. */
@@ -105,8 +112,9 @@ class BookingController extends Controller
             'special_requests' => 'nullable|string|max:2000',
             'internal_notes' => 'nullable|string|max:2000',
             'idempotency_key' => 'nullable|string|max:60',
-            'then' => 'nullable|in:hold',
+            'then' => 'nullable|in:hold,confirm',
         ]);
+        abort_if(($data['then'] ?? null) === 'confirm' && ! $request->user()->can('bookings.confirm'), 403);
 
         // A double-clicked Save carries the same key and returns the booking already made, so it skips this.
         if (empty($data['idempotency_key']) || ! Booking::where('idempotency_key', $data['idempotency_key'])->exists()) {
@@ -124,16 +132,30 @@ class BookingController extends Controller
 
         $booking = $this->bookings->createInquiry($data);
 
-        if (($data['then'] ?? null) === 'hold') {
-            $this->bookings->hold($booking);
+        // Stays on the page it was opened from. A repeated click finds the booking already done.
+        $view = ['label' => 'View booking', 'href' => "/admin/bookings/{$booking->id}"];
+        if (! $booking->wasRecentlyCreated) {
+            return back()->with('success', "Booking {$booking->reference} is already saved.")->with('flash_action', $view);
         }
 
-        return redirect("/admin/bookings/{$booking->id}")->with('success', "Booking {$booking->reference} created.");
+        try {
+            match ($data['then'] ?? null) {
+                'hold' => $this->bookings->hold($booking),
+                'confirm' => $this->bookings->confirm($booking),
+                default => null,
+            };
+        } catch (RoomConflict $e) {
+            return back()->with('error', "Booking {$booking->reference} was saved as an inquiry, but not ".(($data['then'] ?? null) === 'hold' ? 'held' : 'confirmed').": {$e->getMessage()}")->with('flash_action', $view);
+        }
+
+        $done = ['hold' => 'saved and on hold', 'confirm' => 'confirmed'][$data['then'] ?? ''] ?? 'saved as an inquiry';
+
+        return back()->with('success', "Booking {$booking->reference} {$done}.")->with('flash_action', $view);
     }
 
     public function show(Request $request, Booking $booking)
     {
-        $booking->load(['guest', 'source:id,name', 'property:id,name', 'activeRooms.room:id,name,unit_code,housekeeping_status,included_guests,max_guests', 'statusEvents.user:id,name', 'snapshots']);
+        $booking->load(['guest', 'source:id,name,code', 'property:id,name', 'activeRooms.room:id,name,unit_code,housekeeping_status,included_guests,max_guests', 'statusEvents.user:id,name', 'snapshots']);
         $user = $request->user();
         $canPay = $user->can('payments.view');
 
@@ -163,7 +185,10 @@ class BookingController extends Controller
             ],
             'charges' => $booking->charges()->orderByDesc('id')->get(['id', 'type', 'description', 'quantity', 'amount_cents', 'pricing_version', 'voided_at', 'void_reason']),
             'balance' => $canPay ? $this->finance->balance($booking) : null,
-            'receipts' => $canPay ? $booking->receipts()->orderByDesc('id')->get(['id', 'reference', 'receipt_date', 'amount_cents', 'method', 'external_reference', 'verification_status', 'evidence_path']) : [],
+            'receipts' => $canPay ? $this->receiptRows($booking) : [],
+            'checkout' => $this->checkoutWarning($booking, $canPay),
+            'nowLocal' => Local::now()->format('Y-m-d\TH:i'),
+            'downpaymentPercent' => $booking->source?->code === 'airbnb' ? null : ((int) Settings::get('finance.downpayment_percent') ?: null),
             'settlements' => $canPay ? $booking->settlements()->orderByDesc('id')->get() : [],
             'refunds' => $canPay ? $booking->refunds()->orderByDesc('id')->get() : [],
             'events' => $booking->statusEvents->map(fn ($e) => ['from' => $e->from_status, 'to' => $e->to_status, 'note' => $e->note, 'by' => $e->user?->name, 'at' => $e->created_at]),
@@ -172,6 +197,37 @@ class BookingController extends Controller
             'messages' => $this->messages->renderAll($booking),
             'rooms' => Room::where('operational_status', '!=', 'retired')->orderBy('id')->get(['id', 'name', 'unit_code']),
         ]);
+    }
+
+    private function receiptRows(Booking $booking): array
+    {
+        $reversed = $booking->receipts()->whereNotNull('reverses_receipt_id')->pluck('reverses_receipt_id');
+
+        return $booking->receipts()->orderByDesc('id')->get()->map(fn ($r) => [
+            'id' => $r->id,
+            'reference' => $r->reference,
+            'receipt_date' => $r->receipt_date->toDateString(),
+            'amount_cents' => (int) $r->amount_cents,
+            'method' => $r->method,
+            'external_reference' => $r->external_reference,
+            'verification_status' => $r->verification_status,
+            'review_note' => $r->review_note,
+            'reverses_receipt_id' => $r->reverses_receipt_id,
+            'reversed' => $reversed->contains($r->id),
+            'has_proof' => $r->evidence_path !== null,
+        ])->all();
+    }
+
+    /** Amounts only for people who may see payments. Everyone who checks a guest out is told there is a balance. */
+    private function checkoutWarning(Booking $booking, bool $canPay): array
+    {
+        $unpaid = $booking->status === Booking::CHECKED_IN ? $this->unpaidAtCheckOut($booking) : 0;
+
+        return [
+            'unpaid' => $unpaid > 0,
+            'balance_cents' => $canPay && $unpaid > 0 ? $unpaid : null,
+            'pending_cents' => $canPay && $unpaid > 0 ? (int) $this->finance->balance($booking)['pending_cents'] : 0,
+        ];
     }
 
     public function hold(Request $request, Booking $booking)
@@ -229,11 +285,28 @@ class BookingController extends Controller
         return back()->with('success', 'Guest checked in.');
     }
 
-    public function checkOut(Booking $booking)
+    /** Unpaid money never stops a guest leaving, but it needs a reason, so it cannot be forgotten by accident. */
+    public function checkOut(Request $request, Booking $booking)
     {
-        $this->bookings->checkOut($booking);
+        $unpaid = $booking->status === Booking::CHECKED_IN ? $this->unpaidAtCheckOut($booking) : 0;
+        if ($unpaid <= 0) {
+            $this->bookings->checkOut($booking);
 
-        return back()->with('success', 'Checked out. Turnover work has been created; the room is not ready until inspected.');
+            return back()->with('success', 'Checked out. Turnover work has been created; the room is not ready until inspected.');
+        }
+
+        $reason = $request->validate(['unpaid_reason' => 'required|string|max:200'], ['unpaid_reason.required' => 'This booking still has a balance. Say why it is not fully paid.'])['unpaid_reason'];
+        $this->bookings->checkOut($booking, 'Checked out with '.Money::format($unpaid)." unpaid: {$reason}");
+
+        return back()->with('success', $request->user()->can('payments.view')
+            ? 'Checked out with '.Money::format($unpaid).' unpaid. It stays on your list of money to collect.'
+            : 'Checked out. The unpaid balance stays on the booking.');
+    }
+
+    /** What the guest still owes here. An Airbnb guest paid Airbnb, so the payout is tracked separately instead. */
+    private function unpaidAtCheckOut(Booking $booking): int
+    {
+        return $booking->source?->code === 'airbnb' ? 0 : max(0, $this->finance->balance($booking)['balance_cents']);
     }
 
     public function amend(Request $request, Booking $booking)

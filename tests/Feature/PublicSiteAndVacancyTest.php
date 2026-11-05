@@ -42,8 +42,7 @@ class PublicSiteAndVacancyTest extends DomainTestCase
         auth()->logout();
 
         foreach ([
-            '/', '/suites', '/suites/venice', '/policies',
-            '/suites?check_in=2031-03-03&check_out=2031-03-05&guests=2&max_price=5000',
+            '/', '/suites/venice', '/policies',
             '/suites/venice?check_in=2031-03-03&check_out=2031-03-05&guests=2&early=12:00',
         ] as $url) {
             $body = $this->get($url)->assertOk()->getContent();
@@ -59,11 +58,39 @@ class PublicSiteAndVacancyTest extends DomainTestCase
         Room::query()->update(['is_published' => true]);
         auth()->logout();
 
-        $names = fn (string $query) => collect($this->get("/suites?{$query}")->original->getData()['page']['props']['rooms'])->pluck('name')->all();
+        $rooms = collect($this->get('/')->original->getData()['page']['props']['rooms']);
 
-        $this->assertSame(['RIO', 'BERLIN'], $names('location=mesaverte'));
-        $this->assertSame(['PARIS', 'NEW YORK'], $names('type=2-bedrooms'));
-        $this->assertSame(['NEW YORK'], $names('guests=9'));
+        // The page filters on these, so they must be right for every suite.
+        $this->assertSame(['RIO', 'BERLIN'], $rooms->where('location_slug', 'mesaverte')->pluck('name')->values()->all());
+        $this->assertSame(['PARIS', 'NEW YORK'], $rooms->where('type_slug', '2-bedrooms')->pluck('name')->values()->all());
+        $this->assertSame(['NEW YORK'], $rooms->where('max_guests', '>=', 9)->pluck('name')->values()->all());
+    }
+
+    public function test_old_suites_links_land_on_the_one_list_with_their_filters(): void
+    {
+        auth()->logout();
+
+        $this->get('/suites')->assertRedirect('/#availability');
+        $this->get('/suites?location=mesaverte&guests=4&max_price=5000')->assertRedirect('/?location=mesaverte&guests=4#availability');
+    }
+
+    public function test_the_landing_page_carries_every_detail_the_suite_modal_shows_and_nothing_private(): void
+    {
+        Room::query()->update(['is_published' => true]);
+        $this->room('venice')->update(['inclusions' => 'One queen bed', 'operational_notes' => 'PRIVATE-NOTE']);
+        auth()->logout();
+
+        $response = $this->get('/')->assertOk();
+        $props = $response->original->getData()['page']['props'];
+        $venice = collect($props['rooms'])->firstWhere('slug', 'venice');
+
+        $this->assertSame('One queen bed', $venice['inclusions']);
+        $this->assertArrayHasKey('amenities', $venice);
+        $this->assertArrayHasKey('images', $venice);
+        $this->assertSame('14:00', $props['policy']['standard_check_in']);
+        $this->assertNotEmpty($props['types']);
+        $this->assertStringNotContainsString('PRIVATE-NOTE', $response->getContent());
+        $this->assertArrayNotHasKey('unit_code', $venice);
     }
 
     public function test_message_link_reaches_public_pages_only_once_configured(): void
@@ -223,9 +250,9 @@ class PublicSiteAndVacancyTest extends DomainTestCase
         $this->assertStringContainsString('Hi {{guest}}', $text);
         $this->assertStringContainsString('VENICE', $text);
         $this->assertStringContainsString('Mar 3, 2031', $text);
-        $this->assertStringContainsString('Mar 3 (Mon), weekday rate', $text);
-        $this->assertStringContainsString('- Parking:', $text);
-        $this->assertStringContainsString('- Discount: -', $text);
+        $this->assertStringContainsString('Weekday (2 × ', $text);
+        $this->assertStringContainsString('Parking: ₱400', $text);
+        $this->assertStringContainsString('Discount: -₱20', $text);
         $this->assertStringNotContainsString('approved', $text);
         $this->assertStringNotContainsString('2031-03-03', $text);
     }

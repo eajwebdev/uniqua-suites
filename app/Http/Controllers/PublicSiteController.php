@@ -36,33 +36,17 @@ class PublicSiteController extends Controller
             // Shown as "in every suite", so only what all of them really have.
             'amenities' => $rooms->isEmpty() ? [] : array_values(array_intersect(...$rooms->map(fn ($r) => $r->amenities->pluck('name')->all())->all())),
             'properties' => Property::orderBy('id')->get(['name', 'slug', 'location_label']),
+            'types' => RoomType::orderBy('id')->get(['name', 'slug']),
+            'policy' => $this->policy(),
         ]);
     }
 
+    /** Filters now run on the landing page. Old links and bookmarks arrive there with theirs applied. */
     public function suites(Request $request)
     {
-        $f = $request->validate([
-            'location' => 'nullable|string|max:40',
-            'type' => 'nullable|string|max:40',
-            'guests' => 'nullable|integer|min:1|max:20',
-            'balcony' => 'nullable|boolean',
-            'bathrooms' => 'nullable|integer|min:1|max:5',
-        ]);
+        $query = http_build_query($request->only(['location', 'type', 'guests', 'bathrooms', 'balcony']));
 
-        $rooms = Room::published()->with(['property', 'type', 'images'])
-            ->when($f['location'] ?? null, fn ($q, $v) => $q->whereHas('property', fn ($p) => $p->where('slug', $v)))
-            ->when($f['type'] ?? null, fn ($q, $v) => $q->whereHas('type', fn ($t) => $t->where('slug', $v)))
-            ->when($f['guests'] ?? null, fn ($q, $v) => $q->where('max_guests', '>=', $v))
-            ->when(! empty($f['balcony']), fn ($q) => $q->where('has_balcony', true))
-            ->when($f['bathrooms'] ?? null, fn ($q, $v) => $q->where('bathrooms', '>=', $v))
-            ->orderBy('id')->get();
-
-        return Inertia::render('Public/Suites', [
-            'rooms' => $rooms->map(fn ($r) => $this->card($r)),
-            'filters' => $f,
-            'properties' => Property::orderBy('id')->get(['name', 'slug']),
-            'types' => RoomType::orderBy('id')->get(['name', 'slug']),
-        ]);
+        return redirect('/'.($query ? "?{$query}" : '').'#availability');
     }
 
     public function show(string $slug)
@@ -70,11 +54,7 @@ class PublicSiteController extends Controller
         $room = Room::published()->where('slug', $slug)->with(['property', 'type', 'images', 'amenities'])->firstOrFail();
 
         return Inertia::render('Public/Suite', [
-            'room' => $this->card($room) + [
-                'inclusions' => $room->inclusions,
-                'policies' => $room->policies,
-                'amenities' => $room->amenities->pluck('name'),
-            ],
+            'room' => $this->card($room),
             'policy' => $this->policy(),
         ]);
     }
@@ -126,7 +106,12 @@ class PublicSiteController extends Controller
             'name' => $room->name,
             'slug' => $room->slug,
             'location' => $room->property->location_label,
+            'location_slug' => $room->property->slug,
             'type' => $room->type->name,
+            'type_slug' => $room->type->slug,
+            'inclusions' => $room->inclusions,
+            'policies' => $room->policies,
+            'amenities' => $room->amenities->pluck('name'),
             'description' => $room->description,
             'closed' => $this->isClosed($room),
             'unavailable' => $this->inventory->takenRanges($room->id, Local::today(), Local::now()->addDays(self::DAYS_SHOWN)->toDateString()),

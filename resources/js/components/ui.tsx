@@ -1,6 +1,7 @@
-import { Link, router, useForm } from '@inertiajs/react';
-import { Check, Copy, Eye, EyeOff, Inbox, X } from 'lucide-react';
+import { Link, router, useForm, usePage } from '@inertiajs/react';
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, CircleHelp, Copy, Eye, EyeOff, Inbox, X } from 'lucide-react';
 import { ButtonHTMLAttributes, FormEvent, ReactNode, useEffect, useRef, useState } from 'react';
+import { createRoot } from 'react-dom/client';
 import { humanize } from '@/lib/format';
 
 export function cn(...parts: (string | false | null | undefined)[]) {
@@ -170,23 +171,89 @@ export function DynamicField({ field, value, error, onChange }: { field: FieldDe
     );
 }
 
-export function Modal({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
+export function Modal({ open, onClose, title, children, wide }: { open: boolean; onClose: () => void; title: string; children: ReactNode; wide?: boolean }) {
     const ref = useRef<HTMLDialogElement>(null);
     useEffect(() => {
         if (open && !ref.current?.open) ref.current?.showModal();
         if (!open && ref.current?.open) ref.current?.close();
     }, [open]);
     return (
-        <dialog ref={ref} onClose={onClose} className="m-auto w-[calc(100%-2rem)] max-w-lg rounded-lg border border-line bg-white p-0 text-chocolate">
-            <header className="flex items-center justify-between border-b border-line px-4 py-3">
-                <h2 className="font-semibold">{title}</h2>
+        <dialog ref={ref} onClose={onClose} className={cn('dialog-pop m-auto w-[calc(100%-2rem)] overflow-hidden rounded-2xl border border-line/80 bg-white p-0 text-chocolate shadow-2xl', wide ? 'max-w-4xl' : 'max-w-lg')}>
+            <header className="flex items-center justify-between gap-3 border-b border-line/70 bg-ivory/60 px-5 py-3.5">
+                <h2 className="text-[0.9375rem] font-semibold">{title}</h2>
                 <Button variant="ghost" small aria-label="Close dialog" onClick={onClose}>
                     <X size={16} />
                 </Button>
             </header>
-            <div className="max-h-[75vh] overflow-y-auto p-4">{children}</div>
+            <div className="max-h-[75vh] overflow-y-auto p-5">{children}</div>
         </dialog>
     );
+}
+
+type ConfirmOptions = { title?: string; message: string; confirmLabel?: string; danger?: boolean };
+
+function ConfirmDialog({ title = 'Please confirm', message, confirmLabel = 'Confirm', danger = false, onDone }: ConfirmOptions & { onDone: (answer: boolean) => void }) {
+    const dialog = useRef<HTMLDialogElement>(null);
+    const confirmButton = useRef<HTMLButtonElement>(null);
+    const cancelButton = useRef<HTMLButtonElement>(null);
+    const Icon = danger ? AlertTriangle : CircleHelp;
+
+    useEffect(() => {
+        dialog.current?.showModal();
+        // Enter should never carry out something destructive by accident.
+        (danger ? cancelButton : confirmButton).current?.focus();
+    }, [danger]);
+
+    // close() hands focus back to the button that opened the dialog.
+    function finish(answer: boolean) {
+        dialog.current?.close();
+        onDone(answer);
+    }
+
+    return (
+        <dialog
+            ref={dialog}
+            role="alertdialog"
+            aria-labelledby="confirm-title"
+            aria-describedby="confirm-message"
+            onCancel={(e) => { e.preventDefault(); finish(false); }}
+            onClick={(e) => e.target === dialog.current && finish(false)}
+            className="dialog-pop m-auto w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-2xl border border-line/80 bg-white p-0 text-chocolate shadow-2xl"
+        >
+            <div className="flex gap-4 p-6">
+                <span className={cn('flex size-11 shrink-0 items-center justify-center rounded-full', danger ? 'bg-red-50 text-red-800' : 'bg-beige text-gold-dark')}>
+                    <Icon size={22} strokeWidth={1.75} aria-hidden />
+                </span>
+                <div className="min-w-0 pt-0.5">
+                    <h2 id="confirm-title" className="text-base font-semibold">{title}</h2>
+                    <p id="confirm-message" className="mt-1.5 text-sm leading-relaxed text-muted">{message}</p>
+                </div>
+            </div>
+            <div className="flex flex-col-reverse gap-2 border-t border-line/70 bg-ivory/60 px-6 py-3.5 sm:flex-row sm:justify-end">
+                <button ref={cancelButton} type="button" className={buttonClass('secondary')} onClick={() => finish(false)}>Cancel</button>
+                <button ref={confirmButton} type="button" className={danger ? cn(buttonClass('primary'), 'bg-red-800 hover:bg-red-900') : buttonClass('primary')} onClick={() => finish(true)}>{confirmLabel}</button>
+            </div>
+        </dialog>
+    );
+}
+
+/** The app's own replacement for window.confirm. Resolves true only when the person confirms. */
+export function confirmDialog(options: ConfirmOptions): Promise<boolean> {
+    return new Promise((resolve) => {
+        const host = document.createElement('div');
+        document.body.appendChild(host);
+        const root = createRoot(host);
+        root.render(
+            <ConfirmDialog
+                {...options}
+                onDone={(answer) => {
+                    root.unmount();
+                    host.remove();
+                    resolve(answer);
+                }}
+            />,
+        );
+    });
 }
 
 /** Server-driven form: fields come from the controller, validation errors come back per field. */
@@ -203,9 +270,9 @@ export function FormModal({ title, url, fields, data, submitLabel, confirm, onCl
         }
     }, [form.errors]);
 
-    function submit(e: FormEvent) {
+    async function submit(e: FormEvent) {
         e.preventDefault();
-        if (confirm && !window.confirm(confirm)) return;
+        if (confirm && !(await confirmDialog({ title, message: confirm, confirmLabel: submitLabel ?? 'Continue' }))) return;
         form.post(url, {
             forceFormData: hasFile,
             preserveScroll: true,
@@ -232,12 +299,12 @@ export function FormModal({ title, url, fields, data, submitLabel, confirm, onCl
 
 export type RowAction = { label: string; url: string; confirm?: string; fields?: FieldDef[]; data?: Record<string, any>; variant?: Variant };
 
-export function ActionButton({ action, small = true }: { action: RowAction; small?: boolean }) {
+export function ActionButton({ action, small = true, className }: { action: RowAction; small?: boolean; className?: string }) {
     const [open, setOpen] = useState(false);
     if (action.fields?.length) {
         return (
             <>
-                <Button small={small} variant={action.variant} onClick={() => setOpen(true)}>
+                <Button small={small} variant={action.variant} className={className} onClick={() => setOpen(true)}>
                     {action.label}
                 </Button>
                 {open && <FormModal title={action.label} url={action.url} fields={action.fields} data={action.data} confirm={action.confirm} onClose={() => setOpen(false)} />}
@@ -248,8 +315,9 @@ export function ActionButton({ action, small = true }: { action: RowAction; smal
         <Button
             small={small}
             variant={action.variant}
-            onClick={() => {
-                if (action.confirm && !window.confirm(action.confirm)) return;
+            className={className}
+            onClick={async () => {
+                if (action.confirm && !(await confirmDialog({ title: action.label, message: action.confirm, confirmLabel: action.label, danger: action.variant === 'danger' }))) return;
                 router.post(action.url, action.data ?? {}, { preserveScroll: true });
             }}
         >
@@ -314,18 +382,131 @@ export function Stat({ label, value, hint, icon: Icon, href }: { label: string; 
     return href ? <Link href={href} className={cn(frame, 'transition-colors hover:border-gold')}>{body}</Link> : <div className={frame}>{body}</div>;
 }
 
-export function Pagination({ links }: { links?: { url: string | null; label: string; active: boolean }[] }) {
-    if (!links || links.length <= 3) return null;
+/** Shared look for compact tables, so every list in the admin reads the same. */
+export const tableClass = 'w-full text-left text-[13px]';
+export const theadClass = 'bg-ivory/70 text-[11px] font-medium tracking-wide text-muted uppercase';
+export const thClass = 'px-3 py-2 font-medium whitespace-nowrap';
+export const trClass = 'border-t border-line/70 transition-colors hover:bg-ivory/60';
+// One line per row is what saves the space. Long text opts back in to wrapping where it is shown.
+export const tdClass = 'px-3 py-1 whitespace-nowrap';
+
+type PagerItem = { key: string | number; label: ReactNode; ariaLabel?: string; active?: boolean; href?: string | null; onClick?: () => void };
+
+function PagerButton({ item, hideOnPhone }: { item: PagerItem; hideOnPhone?: boolean }) {
+    const frame = cn('h-8 min-w-8 items-center justify-center rounded-lg px-1.5 text-xs font-medium tabular-nums transition-colors pointer-coarse:h-11 pointer-coarse:min-w-11', hideOnPhone ? 'hidden sm:flex' : 'flex');
+    const state = item.active ? 'bg-chocolate text-ivory' : 'text-chocolate hover:bg-beige';
+    const current = item.active ? ('page' as const) : undefined;
+
+    if (item.href) return <Link href={item.href} preserveScroll aria-label={item.ariaLabel} aria-current={current} className={cn(frame, state)}>{item.label}</Link>;
+    if (item.onClick) return <button type="button" onClick={item.onClick} aria-label={item.ariaLabel} aria-current={current} className={cn(frame, state)}>{item.label}</button>;
+
+    return <span aria-hidden={item.ariaLabel ? undefined : true} aria-label={item.ariaLabel} className={cn(frame, item.active ? state : 'text-muted/50')}>{item.label}</span>;
+}
+
+/** The footer of a table: where you are on the left, how to move on the right. */
+function PagerBar({ from, to, total, prev, next, pages, currentPage, lastPage }: { from?: number | null; to?: number | null; total?: number; prev: PagerItem; next: PagerItem; pages: PagerItem[]; currentPage?: number; lastPage?: number }) {
     return (
-        <nav aria-label="Pages" className="mt-3 flex flex-wrap gap-1">
-            {links.map((l, i) =>
-                l.url ? (
-                    <Link key={i} href={l.url} preserveScroll className={cn('flex items-center rounded px-2.5 py-1 text-xs pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:justify-center', l.active ? 'bg-chocolate text-ivory' : 'border border-line bg-white')} aria-current={l.active ? 'page' : undefined} dangerouslySetInnerHTML={{ __html: l.label }} />
-                ) : (
-                    <span key={i} className="px-2.5 py-1 text-xs text-muted" dangerouslySetInnerHTML={{ __html: l.label }} />
-                ),
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line/70 bg-ivory/40 px-3 py-1.5 text-xs text-muted">
+            <p aria-live="polite" className="tabular-nums">{total !== undefined ? (total === 0 ? 'No records' : <><span className="font-medium text-chocolate">{from}–{to}</span> of {total}</>) : null}</p>
+            {pages.length > 1 && (
+                <nav aria-label="Pages" className="flex items-center gap-0.5">
+                    <PagerButton item={prev} />
+                    {pages.map((p) => <PagerButton key={p.key} item={p} hideOnPhone />)}
+                    {currentPage && lastPage && <span className="px-2 tabular-nums sm:hidden">Page {currentPage} of {lastPage}</span>}
+                    <PagerButton item={next} />
+                </nav>
             )}
-        </nav>
+        </div>
+    );
+}
+
+const prevIcon = <ChevronLeft size={15} aria-hidden />;
+const nextIcon = <ChevronRight size={15} aria-hidden />;
+
+type ServerLink = { url: string | null; label: string; active: boolean };
+
+/** For lists the server pages. Pass the paginator's numbers to show the "1–15 of 120" count. */
+export function Pagination({ links, from, to, total }: { links?: ServerLink[]; from?: number | null; to?: number | null; total?: number }) {
+    if (!links || links.length < 3) return null;
+
+    const [first, last] = [links[0], links[links.length - 1]];
+    const numbers = links.slice(1, -1);
+    const currentIndex = numbers.findIndex((l) => l.active);
+    const pages: PagerItem[] = numbers.map((l, i) => (l.url ? { key: i, label: l.label, ariaLabel: `Page ${l.label}`, active: l.active, href: l.url } : { key: i, label: '…' }));
+    const lastPage = Number(numbers[numbers.length - 1]?.label);
+
+    return (
+        <PagerBar
+            from={from}
+            to={to}
+            total={total}
+            prev={{ key: 'prev', label: prevIcon, ariaLabel: 'Previous page', href: first.url }}
+            next={{ key: 'next', label: nextIcon, ariaLabel: 'Next page', href: last.url }}
+            pages={pages}
+            currentPage={currentIndex >= 0 ? Number(numbers[currentIndex].label) : undefined}
+            lastPage={Number.isNaN(lastPage) ? undefined : lastPage}
+        />
+    );
+}
+
+const storedPage = (key: string) => {
+    try {
+        return Number(window.sessionStorage.getItem(key)) || 1;
+    } catch {
+        return 1;
+    }
+};
+
+/**
+ * Pages a list the server sent in full. The page is remembered per address, because an action
+ * such as Approve reloads the screen and would otherwise throw the person back to page one.
+ */
+export function usePaged<T>(rows: T[], options: { size?: number; id?: string; enabled?: boolean } = {}) {
+    const { size = 15, id = 'table', enabled = true } = options;
+    const key = `uniqa:page:${id}:${usePage().url}`;
+    const [state, setState] = useState(() => ({ key, page: storedPage(key) }));
+    const lastPage = Math.max(1, Math.ceil(rows.length / size));
+    // A filter changes the address: start that new list from where it was last left.
+    const wanted = state.key === key ? state.page : storedPage(key);
+    const page = Math.min(wanted, lastPage);
+
+    function setPage(next: number) {
+        setState({ key, page: next });
+        try {
+            window.sessionStorage.setItem(key, String(next));
+        } catch {
+            // Private windows can refuse storage. Paging still works, it just isn't remembered.
+        }
+    }
+
+    if (!enabled) return { rows, page: 1, lastPage: 1, setPage, from: rows.length ? 1 : 0, to: rows.length, total: rows.length };
+
+    const start = (page - 1) * size;
+
+    return { rows: rows.slice(start, start + size), page, lastPage, setPage, from: rows.length ? start + 1 : 0, to: Math.min(start + size, rows.length), total: rows.length };
+}
+
+/** 1 … 4 5 6 … 12: short enough to never wrap. */
+function pageWindow(page: number, last: number): (number | null)[] {
+    const wanted = [...new Set([1, page - 1, page, page + 1, last])].filter((n) => n >= 1 && n <= last).sort((a, b) => a - b);
+
+    return wanted.flatMap((n, i) => (i > 0 && n - wanted[i - 1] > 1 ? [null, n] : [n]));
+}
+
+export function ClientPager({ pager }: { pager: ReturnType<typeof usePaged<any>> }) {
+    const { page, lastPage, setPage, from, to, total } = pager;
+
+    return (
+        <PagerBar
+            from={from}
+            to={to}
+            total={total}
+            prev={{ key: 'prev', label: prevIcon, ariaLabel: 'Previous page', onClick: page > 1 ? () => setPage(page - 1) : undefined }}
+            next={{ key: 'next', label: nextIcon, ariaLabel: 'Next page', onClick: page < lastPage ? () => setPage(page + 1) : undefined }}
+            pages={pageWindow(page, lastPage).map((n, i) => (n === null ? { key: `gap${i}`, label: '…' } : { key: n, label: n, ariaLabel: `Page ${n}`, active: n === page, onClick: () => setPage(n) }))}
+            currentPage={page}
+            lastPage={lastPage}
+        />
     );
 }
 

@@ -106,6 +106,22 @@ export function ForecastChart({ data, rooms }: { data: { date: string; label: st
     );
 }
 
+export function ExpenseTrendChart({ data }: { data: any[] }) {
+    return (
+        <div className="h-64" role="img" aria-label={`Bar chart of expenses in each of the last 12 months. ${data.map((d) => `${d.month}: ${pesoFull(d.expenses)}`).join(', ')}.`}>
+            <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} accessibilityLayer>
+                    <CartesianGrid stroke={CHART.grid} vertical={false} />
+                    <XAxis dataKey="month" tick={AXIS} tickFormatter={(m: string) => m.slice(0, 3)} tickLine={false} axisLine={{ stroke: CHART.grid }} />
+                    <YAxis tick={AXIS} tickFormatter={pesoCompact} tickLine={false} axisLine={false} width={52} />
+                    <Tooltip cursor={{ fill: CHART.grid }} content={({ active, label, payload }: any) => (payload?.[0] ? <Tip active={active} label={label} rows={[{ name: 'Expenses', colour: SERIES.expenses, value: pesoFull(payload[0].value) }]} /> : null)} />
+                    <Bar dataKey="expenses" fill={SERIES.expenses} radius={[4, 4, 0, 0]} maxBarSize={28} isAnimationActive={chartsAnimate} />
+                </ComposedChart>
+            </ResponsiveContainer>
+        </div>
+    );
+}
+
 /** Drawn directly: a share of nine rooms needs no chart library, and the labels sit beside it. */
 export function RoomsDonut({ segments, centre, label }: { segments: { label: string; value: number; colour: string }[]; centre: ReactNode; label: string }) {
     const shown = segments.filter((s) => s.value > 0);

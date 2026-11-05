@@ -8,7 +8,6 @@ use App\Models\BookingSource;
 use App\Models\Guest;
 use App\Models\Room;
 use App\Models\User;
-use App\Support\PublicUrl;
 use App\Support\Settings;
 use Database\Seeders\DatabaseSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -50,8 +49,6 @@ abstract class DomainTestCase extends TestCase
     {
         parent::setUp();
 
-        // Feed hosts in tests are fictional and must not depend on real DNS.
-        PublicUrl::$resolver = fn () => ['93.184.216.34'];
         $this->seed(DatabaseSeeder::class);
         foreach (self::FIXTURE_ROLES as $role => $permissions) {
             Role::findOrCreate($role, 'web')->syncPermissions($permissions);

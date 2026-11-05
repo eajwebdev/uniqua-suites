@@ -67,7 +67,7 @@ class ImportController extends Controller
             ->when($f['type'] ?? null, fn ($q, $v) => $q->where('record_type', $v))
             ->when($f['sheet'] ?? null, fn ($q, $v) => $q->where('sheet', $v))
             ->when($f['category'] ?? null, fn ($q, $v) => $q->whereHas('anomalies', fn ($a) => $a->where('category', $v)))
-            ->withCount('anomalies')->orderBy('id')->paginate(50)->withQueryString();
+            ->withCount('anomalies')->orderBy('id')->paginate(25)->withQueryString();
 
         $mappingLabels = LegacyRow::where('import_batch_id', $batch->id)->whereNotNull('room_label')->distinct()->pluck('room_label')->map(fn ($l) => strtoupper(trim($l)));
 
