@@ -7,20 +7,21 @@ use App\Models\ExpenseCategory;
 use App\Models\InventoryItem;
 use App\Models\MessageTemplate;
 use App\Models\OwnerDecision;
-use App\Models\PaymentAccount;
 use App\Models\ParkingSpace;
+use App\Models\PaymentAccount;
 use App\Models\Property;
 use App\Models\RateRule;
 use App\Models\Room;
 use App\Models\RoomType;
 use App\Models\User;
-use App\Support\Permissions;
 use App\Support\OwnerDefaults;
+use App\Support\Permissions;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
+use Spatie\Permission\PermissionRegistrar;
 
 /**
  * Approved-structure seed only: no guest, staff, contact or Wi-Fi data from the workbooks.
@@ -30,7 +31,7 @@ class DatabaseSeeder extends Seeder
 {
     public function run(): void
     {
-        app()[\Spatie\Permission\PermissionRegistrar::class]->forgetCachedPermissions();
+        app()[PermissionRegistrar::class]->forgetCachedPermissions();
         foreach (Permissions::ALL as $name) {
             Permission::findOrCreate($name, 'web');
         }
@@ -115,9 +116,15 @@ class DatabaseSeeder extends Seeder
             OwnerDefaults::apply();
         }
 
-        if (! User::exists() && app()->environment('local')) {
+        // A clean production install must not finish with no way to sign in. Tests
+        // create their own users, and existing databases are never given a new user.
+        if (! User::exists() && ! app()->environment('testing')) {
             $password = Str::random(16);
-            $owner = User::create(['name' => 'Owner', 'email' => 'owner@uniqa-suites.test', 'password' => Hash::make($password)]);
+            $owner = User::create([
+                'name' => config('uniqa.bootstrap_owner.name'),
+                'email' => config('uniqa.bootstrap_owner.email'),
+                'password' => Hash::make($password),
+            ]);
             $owner->assignRole('Owner');
             $this->command?->warn("Owner login: {$owner->email} / {$password}  (change this after first sign-in)");
         }
@@ -126,17 +133,17 @@ class DatabaseSeeder extends Seeder
     private function templates(): void
     {
         $templates = [
-            'inquiry_response' => ['Inquiry response', "Hi {{guest}}! Thank you for your interest in UNIQA SUITES. {{room}} for {{check_in}} to {{check_out}} ({{guests}} guests) looks possible, subject to confirmation. May I send your quotation?"],
+            'inquiry_response' => ['Inquiry response', 'Hi {{guest}}! Thank you for your interest in UNIQA SUITES. {{room}} for {{check_in}} to {{check_out}} ({{guests}} guests) looks possible, subject to confirmation. May I send your quotation?'],
             'quote' => ['Quotation', OwnerDefaults::QUOTE_TEMPLATE],
             'confirmation' => ['Booking confirmation', "Hi {{guest}}, your booking {{reference}} is confirmed: {{room}}, {{check_in}} to {{check_out}}.\nTotal {{total}}, balance {{balance}}.\nStandard check-in is {{check_in_time}}."],
-            'payment_instructions' => ['Payment instructions', "Hi {{guest}}, for booking {{reference}} the amount due is {{balance}}. Please send payment to the account we will share here, then send us your proof of payment. We will confirm once received."],
-            'balance_reminder' => ['Balance reminder', "Hi {{guest}}, a reminder that booking {{reference}} ({{check_in}}) has a balance of {{balance}}."],
-            'early_check_in' => ['Early check-in notice', "Hi {{guest}}, early check-in is subject to availability, room readiness and staff approval. Standard check-in is {{check_in_time}}."],
-            'directions' => ['Directions', "Hi {{guest}}, {{room}} is at {{property}}. Here are the directions: [staff to add approved directions]"],
-            'arrival' => ['Arrival instructions', "Hi {{guest}}, welcome! For your arrival at {{room}}, {{property}} on {{check_in}}: [staff to add approved instructions]"],
-            'check_out_reminder' => ['Check-out reminder', "Hi {{guest}}, a reminder that check-out for {{room}} is on {{check_out}}. Thank you for staying with us."],
-            'thank_you' => ['Post-stay thank-you', "Hi {{guest}}, thank you for staying at UNIQA SUITES. We hope to welcome you again."],
-            'incident' => ['Damage or incident notice', "Hi {{guest}}, we need to discuss an item noted after your stay in {{room}} (booking {{reference}}). May we share the details with you here?"],
+            'payment_instructions' => ['Payment instructions', 'Hi {{guest}}, for booking {{reference}} the amount due is {{balance}}. Please send payment to the account we will share here, then send us your proof of payment. We will confirm once received.'],
+            'balance_reminder' => ['Balance reminder', 'Hi {{guest}}, a reminder that booking {{reference}} ({{check_in}}) has a balance of {{balance}}.'],
+            'early_check_in' => ['Early check-in notice', 'Hi {{guest}}, early check-in is subject to availability, room readiness and staff approval. Standard check-in is {{check_in_time}}.'],
+            'directions' => ['Directions', 'Hi {{guest}}, {{room}} is at {{property}}. Here are the directions: [staff to add approved directions]'],
+            'arrival' => ['Arrival instructions', 'Hi {{guest}}, welcome! For your arrival at {{room}}, {{property}} on {{check_in}}: [staff to add approved instructions]'],
+            'check_out_reminder' => ['Check-out reminder', 'Hi {{guest}}, a reminder that check-out for {{room}} is on {{check_out}}. Thank you for staying with us.'],
+            'thank_you' => ['Post-stay thank-you', 'Hi {{guest}}, thank you for staying at UNIQA SUITES. We hope to welcome you again.'],
+            'incident' => ['Damage or incident notice', 'Hi {{guest}}, we need to discuss an item noted after your stay in {{room}} (booking {{reference}}). May we share the details with you here?'],
         ];
         foreach ($templates as $key => [$name, $body]) {
             MessageTemplate::firstOrCreate(['key' => $key], ['name' => $name, 'body' => $body]);

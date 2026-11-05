@@ -41,13 +41,14 @@ composer install
 Copy-Item .env.example .env     # Command Prompt: copy .env.example .env
 php artisan key:generate
 # edit .env: DB_USERNAME and DB_PASSWORD; put a password containing @ in double quotes
+# set UNIQA_OWNER_EMAIL to the real owner's email
 php artisan migrate --seed      # prints a generated Owner login once; save it. Can take minutes: do not interrupt it
 php artisan storage:link
 npm ci
 npm run build
 ```
 
-Seeding creates the nine rooms as **proposed and unpublished**, with no guest, staff, contact or Wi-Fi data. To publish, sign in, go to **Rooms**, then approve and publish each room.
+Seeding creates the nine rooms as **proposed and unpublished**, plus one Owner only when the users table is empty. It creates no demo guests, other staff, contact or Wi-Fi data. To publish, sign in, go to **Rooms**, then approve and publish each room. Invite each real staff member from **Team & Permissions**; never use the demo logins in production.
 
 Photos, current rates, capacities and amenities come from the flyers and HD photo packs in `database/seeders/suite`, kept out of `public/` because the flyers show prices and staff phone numbers, and the flyers also set the weekend nights (Friday and Saturday) and the extra-guest fee (per night) unless already chosen under **Settings**. After adding a pack named like `Uniqa_Suites_Rio_All_4_HD.zip`, run `php artisan db:seed --class=SuiteCatalogSeeder`. It only changes details and rates on rooms not yet approved, keeps photos staff uploaded, and adds a dated rate rule instead of editing the old one.
 
