@@ -146,7 +146,7 @@ export default function Account({ notifications, twoFactor, notificationPrefs }:
                     <p className="mb-3 text-sm">{auth.user.name} · {auth.user.email}<br /><span className="text-muted">{auth.user.roles.join(', ')}</span></p>
                     <form onSubmit={(ev) => { ev.preventDefault(); form.post('/admin/account/password', { preserveScroll: true, onSuccess: () => form.reset() }); }} className="space-y-3">
                         <Field label="Current password" error={e.current_password}><Input type="password" autoComplete="current-password" value={form.data.current_password} onChange={(ev) => form.setData('current_password', ev.target.value)} /></Field>
-                        <Field label="New password" error={e.password} help="At least 10 characters."><Input type="password" autoComplete="new-password" value={form.data.password} onChange={(ev) => form.setData('password', ev.target.value)} /></Field>
+                        <Field label="New password" error={e.password} help="At least 8 characters."><Input type="password" autoComplete="new-password" value={form.data.password} onChange={(ev) => form.setData('password', ev.target.value)} /></Field>
                         <Field label="Confirm new password"><Input type="password" autoComplete="new-password" value={form.data.password_confirmation} onChange={(ev) => form.setData('password_confirmation', ev.target.value)} /></Field>
                         <Button type="submit" variant="primary" disabled={form.processing}>Change password</Button>
                     </form>

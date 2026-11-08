@@ -111,12 +111,26 @@ Artisan::command('uniqa:doctor', function () {
 
     try {
         DB::connection()->getPdo();
-        $check('Database connects', true);
+        $check('Database connects ('.($database['database'] ?? '?').' as '.($database['username'] ?? '?').', APP_ENV='.app()->environment().')', true);
         $pending = collect(app('migrator')->getMigrationFiles(database_path('migrations')))->keys()->diff(DB::table('migrations')->pluck('migration'))->count();
         $check('Migrations are all applied', $pending === 0, "{$pending} pending: run php artisan migrate.");
         $last = Settings::get('system.scheduler_last_run');
         $check('Scheduler ran in the last 10 minutes', $last && now()->diffInMinutes($last, true) <= 10, 'Start the scheduler: see README.', $production);
-        $check('An active Owner exists', User::role('Owner')->where('is_active', true)->exists(), 'Run php artisan db:seed.');
+        $check('An active Owner exists', User::role('Owner')->where('is_active', true)->exists(), 'Run php artisan db:seed --force.');
+
+        // Seeding: what the catalog seeders should have created, and what they need to do it.
+        $check('Environment is not "testing" (seeders skip suites and cameras there)', ! app()->environment('testing'), 'Set APP_ENV=production, then php artisan config:clear.', false);
+        $suites = Room::suites()->count();
+        $cameras = Room::cameras()->count();
+        $check("Suites seeded ({$suites} of 9)", $suites >= 9, 'Run php artisan db:seed --force (not only the SuiteCatalogSeeder class).', false);
+        $check("Cameras seeded ({$cameras} of 10)", $cameras >= 10, 'Run php artisan db:seed --class=GrabCamSeeder --force.', false);
+        $photos = \App\Models\RoomImage::count();
+        $check("Room and camera photos ({$photos})", $photos > 0, 'Check the two folders below, then run php artisan db:seed --force.', false);
+        $check('Suite photo folder is on the server (database/seeders/suite)', is_dir(database_path('seeders/suite')) && count(glob(database_path('seeders/suite/*'))) > 0, 'Upload the database/seeders/suite folder.', false);
+        $check('Camera rate card is on the server (database/seeders/camera)', is_file(database_path('seeders/camera/grabcam-rate-card.png')), 'Upload database/seeders/camera/grabcam-rate-card.png.', false);
+        $check('Image library (GD) is available for photos', extension_loaded('gd'), 'Enable the PHP gd extension in hPanel > PHP Configuration.', false);
+        $check('ZIP support is available for the suite photo packs', class_exists(\ZipArchive::class), 'Enable the PHP zip extension in hPanel > PHP Configuration.', false);
+        $check('Subscription is set up', \App\Support\Subscription::status() !== \App\Support\Subscription::NOT_SET, 'Run php artisan db:seed --force.', false);
         $unprotected = User::permission('team.manage')->where('is_active', true)->whereNull('two_factor_confirmed_at')->count();
         $check('Owners use two-factor sign-in', $unprotected === 0, "{$unprotected} account(s) without it: set it up under Account.", $production);
     } catch (Throwable $e) {

@@ -97,7 +97,7 @@ class AuthController extends Controller
 
     public function reset(Request $request)
     {
-        $request->validate(['token' => 'required', 'email' => 'required|email', 'password' => ['required', 'confirmed', PasswordRule::min(10)]]);
+        $request->validate(['token' => 'required', 'email' => 'required|email', 'password' => ['required', 'confirmed', PasswordRule::min(8)]]);
 
         $status = Password::reset($request->only('email', 'password', 'password_confirmation', 'token'), function ($user, $password) {
             $user->forceFill(['password' => Hash::make($password), 'remember_token' => Str::random(60)])->save();
@@ -127,7 +127,7 @@ class AuthController extends Controller
 
     public function updatePassword(Request $request)
     {
-        $data = $request->validate(['current_password' => 'required|current_password', 'password' => ['required', 'confirmed', PasswordRule::min(10)]]);
+        $data = $request->validate(['current_password' => 'required|current_password', 'password' => ['required', 'confirmed', 'different:current_password', PasswordRule::min(8)]], ['password.different' => 'Choose a new password, not the one you use now.']);
         $request->user()->update(['password' => $data['password'], 'must_change_password' => false]);
         Auth::logoutOtherDevices($data['password']);
         Audit::log('auth.password_changed');
