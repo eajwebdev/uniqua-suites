@@ -88,7 +88,13 @@ class ProductionSeederTest extends TestCase
         $this->get('/admin/bookings')->assertRedirect('/admin/account');
         $this->get('/admin/account')->assertOk();
 
-        $this->post('/admin/account/password', ['current_password' => 'password@123', 'password' => 'my-own-secret-9', 'password_confirmation' => 'my-own-secret-9'])->assertSessionHasNoErrors();
+        // The same starting password again is refused, and so is anything under 8 characters.
+        $this->post('/admin/account/password', ['current_password' => 'password@123', 'password' => 'password@123', 'password_confirmation' => 'password@123'])->assertSessionHasErrors('password');
+        $this->post('/admin/account/password', ['current_password' => 'password@123', 'password' => 'short7!', 'password_confirmation' => 'short7!'])->assertSessionHasErrors('password');
+        $this->assertTrue($reception->fresh()->must_change_password);
+
+        // 9 characters is enough (the minimum is 8).
+        $this->post('/admin/account/password', ['current_password' => 'password@123', 'password' => 'Uniqa2026', 'password_confirmation' => 'Uniqa2026'])->assertSessionHasNoErrors();
         $this->assertFalse($reception->fresh()->must_change_password);
         $this->get('/admin')->assertOk();
     }
