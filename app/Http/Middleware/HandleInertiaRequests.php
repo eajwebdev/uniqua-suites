@@ -20,6 +20,7 @@ class HandleInertiaRequests extends Middleware
                     'name' => $user->name,
                     'email' => $user->email,
                     'roles' => $user->getRoleNames(),
+                    'must_change_password' => (bool) $user->must_change_password,
                     'permissions' => $user->getAllPermissions()->pluck('name'),
                     'unread' => $user->unreadNotifications()->count(),
                     'latest_notice' => $this->latestNotice($request),

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Support\Audit;
 use App\Support\DemoLogin;
+use App\Support\PasswordPolicy;
 use App\Support\Settings;
 use App\Support\SystemNotice;
 use Illuminate\Http\Request;
@@ -12,7 +13,6 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
-use Illuminate\Validation\Rules\Password as PasswordRule;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 
@@ -97,7 +97,7 @@ class AuthController extends Controller
 
     public function reset(Request $request)
     {
-        $request->validate(['token' => 'required', 'email' => 'required|email', 'password' => ['required', 'confirmed', PasswordRule::min(8)]]);
+        $request->validate(['token' => 'required', 'email' => 'required|email', 'password' => ['required', 'confirmed', ...PasswordPolicy::rule()]]);
 
         $status = Password::reset($request->only('email', 'password', 'password_confirmation', 'token'), function ($user, $password) {
             $user->forceFill(['password' => Hash::make($password), 'remember_token' => Str::random(60)])->save();
@@ -127,7 +127,7 @@ class AuthController extends Controller
 
     public function updatePassword(Request $request)
     {
-        $data = $request->validate(['current_password' => 'required|current_password', 'password' => ['required', 'confirmed', 'different:current_password', PasswordRule::min(8)]], ['password.different' => 'Choose a new password, not the one you use now.']);
+        $data = $request->validate(['current_password' => 'required|current_password', 'password' => ['required', 'confirmed', 'different:current_password', ...PasswordPolicy::rule()]], ['password.different' => 'Choose a new password, not the one you use now.']);
         $request->user()->update(['password' => $data['password'], 'must_change_password' => false]);
         Auth::logoutOtherDevices($data['password']);
         Audit::log('auth.password_changed');

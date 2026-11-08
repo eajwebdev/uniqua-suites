@@ -1,8 +1,10 @@
 import { Link, router, useForm, usePage } from '@inertiajs/react';
 import axios from 'axios';
 import { QRCodeSVG } from 'qrcode.react';
+import { KeyRound, ShieldCheck } from 'lucide-react';
 import { FormEvent, useState } from 'react';
-import { Button, Card, confirmDialog, CopyButton, Empty, Field, Input } from '@/components/ui';
+import { PasswordMeter, passwordChecks } from '@/components/PasswordStrength';
+import { Button, Card, confirmDialog, CopyButton, Empty, Field, Input, PasswordInput } from '@/components/ui';
 import { dateTime } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
 
@@ -78,7 +80,7 @@ function TwoFactorCard({ state }: any) {
 
     const passwordField = (
         <Field label="Current password">
-            <Input type="password" autoComplete="current-password" required value={password} onChange={(ev) => setPassword(ev.target.value)} />
+            <PasswordInput autoComplete="current-password" required value={password} onChange={(ev) => setPassword(ev.target.value)} />
         </Field>
     );
 
@@ -134,23 +136,81 @@ function NotificationPrefs({ prefs }: any) {
     );
 }
 
-export default function Account({ notifications, twoFactor, notificationPrefs }: any) {
-    const { auth } = usePage<any>().props as any;
+function initials(name: string) {
+    return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+}
+
+/** Signs out every other device on success; the server checks the same rules as the list below. */
+function PasswordCard({ user }: { user: any }) {
     const form = useForm({ current_password: '', password: '', password_confirmation: '' });
     const e = form.errors as any;
+    const [open, setOpen] = useState(!!user.must_change_password);
+    const { ready } = passwordChecks(form.data.password, { current: form.data.current_password, confirm: form.data.password_confirmation });
+
+    function submit(ev: FormEvent) {
+        ev.preventDefault();
+        form.post('/admin/account/password', {
+            preserveScroll: true,
+            onSuccess: () => { form.reset(); setOpen(false); },
+            onError: () => form.reset('current_password'),
+        });
+    }
+
+    return (
+        <Card title="Your account">
+            <div className="flex items-center gap-3">
+                <span aria-hidden className="grid size-11 shrink-0 place-items-center rounded-full bg-chocolate text-sm font-semibold text-ivory">{initials(user.name)}</span>
+                <div className="min-w-0 text-sm">
+                    <p className="truncate font-medium">{user.name}</p>
+                    <p className="truncate text-muted">{user.email}</p>
+                </div>
+                <div className="ml-auto flex flex-wrap justify-end gap-1">
+                    {user.roles.map((r: string) => <span key={r} className="rounded-full bg-beige px-2 py-0.5 text-xs font-medium">{r}</span>)}
+                </div>
+            </div>
+
+            <div className="mt-4 rounded-lg border border-line/80">
+                <div className="flex items-center gap-3 px-4 py-3">
+                    <KeyRound size={18} className="shrink-0 text-muted" aria-hidden />
+                    <div className="min-w-0 flex-1 text-sm">
+                        <p className="font-medium">Password</p>
+                        <p className="text-xs text-muted">{user.must_change_password ? 'You are still using the starting password. Choose your own to continue.' : 'Changing it signs you out on every other device.'}</p>
+                    </div>
+                    {!open && <Button small onClick={() => setOpen(true)}>Change</Button>}
+                </div>
+
+                {open && (
+                    <form onSubmit={submit} className="space-y-3 border-t border-line/80 px-4 py-4">
+                        <Field label="Current password" error={e.current_password}>
+                            <PasswordInput autoComplete="current-password" required autoFocus value={form.data.current_password} onChange={(ev) => form.setData('current_password', ev.target.value)} />
+                        </Field>
+                        <Field label="New password" error={e.password}>
+                            <PasswordInput autoComplete="new-password" required maxLength={72} value={form.data.password} onChange={(ev) => form.setData('password', ev.target.value)} />
+                        </Field>
+                        <Field label="Confirm new password" error={e.password_confirmation}>
+                            <PasswordInput autoComplete="new-password" required maxLength={72} value={form.data.password_confirmation} onChange={(ev) => form.setData('password_confirmation', ev.target.value)} />
+                        </Field>
+                        <PasswordMeter password={form.data.password} current={form.data.current_password} confirm={form.data.password_confirmation} />
+                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                            <Button type="submit" variant="primary" disabled={form.processing || !ready || !form.data.current_password}>
+                                <ShieldCheck size={16} aria-hidden /> {form.processing ? 'Saving…' : 'Update password'}
+                            </Button>
+                            {!user.must_change_password && <Button variant="ghost" onClick={() => { form.reset(); form.clearErrors(); setOpen(false); }}>Cancel</Button>}
+                        </div>
+                    </form>
+                )}
+            </div>
+        </Card>
+    );
+}
+
+export default function Account({ notifications, twoFactor, notificationPrefs }: any) {
+    const { auth } = usePage<any>().props as any;
 
     return (
         <AdminLayout title="Account">
             <div className="grid gap-4 lg:grid-cols-2">
-                <Card title="Your account">
-                    <p className="mb-3 text-sm">{auth.user.name} · {auth.user.email}<br /><span className="text-muted">{auth.user.roles.join(', ')}</span></p>
-                    <form onSubmit={(ev) => { ev.preventDefault(); form.post('/admin/account/password', { preserveScroll: true, onSuccess: () => form.reset() }); }} className="space-y-3">
-                        <Field label="Current password" error={e.current_password}><Input type="password" autoComplete="current-password" value={form.data.current_password} onChange={(ev) => form.setData('current_password', ev.target.value)} /></Field>
-                        <Field label="New password" error={e.password} help="At least 8 characters."><Input type="password" autoComplete="new-password" value={form.data.password} onChange={(ev) => form.setData('password', ev.target.value)} /></Field>
-                        <Field label="Confirm new password"><Input type="password" autoComplete="new-password" value={form.data.password_confirmation} onChange={(ev) => form.setData('password_confirmation', ev.target.value)} /></Field>
-                        <Button type="submit" variant="primary" disabled={form.processing}>Change password</Button>
-                    </form>
-                </Card>
+                <PasswordCard user={auth.user} />
                 <TwoFactorCard state={twoFactor} />
                 <NotificationPrefs prefs={notificationPrefs} />
                 <section id="notifications" className="scroll-mt-20">

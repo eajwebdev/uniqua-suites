@@ -59,7 +59,7 @@ Route::middleware(['auth', 'auth.session', 'active', 'subscription', 'password.c
     Route::post('/subscription', [\App\Http\Controllers\Admin\SubscriptionController::class, 'update'])->middleware('role:Administrator');
     Route::post('/subscription/bills/{bill}/pay', [\App\Http\Controllers\Admin\SubscriptionController::class, 'pay'])->middleware('role:Administrator');
     Route::get('/account', [AuthController::class, 'account']);
-    Route::post('/account/password', [AuthController::class, 'updatePassword']);
+    Route::post('/account/password', [AuthController::class, 'updatePassword'])->middleware('throttle:6,1');
     Route::middleware('throttle:two-factor')->group(function () {
         Route::post('/account/two-factor/setup', [TwoFactorController::class, 'setup']);
         Route::post('/account/two-factor/confirm', [TwoFactorController::class, 'confirm']);
