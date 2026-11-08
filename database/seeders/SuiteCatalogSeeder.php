@@ -55,7 +55,19 @@ class SuiteCatalogSeeder extends Seeder
         $this->source ??= database_path('seeders/suite');
         $flyerOnly = [];
 
-        foreach (Room::whereIn('slug', array_keys(self::SUITES))->orderBy('id')->get() as $room) {
+        // It fills in the nine suites the main seeder creates; on its own it creates none.
+        $rooms = Room::whereIn('slug', array_keys(self::SUITES))->orderBy('id')->get();
+        if ($rooms->isEmpty()) {
+            $this->command?->error('  No suites to fill in yet. Run `php artisan db:seed --force` first: it creates the 9 suites, then runs this seeder for you.');
+
+            return;
+        }
+        if (! is_dir($this->source)) {
+            $this->command?->warn("  Suite photos folder not found at {$this->source}. Details and rates are seeded; upload database/seeders/suite for the photos.");
+        }
+        $photosBefore = \App\Models\RoomImage::whereIn('room_id', $rooms->pluck('id'))->count();
+
+        foreach ($rooms as $room) {
             if ($room->catalog_status === 'proposed') {
                 $this->seedDetails($room);
             }
@@ -74,6 +86,10 @@ class SuiteCatalogSeeder extends Seeder
         }
 
         $this->updateDecisions($flyerOnly);
+
+        $photos = \App\Models\RoomImage::whereIn('room_id', $rooms->pluck('id'))->count();
+        $this->command?->info(sprintf('  Suites: %d filled in, %d photos in total (%d new).', $rooms->count(), $photos, $photos - $photosBefore)
+            .' They stay unpublished until approved under Rooms & Properties.');
     }
 
     private function seedDetails(Room $room): void

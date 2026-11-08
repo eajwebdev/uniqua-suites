@@ -197,4 +197,20 @@ class SuiteCatalogSeederTest extends DomainTestCase
 
         $this->assertStringContainsString('Comfort Studio', $this->get('/suites/rio')->getContent());
     }
+
+    public function test_run_alone_before_the_suites_exist_it_says_so_instead_of_silently_doing_nothing(): void
+    {
+        Room::query()->each(fn (Room $room) => $room->update(['slug' => 'not-a-suite-'.$room->id])); // as if the main seeder never ran
+
+        $this->artisan('db:seed', ['--class' => SuiteCatalogSeeder::class, '--force' => true])
+            ->expectsOutputToContain('No suites to fill in yet. Run `php artisan db:seed --force` first')
+            ->assertSuccessful();
+    }
+
+    public function test_it_reports_what_it_filled_in(): void
+    {
+        $this->artisan('db:seed', ['--class' => SuiteCatalogSeeder::class, '--force' => true])
+            ->expectsOutputToContain('Suites: 9 filled in')
+            ->assertSuccessful();
+    }
 }

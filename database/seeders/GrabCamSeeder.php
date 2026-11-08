@@ -78,6 +78,11 @@ class GrabCamSeeder extends Seeder
 
         $this->source ??= database_path('seeders/camera/grabcam-rate-card.png');
         $photos = $this->withPhotos ?? ! app()->environment('testing');
+        if ($photos && ! is_file($this->source)) {
+            $this->command?->warn("  Rate card image not found at {$this->source}. Cameras are seeded with the default picture; upload database/seeders/camera for the photos.");
+        }
+        $camerasBefore = Room::where('property_id', $property->id)->count();
+        $photosBefore = \App\Models\RoomImage::whereIn('room_id', Room::where('property_id', $property->id)->pluck('id'))->count();
 
         foreach (self::MODELS as [$name, $brand, $specs, $rates, $units, $crop]) {
             $type = RoomType::firstOrCreate(['slug' => Str::slug($name)], ['name' => $name]);
@@ -125,6 +130,11 @@ class GrabCamSeeder extends Seeder
                 isset(self::TEMPLATES[$key]) ? $template->update(['body' => self::TEMPLATES[$key][1]]) : $template->delete();
             }
         }
+
+        $cameras = Room::where('property_id', $property->id)->count();
+        $photoCount = \App\Models\RoomImage::whereIn('room_id', Room::where('property_id', $property->id)->pluck('id'))->count();
+        $this->command?->info(sprintf('  Grab Cam: %d cameras (%d new), %d models with rate cards, %d photos (%d new). Live at /grabcam.',
+            $cameras, $cameras - $camerasBefore, count(self::MODELS), $photoCount, $photoCount - $photosBefore));
     }
 
     /** The camera's picture cut from the rate card and enlarged 2x. A unit that already has a photo keeps it. */
