@@ -122,6 +122,91 @@ class AccessAndFlowTest extends DomainTestCase
         $this->assertSame(Booking::INQUIRY, $inquiry->fresh()->status);
     }
 
+    public function test_reception_cannot_preview_or_copy_an_unauthorized_discount(): void
+    {
+        $this->actingAs($this->staff('Booking / Reception'));
+
+        $this->get('/admin/quotes/create?'.http_build_query([
+            'room_id' => $this->room('venice')->id,
+            'check_in' => '2031-03-03',
+            'check_out' => '2031-03-05',
+            'guests' => 2,
+            'discount' => '100',
+        ]))->assertSessionHasErrors('discount');
+    }
+
+    public function test_new_booking_guardrails_reject_bad_dates_capacity_early_time_missing_contact_and_mixed_properties(): void
+    {
+        $base = [
+            'guest_name' => 'Synthetic Guardrail',
+            'guest_phone' => '09170000000',
+            'room_ids' => [$this->room('venice')->id],
+            'booking_source_id' => $this->source(),
+            'check_in' => '2031-03-03',
+            'check_out' => '2031-03-05',
+            'adults' => 2,
+        ];
+        $guests = Guest::count();
+
+        $this->post('/admin/bookings', array_replace($base, ['check_in' => \App\Support\Local::now()->subDay()->toDateString(), 'check_out' => \App\Support\Local::today()]))->assertSessionHasErrors('check_in');
+        $this->post('/admin/bookings', array_replace($base, ['adults' => 5]))->assertSessionHasErrors('room_ids');
+        $this->post('/admin/bookings', array_replace($base, ['approved_early_time' => (string) \App\Support\Settings::get('pricing.standard_check_in')]))->assertSessionHasErrors('approved_early_time');
+        $this->post('/admin/bookings', array_replace($base, ['guest_phone' => '']))->assertSessionHasErrors('guest_phone');
+        $this->post('/admin/bookings', array_replace($base, ['room_ids' => [$this->room('venice')->id, $this->room('berlin')->id]]))->assertSessionHasErrors('room_ids');
+        $this->assertSame($guests, Guest::count(), 'Rejected bookings must not leave guest records behind.');
+        $this->assertSame(0, Booking::count());
+    }
+
+    public function test_airbnb_is_only_a_booking_source_and_needs_no_reference(): void
+    {
+        $this->post('/admin/bookings', [
+            'guest_name' => 'Synthetic Airbnb Source',
+            'guest_phone' => '09170000001',
+            'room_ids' => [$this->room('venice')->id],
+            'booking_source_id' => $this->source('airbnb'),
+            'check_in' => '2031-03-03',
+            'check_out' => '2031-03-05',
+            'adults' => 2,
+        ])->assertSessionHasNoErrors()->assertSessionHas('success');
+
+        $this->assertNull(Booking::sole()->source_reference);
+        $this->assertSame('airbnb', Booking::sole()->source->code);
+    }
+
+    public function test_repeated_booking_submission_does_not_create_an_orphan_guest(): void
+    {
+        $data = [
+            'guest_name' => 'Synthetic First Click',
+            'guest_phone' => '09170000002',
+            'room_ids' => [$this->room('venice')->id],
+            'booking_source_id' => $this->source(),
+            'check_in' => '2031-03-03',
+            'check_out' => '2031-03-05',
+            'adults' => 2,
+            'idempotency_key' => 'synthetic-double-click',
+        ];
+
+        $this->post('/admin/bookings', $data)->assertSessionHas('success');
+        $guests = Guest::count();
+        $this->post('/admin/bookings', array_replace($data, ['guest_name' => 'Synthetic Second Click']))->assertSessionHas('success');
+
+        $this->assertSame(1, Booking::count());
+        $this->assertSame($guests, Guest::count());
+    }
+
+    public function test_change_stay_rejects_invalid_early_check_in(): void
+    {
+        $booking = $this->inquiry('venice');
+        $original = $booking->approved_early_time;
+
+        $this->post("/admin/bookings/{$booking->id}/amend", [
+            'reason' => 'Synthetic guardrail',
+            'approved_early_time' => substr((string) \App\Support\Settings::get('pricing.standard_check_in'), 0, 5),
+        ])->assertSessionHasErrors('approved_early_time');
+
+        $this->assertSame($original, $booking->fresh()->approved_early_time);
+    }
+
     public function test_finance_cannot_reassign_rooms(): void
     {
         $booking = $this->confirmed();
@@ -157,7 +242,7 @@ class AccessAndFlowTest extends DomainTestCase
         $this->post('/admin/quotes', ['room_id' => $this->room('venice')->id, 'check_in' => '2031-03-03', 'check_out' => '2031-03-05', 'guests' => 2])->assertRedirect();
         $this->assertSame(0, DB::table('booking_rooms')->count(), 'a quote reserves nothing');
 
-        $this->post('/admin/bookings', ['guest_name' => 'Synthetic Journey', 'room_ids' => [$this->room('venice')->id], 'booking_source_id' => $this->source(), 'check_in' => '2031-03-03', 'check_out' => '2031-03-05', 'adults' => 2, 'then' => 'hold'])->assertRedirect();
+        $this->post('/admin/bookings', ['guest_name' => 'Synthetic Journey', 'guest_phone' => '09170000003', 'room_ids' => [$this->room('venice')->id], 'booking_source_id' => $this->source(), 'check_in' => '2031-03-03', 'check_out' => '2031-03-05', 'adults' => 2, 'then' => 'hold'])->assertRedirect();
         $booking = Booking::firstOrFail();
         $this->assertSame(Booking::TENTATIVE, $booking->status);
 

@@ -105,14 +105,14 @@ class QuoteCalculatorTest extends DomainTestCase
         $this->assertStringNotContainsString('Balance', $preview['copyText']);
     }
 
-    public function test_airbnb_quotes_have_no_downpayment(): void
+    public function test_airbnb_quotes_use_the_same_downpayment_as_other_sources(): void
     {
         $this->milanAtCalculatorPrices();
 
         $preview = $this->preview(['source_id' => $this->source('airbnb')]);
 
-        $this->assertNull($preview['downpayment_percent']);
-        $this->assertStringNotContainsString('Downpayment', $preview['copyText']);
+        $this->assertSame(50, $preview['downpayment_percent']);
+        $this->assertStringContainsString('Downpayment', $preview['copyText']);
     }
 
     public function test_a_saved_quote_keeps_the_percentage_it_was_issued_with(): void
@@ -138,6 +138,27 @@ class QuoteCalculatorTest extends DomainTestCase
         $this->assertStringContainsString('Parking nights', $this->preview(['parking_nights' => 5])['error']);
         $this->post('/admin/quotes', $this->query(['parking_nights' => 5]))->assertSessionHas('error');
         $this->assertSame(0, Quote::count());
+    }
+
+    public function test_sensitive_quote_inputs_are_rejected_by_the_pricing_engine(): void
+    {
+        $this->milanAtCalculatorPrices();
+
+        $this->assertStringContainsString('parking rate', $this->preview(['parking_nights' => 2, 'parking_rate' => '0'])['error']);
+        $this->assertStringContainsString('must be before', $this->preview(['early_time' => '14:00'])['error']);
+        $this->assertStringContainsString('discount cannot be more', $this->preview(['discount' => '999999'])['error']);
+    }
+
+    public function test_a_pricing_input_error_does_not_make_free_rooms_look_unavailable(): void
+    {
+        $this->milanAtCalculatorPrices();
+
+        $props = $this->get('/admin/quotes/create?'.http_build_query($this->query(['early_time' => '14:00', 'room_id' => '', 'guests' => 2])))
+            ->assertOk()->original->getData()['page']['props'];
+
+        $this->assertCount(9, $props['vacancy']['vacant']);
+        $this->assertCount(0, $props['vacancy']['unavailable']);
+        $this->assertStringContainsString('must be before', $props['vacancy']['pricing_pending']);
     }
 
     public function test_updating_a_quote_keeps_its_parking_nights_and_rate(): void

@@ -178,16 +178,19 @@ class SuiteCatalogSeederTest extends DomainTestCase
         $this->assertSame([5, 6], Settings::get('pricing.weekend_days'));
     }
 
-    public function test_seeded_details_put_no_price_on_public_pages(): void
+    public function test_seeded_rates_show_on_public_pages_but_no_private_details(): void
     {
         $this->seedSuites();
         Room::query()->update(['is_published' => true, 'catalog_status' => 'approved']);
         auth()->logout();
 
+        $rio = collect($this->get('/')->original->getData()['page']['props']['rooms'])->firstWhere('slug', 'rio');
+        $this->assertSame(['weekday' => 170000, 'weekend' => 180000], $rio['rate']);
+
         foreach (['/', '/suites/rio', '/suites/bali'] as $url) {
             $body = $this->get($url)->assertOk()->getContent();
 
-            foreach (['_cents', 'included_guests', '₱', '170000', '180000', 'Andrea', 'Ereca', '892 8150'] as $marker) {
+            foreach (['_cents', 'included_guests', 'Andrea', 'Ereca', '892 8150'] as $marker) {
                 $this->assertStringNotContainsString($marker, $body, "{$url} must not contain {$marker}");
             }
         }

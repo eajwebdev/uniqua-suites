@@ -32,14 +32,21 @@ class PublicSiteAndVacancyTest extends DomainTestCase
         return array_column($vacancy['vacant'], 'name');
     }
 
-    // Public site: no prices anywhere, including in the page data
+    // Public site: each suite shows its posted nightly rate, and nothing more about pricing
 
-    public function test_no_public_page_carries_a_price_even_if_asked(): void
+    public function test_public_pages_show_the_posted_rate_but_no_estimate_tax_or_override(): void
     {
         Room::query()->update(['is_published' => true, 'catalog_status' => 'approved']);
         TaxRule::create(['name' => 'Synthetic Tax', 'rate_basis_points' => 1200, 'effective_from' => '2030-01-01']);
+        $venice = $this->room('venice');
+        \App\Models\RateOverride::create(['room_id' => $venice->id, 'date_from' => '2020-01-01', 'date_to' => '2040-12-31', 'nightly_cents' => 4321900, 'label' => 'Synthetic promo']);
         $this->confirmed('venice', '2031-03-03', '2031-03-05');
         auth()->logout();
+
+        $rule = \App\Models\RateRule::where('room_id', $venice->id)->first();
+        $card = collect($this->get('/')->original->getData()['page']['props']['rooms'])->firstWhere('slug', 'venice');
+        $this->assertSame(['weekday' => (int) $rule->weekday_cents, 'weekend' => (int) $rule->weekend_cents], $card['rate']);
+        $this->assertSame($card['rate'], $this->get('/suites/venice')->original->getData()['page']['props']['room']['rate']);
 
         foreach ([
             '/', '/suites/venice', '/policies',
@@ -47,10 +54,20 @@ class PublicSiteAndVacancyTest extends DomainTestCase
         ] as $url) {
             $body = $this->get($url)->assertOk()->getContent();
 
-            foreach (['_cents', 'estimate', 'included_guests', 'Synthetic Tax', '170000', '190000', '₱'] as $marker) {
+            foreach (['_cents', 'estimate', 'included_guests', 'Synthetic Tax', 'Synthetic promo', '4321900'] as $marker) {
                 $this->assertStringNotContainsString($marker, $body, "{$url} must not contain {$marker}");
             }
         }
+    }
+
+    public function test_a_suite_without_a_rate_shows_none(): void
+    {
+        Room::query()->update(['is_published' => true]);
+        \App\Models\RateRule::where('room_id', $this->room('venice')->id)->delete();
+        auth()->logout();
+
+        $card = collect($this->get('/')->original->getData()['page']['props']['rooms'])->firstWhere('slug', 'venice');
+        $this->assertNull($card['rate']);
     }
 
     public function test_public_suite_filters_still_work_without_prices(): void
@@ -98,6 +115,9 @@ class PublicSiteAndVacancyTest extends DomainTestCase
         auth()->logout();
         $contact = fn () => $this->get('/')->original->getData()['page']['props']['contact'];
 
+        $this->assertSame('https://m.me/uniqasuitescdo', $contact()['messenger_url'], 'The official page is set in config/uniqa.php.');
+
+        config(['uniqa.contact.messenger_url' => null]);
         $this->assertEmpty($contact()['messenger_url']);
 
         config(['uniqa.contact.messenger_url' => 'https://m.me/synthetic-page']);

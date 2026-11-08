@@ -6,6 +6,7 @@ use App\Domain\Availability\InventoryService;
 use App\Domain\Availability\RoomConflict;
 use App\Domain\Availability\StayRules;
 use App\Domain\Pricing\PricingPolicyPending;
+use App\Domain\Pricing\PricingInputInvalid;
 use App\Domain\Pricing\PricingService;
 use App\Models\Room;
 
@@ -26,7 +27,8 @@ class VacancySearch
         $unavailable = [];
         $pending = null;
 
-        foreach (Room::where('operational_status', '!=', 'retired')->with(['property:id,name', 'type:id,name'])->orderBy('id')->get() as $room) {
+        // Quotes are for suites; camera rentals are booked from New Booking.
+        foreach (Room::suites()->where('operational_status', '!=', 'retired')->with(['property:id,name', 'type:id,name'])->orderBy('id')->get() as $room) {
             $unit = ['id' => $room->id, 'name' => $room->name, 'unit' => $room->unit_code, 'property' => $room->property->name, 'type' => $room->type->name, 'included' => $room->included_guests, 'max' => $room->max_guests];
 
             $reason = $this->reasonUnavailable($room, $checkIn, $checkOut, $guests);
@@ -38,7 +40,7 @@ class VacancySearch
             try {
                 $quote = $this->pricing->quote($room, $checkIn, $checkOut, $guests, $pricingOpts);
                 $vacant[] = $unit + ['housekeeping' => $room->housekeeping_status, 'total_cents' => $quote['total_cents'], 'nights' => count($quote['nights']), 'warnings' => $quote['warnings']];
-            } catch (PricingPolicyPending $e) {
+            } catch (PricingPolicyPending|PricingInputInvalid $e) {
                 $pending = $e->getMessage();
                 $vacant[] = $unit + ['housekeeping' => $room->housekeeping_status, 'total_cents' => null, 'nights' => null, 'warnings' => []];
             } catch (RoomConflict $e) {

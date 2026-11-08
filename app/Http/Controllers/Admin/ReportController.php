@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Support\AdminCategory;
 use App\Domain\Reporting\ReportService;
 use App\Http\Controllers\Controller;
 use App\Models\BookingSource;
@@ -42,10 +43,10 @@ class ReportController extends Controller
             'type' => $type,
             'basis' => $basis,
             'filters' => $filters,
-            'rooms' => $canFinance ? Room::orderBy('id')->get(['id', 'name']) : [],
+            'rooms' => $canFinance ? AdminCategory::rooms(Room::query())->orderBy('id')->get(['id', 'name']) : [],
             'sources' => $canFinance ? BookingSource::orderBy('name')->get(['id', 'name']) : [],
             'bases' => collect(ReportService::BASES)->map(fn ($b, $key) => ['value' => $key, 'label' => $b[0]])->values(),
-            'properties' => Property::orderBy('id')->get(['id', 'name']),
+            'properties' => Property::where('category', AdminCategory::current())->orderBy('id')->get(['id', 'name']),
             'types' => collect(self::TYPES)->filter(fn ($_, $k) => $canFinance || ! in_array($k, self::FINANCIAL, true))->map(fn ($label, $key) => compact('key', 'label'))->values(),
             'kpis' => $canFinance ? $this->reports->kpis($from, $to, $property) : null,
             'channels' => $canFinance ? $this->reports->channelMix($from, $to, $property) : [],

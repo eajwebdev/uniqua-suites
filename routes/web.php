@@ -3,6 +3,8 @@
 use App\Http\Controllers\Admin\AdvanceController;
 use App\Http\Controllers\Admin\BookingController;
 use App\Http\Controllers\Admin\CalendarController;
+use App\Http\Controllers\Admin\CameraRateController;
+use App\Http\Controllers\Admin\CategoryController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\ExpenseController;
 use App\Http\Controllers\Admin\ClosureController;
@@ -10,6 +12,7 @@ use App\Http\Controllers\Admin\FileController;
 use App\Http\Controllers\Admin\FinanceController;
 use App\Http\Controllers\Admin\GuestController;
 use App\Http\Controllers\Admin\HousekeepingController;
+use App\Http\Controllers\Admin\ImportController;
 use App\Http\Controllers\Admin\InventoryController;
 use App\Http\Controllers\Admin\MaintenanceController;
 use App\Http\Controllers\Admin\ParkingController;
@@ -19,6 +22,7 @@ use App\Http\Controllers\Admin\RoomController;
 use App\Http\Controllers\Admin\SettingsController;
 use App\Http\Controllers\Admin\TeamController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\GrabCamController;
 use App\Http\Controllers\PublicSiteController;
 use App\Http\Controllers\TwoFactorController;
 use Illuminate\Support\Facades\Route;
@@ -29,6 +33,9 @@ Route::middleware('throttle:public')->group(function () {
     Route::get('/suites/{slug}', [PublicSiteController::class, 'show']);
     Route::get('/suites/{slug}/check-dates', [PublicSiteController::class, 'checkDates']);
     Route::get('/policies', [PublicSiteController::class, 'policies']);
+    Route::get('/sitemap.xml', [PublicSiteController::class, 'sitemap']);
+    Route::get('/grabcam', [GrabCamController::class, 'index']);
+    Route::get('/grabcam/{slug}/check-dates', [GrabCamController::class, 'checkDates']);
 });
 
 Route::middleware('guest')->group(function () {
@@ -44,8 +51,13 @@ Route::middleware('guest')->group(function () {
 });
 
 // auth.session ends a person's other sessions when their password changes.
-Route::middleware(['auth', 'auth.session', 'active', 'mfa.enrolled'])->prefix('admin')->group(function () {
+Route::middleware(['auth', 'auth.session', 'active', 'subscription', 'password.changed', 'mfa.enrolled', \App\Http\Middleware\RememberBusiness::class])->prefix('admin')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
+    Route::get('/locked', [\App\Http\Controllers\Admin\SubscriptionController::class, 'locked']);
+    // Owner and Administrator see it; only the Administrator changes it (checked in the controller's routes below).
+    Route::get('/subscription', [\App\Http\Controllers\Admin\SubscriptionController::class, 'index'])->middleware('role:Owner|Administrator');
+    Route::post('/subscription', [\App\Http\Controllers\Admin\SubscriptionController::class, 'update'])->middleware('role:Administrator');
+    Route::post('/subscription/bills/{bill}/pay', [\App\Http\Controllers\Admin\SubscriptionController::class, 'pay'])->middleware('role:Administrator');
     Route::get('/account', [AuthController::class, 'account']);
     Route::post('/account/password', [AuthController::class, 'updatePassword']);
     Route::middleware('throttle:two-factor')->group(function () {
@@ -56,6 +68,8 @@ Route::middleware(['auth', 'auth.session', 'active', 'mfa.enrolled'])->prefix('a
     });
     Route::post('/account/notifications', [AuthController::class, 'updateNotificationPrefs']);
     Route::post('/notifications/read', [AuthController::class, 'readNotifications']);
+
+    Route::post('/category', [CategoryController::class, 'update']);
 
     Route::get('/', [DashboardController::class, 'index']);
     Route::get('/calendar', [CalendarController::class, 'index'])->middleware('perm:bookings.view');
@@ -76,6 +90,7 @@ Route::middleware(['auth', 'auth.session', 'active', 'mfa.enrolled'])->prefix('a
         Route::post('/bookings/{booking}/check-out', [BookingController::class, 'checkOut']);
         Route::post('/bookings/{booking}/amend', [BookingController::class, 'amend']);
         Route::post('/bookings/{booking}/charges', [BookingController::class, 'addCharge']);
+        Route::post('/bookings/{booking}/rental-security', [BookingController::class, 'rentalSecurity']);
         Route::post('/charges/{charge}/void', [BookingController::class, 'voidCharge']);
     });
     Route::post('/bookings/{booking}/confirm', [BookingController::class, 'confirm'])->middleware('perm:bookings.confirm');
@@ -95,6 +110,11 @@ Route::middleware(['auth', 'auth.session', 'active', 'mfa.enrolled'])->prefix('a
     });
 
     Route::get('/rooms', [RoomController::class, 'index'])->middleware('perm:rooms.view');
+    Route::get('/camera-rates', [CameraRateController::class, 'index'])->middleware('perm:rooms.view');
+    Route::post('/camera-rates/free-day', [CameraRateController::class, 'freeDay'])->middleware('perm:rates.manage');
+    Route::post('/camera-models', [CameraRateController::class, 'storeModel'])->middleware('perm:rates.manage');
+    Route::post('/cameras', [RoomController::class, 'storeCamera'])->middleware('perm:rooms.manage');
+    Route::post('/camera-rates/{type}', [CameraRateController::class, 'update'])->whereNumber('type')->middleware('perm:rates.manage');
     Route::middleware('perm:rooms.manage')->group(function () {
         Route::get('/rooms/{room}/edit', [RoomController::class, 'edit']);
         Route::post('/rooms/{room}', [RoomController::class, 'update']);
@@ -191,6 +211,14 @@ Route::middleware(['auth', 'auth.session', 'active', 'mfa.enrolled'])->prefix('a
     Route::post('/team/{user}/temporary-password', [TeamController::class, 'temporaryPassword'])->middleware('perm:team.manage');
 
     Route::middleware('perm:settings.manage')->group(function () {
+        Route::get('/imports', [ImportController::class, 'index']);
+        Route::post('/imports', [ImportController::class, 'store']);
+        Route::get('/imports/{batch}', [ImportController::class, 'show']);
+        Route::post('/imports/{batch}/commit', [ImportController::class, 'commit']);
+        Route::post('/imports/{batch}/hold-future', [ImportController::class, 'holdFutureDates']);
+        Route::post('/imports/{batch}/rollback', [ImportController::class, 'rollback']);
+        Route::post('/imports/mappings/{mapping}', [ImportController::class, 'decideMapping']);
+        Route::post('/imports/rows/{row}/review', [ImportController::class, 'reviewRow']);
         Route::get('/settings', [SettingsController::class, 'index']);
         Route::post('/settings', [SettingsController::class, 'update']);
         Route::post('/settings/templates/{template}', [SettingsController::class, 'updateTemplate']);

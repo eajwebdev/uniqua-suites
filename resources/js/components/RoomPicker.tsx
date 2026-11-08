@@ -2,7 +2,7 @@ import { Ban, CalendarCheck, Loader2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Button, cn } from '@/components/ui';
 
-export type PickerRoom = { id: number; label: string; included?: number; max: number };
+export type PickerRoom = { id: number; label: string; included?: number; max: number; category?: string };
 type Availability = { state: 'waiting' | 'checking' | 'ready' | 'failed'; taken: Record<number, string> };
 
 export const nextDay = (date: string) => new Date(Date.parse(`${date}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
@@ -30,6 +30,19 @@ export function useRoomAvailability(checkIn: string, checkOut: string, ignoreBoo
 
         return () => request.abort();
     }, [checkIn, checkOut, ignoreBooking, valid, attempt]);
+
+    // Keep an open booking form current while another staff member may be changing the calendar.
+    useEffect(() => {
+        if (!valid) return;
+        const refresh = () => { if (document.visibilityState === 'visible') setAttempt((n) => n + 1); };
+        const timer = window.setInterval(refresh, 20_000);
+        document.addEventListener('visibilitychange', refresh);
+
+        return () => {
+            window.clearInterval(timer);
+            document.removeEventListener('visibilitychange', refresh);
+        };
+    }, [valid]);
 
     return { ...availability, retry: useCallback(() => setAttempt((n) => n + 1), []) };
 }
@@ -70,7 +83,7 @@ export function RoomPicker({ rooms, availability, value, onChange, error }: { ro
                 {free.map((r) => (
                     <label key={r.id} className={cn('flex items-center gap-2 rounded px-1 pointer-coarse:min-h-11', ready ? 'hover:bg-beige' : 'text-muted')}>
                         <input type="checkbox" disabled={!ready} checked={value.includes(r.id)} onChange={(ev) => onChange(ev.target.checked ? [...value, r.id] : value.filter((id) => id !== r.id))} />
-                        <span>{r.label} {r.included !== undefined && <span className="text-xs text-muted">incl. {r.included}, max {r.max}</span>}</span>
+                        <span>{r.label} {r.included !== undefined && r.category !== 'cameras' && <span className="text-xs text-muted">incl. {r.included}, max {r.max}</span>}</span>
                     </label>
                 ))}
                 {unavailable.map((r) => (

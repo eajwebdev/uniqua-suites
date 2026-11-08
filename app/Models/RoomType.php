@@ -14,4 +14,9 @@ class RoomType extends Model
     {
         return $this->hasMany(Room::class);
     }
+
+    public function rateTiers()
+    {
+        return $this->hasMany(RentalRateTier::class);
+    }
 }

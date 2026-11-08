@@ -24,6 +24,7 @@ class Booking extends Model
         'actual_check_in_at' => 'datetime',
         'actual_check_out_at' => 'datetime',
         'confirmed_at' => 'datetime',
+        'deposit_cents' => 'integer',
     ];
 
     public function guest()

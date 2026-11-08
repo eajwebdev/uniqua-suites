@@ -45,8 +45,12 @@ class PageAccessTest extends DomainTestCase
     public function test_the_login_page_and_team_screen_offer_only_the_five_roles(): void
     {
         config(['uniqa.demo' => true]);
+        // The Owner can give every role but Administrator, which only an Administrator gives (it controls the subscription lock).
         $form = $this->get('/admin/team/create')->assertOk()->original->getData()['page']['props'];
-        $this->assertSame(Permissions::ROLES, $form['roles']);
+        $this->assertSame(['Owner', 'Operations Manager', 'Booking / Reception', 'Staff'], $form['roles']);
+        $admin = $this->person('Administrator');
+        $this->assertSame(['Administrator', 'Operations Manager', 'Booking / Reception', 'Staff'], $this->actingAs($admin)->get('/admin/team/create')->original->getData()['page']['props']['roles']);
+        $this->actingAs($this->owner);
 
         auth()->logout();
         $this->assertSame(Permissions::ROLES, array_column($this->get('/login')->original->getData()['page']['props']['demoAccounts'], 'label'));
@@ -216,5 +220,75 @@ class PageAccessTest extends DomainTestCase
     {
         $this->assertDirectoryDoesNotExist(public_path('suite'));
         $this->assertDirectoryExists(database_path('seeders/suite'));
+    }
+
+    // The Team screen: grouped boxes, each explained, and actions tied to their page
+
+    public function test_every_box_is_explained_and_shown_once_on_the_team_screen(): void
+    {
+        $form = $this->get('/admin/team/create')->assertOk()->original->getData()['page']['props'];
+
+        $inAreas = collect($form['areas'])->flatten();
+        $actions = collect($form['pages'])->whereNotNull('requires')->pluck('key');
+        $this->assertEqualsCanonicalizing(array_keys(Permissions::PAGES), $inAreas->merge($actions)->all(), 'Every box appears exactly once: a page in an area, or an action under its page.');
+        $this->assertEmpty(collect($form['pages'])->whereNull('help')->pluck('key')->all(), 'Every box has a one-line explanation.');
+        foreach (Permissions::REQUIRES as $action => $page) {
+            $this->assertSame('Pages', Permissions::PAGES[$page][1], "{$action} must sit under a page.");
+            $this->assertSame('Extra actions', Permissions::PAGES[$action][1]);
+        }
+        foreach (Permissions::ROLE_PAGES as $role => $pages) {
+            $this->assertSame($pages, Permissions::withRequired($pages), "The usual {$role} ticks already include each action's page.");
+        }
+    }
+
+    public function test_ticking_an_action_alone_also_gives_its_page(): void
+    {
+        $person = $this->person('Staff', []);
+
+        $this->post("/admin/team/{$person->id}", ['role' => 'Staff', 'is_active' => true, 'pages' => ['discount', 'reports_money']])->assertSessionHasNoErrors();
+
+        $this->assertEqualsCanonicalizing(['discount', 'bookings', 'reports_money', 'reports'], Permissions::pagesOf($person->fresh()));
+        $this->actingAs($person->fresh())->get('/admin/bookings')->assertOk();
+    }
+
+    public function test_an_administrator_can_invite_and_then_edit_a_persons_pages(): void
+    {
+        $admin = $this->person('Administrator');
+        $this->actingAs($admin);
+        Password::shouldReceive('sendResetLink')->once();
+
+        // Invite with a few boxes ticked.
+        $this->post('/admin/team', ['name' => 'Synthetic Front Desk', 'email' => 'desk@example.test', 'role' => 'Booking / Reception', 'pages' => ['dashboard', 'bookings', 'confirm']])
+            ->assertRedirect('/admin/team')->assertSessionHasNoErrors();
+        $desk = User::where('email', 'desk@example.test')->firstOrFail();
+        $this->assertEqualsCanonicalizing(['dashboard', 'bookings', 'confirm'], $this->pagesOnForm($desk));
+
+        // Edit: add Guests and Payments, take away Confirm.
+        $this->post("/admin/team/{$desk->id}", ['role' => 'Booking / Reception', 'is_active' => true, 'pages' => ['dashboard', 'bookings', 'guests', 'payments']])
+            ->assertRedirect('/admin/team')->assertSessionHasNoErrors();
+        $this->assertEqualsCanonicalizing(['dashboard', 'bookings', 'guests', 'payments'], $this->pagesOnForm($desk));
+
+        $this->actingAs($desk->fresh());
+        $this->get('/admin/guests')->assertOk();
+        $this->get('/admin/payments')->assertOk();
+        $this->get('/admin/reports')->assertForbidden();
+        $this->assertFalse($desk->fresh()->can('bookings.confirm'));
+
+        // Clearing every box leaves no page open.
+        $this->actingAs($admin)->post("/admin/team/{$desk->id}", ['role' => 'Booking / Reception', 'is_active' => true, 'pages' => []])->assertSessionHasNoErrors();
+        $this->assertSame([], Permissions::pagesOf($desk->fresh()));
+        $this->actingAs($desk->fresh())->get('/admin/bookings')->assertForbidden();
+    }
+
+    public function test_the_team_list_names_each_persons_access(): void
+    {
+        $this->person('Staff', ['reports', 'quotes', 'parking', 'guests']);
+        $this->person('Staff', []);
+
+        $access = collect($this->get('/admin/team')->assertOk()->original->getData()['page']['props']['rows'])->pluck('access');
+
+        $this->assertContains('Everything', $access);
+        $this->assertContains('No access yet', $access);
+        $this->assertContains('Quotes & Messages, Guests, Parking +1 more', $access);
     }
 }

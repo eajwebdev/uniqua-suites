@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Support\AdminCategory;
 use App\Domain\Finance\FinanceService;
 use App\Http\Controllers\Controller;
 use App\Models\Expense;
@@ -28,7 +29,7 @@ class ExpenseController extends Controller
     {
         $user = $request->user();
         $f = $request->validate(['category' => 'nullable|integer', 'status' => 'nullable|in:incurred,paid']);
-        $rows = Expense::with(['category:id,name', 'room:id,name', 'property:id,name', 'vendor:id,name'])
+        $rows = AdminCategory::expenses(Expense::query())->with(['category:id,name', 'room:id,name', 'property:id,name', 'vendor:id,name'])
             ->when($f['category'] ?? null, fn ($q, $v) => $q->where('expense_category_id', $v))
             ->when($f['status'] ?? null, fn ($q, $v) => $q->where('status', $v))
             ->orderByDesc('expense_date')->orderByDesc('id')->paginate(15)->withQueryString();
@@ -87,8 +88,8 @@ class ExpenseController extends Controller
                 ['name' => 'expense_category_id', 'label' => 'Category', 'type' => 'select', 'required' => true, 'options' => $categories],
                 ['name' => 'description', 'label' => 'Description', 'type' => 'text', 'required' => true],
                 ['name' => 'amount', 'label' => 'Amount (PHP)', 'type' => 'money', 'required' => true],
-                ['name' => 'room_id', 'label' => 'Room', 'type' => 'select', 'options' => Room::orderBy('id')->get()->map(fn ($r) => ['value' => $r->id, 'label' => $r->name])->all(), 'help' => 'Leave room and property blank for a general expense.'],
-                ['name' => 'property_id', 'label' => 'Property', 'type' => 'select', 'options' => Property::orderBy('id')->get()->map(fn ($p) => ['value' => $p->id, 'label' => $p->name])->all()],
+                ['name' => 'room_id', 'label' => 'Room', 'type' => 'select', 'options' => AdminCategory::rooms(Room::query())->orderBy('id')->get()->map(fn ($r) => ['value' => $r->id, 'label' => $r->name])->all(), 'help' => AdminCategory::isCameras() ? 'Choose the camera, or Grab Cam Rental as the property for a general camera cost.' : 'Leave room and property blank for a general expense.'],
+                ['name' => 'property_id', 'label' => 'Property', 'type' => 'select', 'options' => Property::where('category', AdminCategory::current())->orderBy('id')->get()->map(fn ($p) => ['value' => $p->id, 'label' => $p->name])->all()],
                 ['name' => 'vendor_name', 'label' => 'Vendor', 'type' => 'text'],
                 ['name' => 'status', 'label' => 'Status', 'type' => 'select', 'required' => true, 'default' => 'incurred', 'options' => [['value' => 'incurred', 'label' => 'Incurred, not yet paid'], ['value' => 'paid', 'label' => 'Paid']]],
                 ['name' => 'payment_method', 'label' => 'Payment method', 'type' => 'text'],
@@ -164,14 +165,19 @@ class ExpenseController extends Controller
         $from = $f['from'] ?? Local::now()->startOfMonth()->toDateString();
         $to = $f['to'] ?? Local::today();
 
-        $in = DB::table('receipts')->where('verification_status', 'verified')->whereBetween('receipt_date', [$from, $to])
-            ->get(['receipt_date as d', 'reference as ref', 'method as label', 'amount_cents as cents']);
-        $payouts = DB::table('external_settlements')->whereNotNull('actual_payout_cents')->whereBetween('payout_date', [$from, $to])
-            ->get(['payout_date as d', 'payout_reference as ref', 'provider as label', 'actual_payout_cents as cents']);
-        $out = DB::table('expenses')->where('status', 'paid')->whereBetween('paid_on', [$from, $to])
-            ->get(['paid_on as d', 'id as ref', 'description as label', 'amount_cents as cents']);
-        $refunds = DB::table('refunds')->where('status', 'executed')->whereBetween('executed_on', [$from, $to])
-            ->get(['executed_on as d', 'id as ref', 'reason as label', 'amount_cents as cents']);
+        // Only the selected business's money. Unlinked payments and general expenses belong to Suites.
+        $booked = fn (string $table, string $alias) => DB::table("{$table} as {$alias}")->leftJoin('bookings as b', 'b.id', '=', "{$alias}.booking_id")
+            ->tap(fn ($q) => AdminCategory::whereProperty($q, 'b.property_id'));
+        $in = $booked('receipts', 'x')->where('x.verification_status', 'verified')->whereBetween('x.receipt_date', [$from, $to])
+            ->get(['x.receipt_date as d', 'x.reference as ref', 'x.method as label', 'x.amount_cents as cents']);
+        $payouts = $booked('external_settlements', 'x')->whereNotNull('x.actual_payout_cents')->whereBetween('x.payout_date', [$from, $to])
+            ->get(['x.payout_date as d', 'x.payout_reference as ref', 'x.provider as label', 'x.actual_payout_cents as cents']);
+        $out = DB::table('expenses as e')->leftJoin('rooms as r', 'r.id', '=', 'e.room_id')
+            ->tap(fn ($q) => AdminCategory::whereProperty($q, DB::raw('COALESCE(r.property_id, e.property_id)')))
+            ->where('e.status', 'paid')->whereBetween('e.paid_on', [$from, $to])
+            ->get(['e.paid_on as d', 'e.id as ref', 'e.description as label', 'e.amount_cents as cents']);
+        $refunds = $booked('refunds', 'x')->where('x.status', 'executed')->whereBetween('x.executed_on', [$from, $to])
+            ->get(['x.executed_on as d', 'x.id as ref', 'x.reason as label', 'x.amount_cents as cents']);
 
         $rows = collect()
             ->concat($in->map(fn ($r) => ['date' => $r->d, 'type' => 'Receipt', 'ref' => $r->ref, 'label' => $r->label, 'in_cents' => (int) $r->cents, 'out_cents' => null]))

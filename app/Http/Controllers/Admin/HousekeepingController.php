@@ -147,7 +147,7 @@ class HousekeepingController extends Controller
             // `cleaner` separates the people who do the work from managers who could step in, as auto-assign does.
             'staff' => $manager ? User::permission('housekeeping.own')->where('is_active', true)->orderBy('name')->get()->map(fn ($u) => ['id' => $u->id, 'name' => $u->name, 'cleaner' => ! $u->can('housekeeping.manage')])->values() : [],
             'items' => $user->can('inventory.consume') ? InventoryItem::orderBy('name')->get(['id', 'name', 'unit']) : [],
-            'rooms' => $manager ? Room::where('operational_status', '!=', 'retired')->orderBy('name')->get(['id', 'name'])->map(fn ($r) => ['value' => $r->id, 'label' => $r->name])->values() : [],
+            'rooms' => $manager ? Room::suites()->where('operational_status', '!=', 'retired')->orderBy('name')->get(['id', 'name'])->map(fn ($r) => ['value' => $r->id, 'label' => $r->name])->values() : [],
             'taskTypes' => collect(HousekeepingTask::TYPES)->map(fn ($label, $value) => ['value' => $value, 'label' => $label])->values(),
             'can' => ['manage' => $manager, 'work' => $manager || $user->can('housekeeping.own'), 'inspect' => $user->can('housekeeping.inspect'), 'invite' => $user->can('team.manage')],
             'tabs' => $manager ? [['label' => 'Cleaning', 'href' => '/admin/housekeeping'], ['label' => 'Laundry', 'href' => '/admin/laundry']] : [],

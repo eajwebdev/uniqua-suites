@@ -29,7 +29,13 @@ class MessageService
         ['key' => 'nights', 'description' => 'Number of nights', 'where' => 'quote'],
         ['key' => 'breakdown', 'description' => 'Rates and charges, line by line', 'where' => 'quote'],
         ['key' => 'payment', 'description' => 'Downpayment and balance upon check-in', 'where' => 'quote'],
+        ['key' => 'pickup_time', 'description' => 'Camera pickup time', 'where' => 'booking'],
+        ['key' => 'return_time', 'description' => 'Camera return time', 'where' => 'booking'],
+        ['key' => 'days', 'description' => 'Number of rental days', 'where' => 'booking'],
     ];
+
+    /** Templates whose key starts with this are for Grab Cam rentals; the rest are for suites. */
+    public const CAMERA_PREFIX = 'camera_';
 
     public function __construct(private FinanceService $finance)
     {
@@ -38,8 +44,9 @@ class MessageService
     public function renderAll(Booking $booking): array
     {
         $vars = $this->variables($booking);
+        $camera = $booking->property->category === \App\Models\Property::CAMERAS;
 
-        return MessageTemplate::orderBy('id')->get()->map(fn ($t) => [
+        return MessageTemplate::where('key', $camera ? 'like' : 'not like', self::CAMERA_PREFIX.'%')->orderBy('id')->get()->map(fn ($t) => [
             'key' => $t->key,
             'name' => $t->name,
             'body' => $this->render($t->body, $vars),
@@ -67,6 +74,9 @@ class MessageService
             'total' => Money::format((int) $booking->total_cents),
             'balance' => Money::format(max(0, $balance['balance_cents'])),
             'check_in_time' => (string) Settings::get('pricing.standard_check_in'),
+            'pickup_time' => $booking->requested_arrival_time ? date('g:i A', strtotime($booking->requested_arrival_time)) : 'the agreed time',
+            'return_time' => $booking->return_time ? date('g:i A', strtotime($booking->return_time)) : 'the agreed time',
+            'days' => (string) $booking->check_in->diffInDays($booking->check_out),
         ];
     }
 }

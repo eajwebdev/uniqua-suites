@@ -11,6 +11,7 @@ use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
 use Spatie\Permission\Middleware\PermissionMiddleware;
+use Spatie\Permission\Middleware\RoleMiddleware;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -22,8 +23,11 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->web(append: [HandleInertiaRequests::class, SecurityHeaders::class]);
         $middleware->alias([
             'perm' => PermissionMiddleware::class,
+            'role' => RoleMiddleware::class,
             'active' => EnsureActiveUser::class,
             'mfa.enrolled' => EnsureTwoFactorEnrolled::class,
+            'subscription' => \App\Http\Middleware\EnsureSubscriptionActive::class,
+            'password.changed' => \App\Http\Middleware\EnsurePasswordChanged::class,
         ]);
         $middleware->redirectGuestsTo('/login');
         $middleware->redirectUsersTo('/admin');

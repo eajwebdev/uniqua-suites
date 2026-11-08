@@ -140,16 +140,19 @@ function StickyBook({ targetId }: { targetId: string }) {
 }
 
 export default function PublicLayout({ title, description, stickyBookFor, children }: { title?: string; description: string; stickyBookFor?: string; children: ReactNode }) {
-    const { contact } = usePage<any>().props as any;
+    const { contact, seo } = usePage<any>().props as any;
     const [open, setOpen] = useState(false);
+    // The server's search title and description win, so crawlers and the browser agree.
+    const fullTitle = seo?.title ?? (title ? `${title} | UNIQA SUITES` : 'UNIQA SUITES');
+    const summary = seo?.description ?? description;
 
     return (
         <div className="flex min-h-dvh flex-col">
             <a href="#main" className="skip-link">Skip to main content</a>
-            <Head title={title}>
-                <meta name="description" content={description} />
-                <meta property="og:title" content={title ? `${title} | UNIQA SUITES` : 'UNIQA SUITES'} />
-                <meta property="og:description" content={description} />
+            <Head title={fullTitle}>
+                <meta name="description" content={summary} />
+                <meta property="og:title" content={fullTitle} />
+                <meta property="og:description" content={summary} />
             </Head>
             <header className="sticky top-0 z-30 border-b border-gold/20 bg-chocolate text-ivory">
                 <div className={cn(PAGE_WIDTH, 'flex h-16 items-center justify-between gap-3')}>

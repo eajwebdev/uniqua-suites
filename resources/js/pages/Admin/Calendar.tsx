@@ -1,6 +1,6 @@
 import { Link, router, usePage } from '@inertiajs/react';
-import { Ban, BedDouble, CalendarDays, CalendarOff, CheckCircle2, ChevronLeft, ChevronRight, Clock, HelpCircle, List, LogIn, LogOut, Plus, Search } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { Ban, BedDouble, CalendarDays, CalendarOff, CheckCircle2, ChevronLeft, ChevronRight, Clock, HelpCircle, List, LogIn, LogOut, Plus, RefreshCw, Search } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { openNewBooking } from '@/components/NewBooking';
 import { ActionButton, buttonClass, cn, confirmDialog, Empty, Input, Select, Stat, StatusChip } from '@/components/ui';
 import { dateOnly, humanize } from '@/lib/format';
@@ -15,7 +15,7 @@ const STATUS: Record<string, { style: string; swatch: string; icon: any; label: 
     block: { style: 'bg-red-100 border border-red-300 text-red-950', swatch: 'bg-red-100 border border-red-300', icon: Ban, label: 'Blocked' },
 };
 
-// Stays that hold the room for certain. Inquiries and holds can still fall through.
+// Stays that are already committed. Active holds also block inventory, but remain visually distinct.
 const BOOKED = ['confirmed', 'checked_in', 'checked_out'];
 
 const HOUSEKEEPING_DOT: Record<string, string> = { ready: 'bg-emerald-600', dirty: 'bg-red-700', cleaning: 'bg-amber-500', assigned: 'bg-amber-500', for_inspection: 'bg-sky-600', under_maintenance: 'bg-red-700' };
@@ -52,6 +52,27 @@ export default function Calendar({ month, label, prev, next, days, today, weeken
     const [term, setTerm] = useState('');
     const [hidden, setHidden] = useState<string[]>([]);
     const [view, setView] = useState<'timeline' | 'list'>('timeline');
+    const [refreshing, setRefreshing] = useState(false);
+
+    function refreshCalendar(force = false) {
+        if (!force && (document.visibilityState !== 'visible' || document.querySelector('dialog[open]'))) return;
+        router.reload({
+            only: ['events', 'blocks', 'closures', 'today'],
+            onStart: () => setRefreshing(true),
+            onFinish: () => setRefreshing(false),
+        });
+    }
+
+    useEffect(() => {
+        const timer = window.setInterval(() => refreshCalendar(), 60_000);
+        const onFocus = () => refreshCalendar();
+        window.addEventListener('focus', onFocus);
+
+        return () => {
+            window.clearInterval(timer);
+            window.removeEventListener('focus', onFocus);
+        };
+    }, [month, property]);
 
     const dates = useMemo(() => Array.from({ length: days }, (_, i) => {
         const date = `${month}-${String(i + 1).padStart(2, '0')}`;
@@ -108,9 +129,10 @@ export default function Calendar({ month, label, prev, next, days, today, weeken
     return (
         <AdminLayout
             title="Booking Calendar"
-            subtitle={<><span className="md:hidden">Tap a stay to open it.</span><span className="hidden md:inline">{canCreate ? 'Click an empty day on a room to start a booking there. ' : ''}Click a stay to open it.</span></>}
+            subtitle={<><span className="md:hidden">Tap a stay to open it.</span><span className="hidden md:inline">{canCreate ? 'Click an empty day on a room to start a booking there. ' : ''}Click a stay to open it. Updates automatically.</span></>}
             actions={
                 <>
+                    <button type="button" onClick={() => refreshCalendar(true)} disabled={refreshing} className={buttonClass('secondary')}><RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} aria-hidden /> Refresh</button>
                     {closeRooms && (
                         <ActionButton small={false} action={{
                             label: 'Close dates',
@@ -195,7 +217,7 @@ export default function Calendar({ month, label, prev, next, days, today, weeken
                                 <div className="absolute inset-0 grid" style={columns}>
                                     {dates.map((d) => {
                                         const cell = cn('border-l border-line/40', d.weekend && 'bg-beige/40', d.date === today && 'bg-gold/15');
-                                        return canCreate ? (
+                                        return canCreate && d.date >= today ? (
                                             <button type="button" key={d.date} onClick={() => openNewBooking({ room_id: room.id, check_in: d.date })} aria-label={`New booking, ${room.name}, ${dateOnly(d.date)}`} title={`New booking, ${room.name}, ${dateOnly(d.date)}`} className={cn('group/cell flex items-center justify-center transition-colors hover:bg-gold/25', cell)}>
                                                 <Plus size={13} className="text-espresso opacity-0 group-hover/cell:opacity-100" aria-hidden />
                                             </button>

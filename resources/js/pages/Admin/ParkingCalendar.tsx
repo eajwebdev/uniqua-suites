@@ -4,8 +4,10 @@ import { useMemo } from 'react';
 import { buttonClass, cn, Empty, Tabs } from '@/components/ui';
 import { dateOnly } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
+import { useLiveRefresh } from '@/lib/useLiveRefresh';
 
 export default function ParkingCalendar({ month, label, prev, next, days, today, tabs, spaces, assignments }: any) {
+    useLiveRefresh(['spaces', 'assignments'], 30_000);
     const path = usePage().url.split('?')[0];
     const dates = useMemo(() => Array.from({ length: days }, (_, i) => `${month}-${String(i + 1).padStart(2, '0')}`), [month, days]);
     const go = (target: string) => router.get('/admin/parking/calendar', { month: target }, { preserveScroll: true });

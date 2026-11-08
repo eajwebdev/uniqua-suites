@@ -1,8 +1,8 @@
 import { Link, usePage } from '@inertiajs/react';
-import { ArrowRight, BriefcaseMedical, CalendarCheck, CalendarX, Check, ChevronLeft, ChevronRight, CookingPot, Dices, Dumbbell, Loader2, MessageCircle, Shirt, Tv, Waves, Wifi, Wind } from 'lucide-react';
+import { AirVent, ArrowRight, Bath, BedDouble, BriefcaseMedical, CalendarCheck, CalendarX, Check, ChevronLeft, ChevronRight, CookingPot, Dices, Dumbbell, Loader2, MessageCircle, Shirt, Sun, Tv, Users, Waves, Wifi, Wind } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn, Input, Modal, Select } from '@/components/ui';
-import { shortDate, time12 } from '@/lib/format';
+import { pesoWhole, shortDate, time12 } from '@/lib/format';
 
 export const PAGE_WIDTH = 'mx-auto w-full max-w-7xl px-5 sm:px-8';
 
@@ -324,14 +324,45 @@ export function BookNow({ room, initialIn, initialOut, guests, small = true, ton
     );
 }
 
-export function roomFacts(room: any): string[] {
+export function roomFacts(room: any): { icon: any; label: string }[] {
     return [
-        `Up to ${room.max_guests} guests`,
-        room.bedrooms === 0 ? 'Studio' : `${room.bedrooms} bedroom${room.bedrooms > 1 ? 's' : ''}`,
-        `${room.bathrooms} bath${room.bathrooms > 1 ? 's' : ''}`,
-        `${room.ac_count} AC`,
-        ...(room.has_balcony ? ['Balcony'] : []),
+        { icon: Users, label: `Up to ${room.max_guests} guests` },
+        { icon: BedDouble, label: room.bedrooms === 0 ? 'Studio' : `${room.bedrooms} bedroom${room.bedrooms > 1 ? 's' : ''}` },
+        { icon: Bath, label: `${room.bathrooms} bath${room.bathrooms > 1 ? 's' : ''}` },
+        { icon: AirVent, label: `${room.ac_count} AC` },
+        ...(room.has_balcony ? [{ icon: Sun, label: 'Balcony' }] : []),
     ];
+}
+
+/** The suite's facts, each with its icon. */
+export function RoomFacts({ room, className, itemClassName }: { room: any; className?: string; itemClassName?: string }) {
+    return (
+        <ul className={cn('flex flex-wrap gap-x-4 gap-y-2 text-sm', className)}>
+            {roomFacts(room).map(({ icon: Icon, label }) => (
+                <li key={label} className={cn('inline-flex items-center gap-1.5', itemClassName)}>
+                    <Icon size={16} strokeWidth={1.5} className="shrink-0 text-bronze" aria-hidden /> {label}
+                </li>
+            ))}
+        </ul>
+    );
+}
+
+/** The posted nightly rate. Staff confirm the final amount for the dates in Messenger. */
+export function RoomRate({ room, large, className }: { room: any; large?: boolean; className?: string }) {
+    const rate = room.rate;
+    if (!rate) return null;
+    const low = Math.min(rate.weekday, rate.weekend);
+
+    return (
+        <div className={cn('flex flex-wrap items-baseline gap-x-2 gap-y-0.5', className)}>
+            {rate.weekday !== rate.weekend && <span className="text-xs tracking-[0.14em] text-muted uppercase">From</span>}
+            <span className={cn('font-serif font-normal text-chocolate', large ? 'text-4xl' : 'text-2xl')}>{pesoWhole(low)}</span>
+            <span className="text-sm text-muted">/ night</span>
+            {rate.weekday !== rate.weekend && (
+                <span className="w-full text-xs text-muted">Weekdays {pesoWhole(rate.weekday)} · Weekends {pesoWhole(rate.weekend)}</span>
+            )}
+        </div>
+    );
 }
 
 /** The largest crop that hides the white rounded corners baked into the supplied photos. */
@@ -470,9 +501,8 @@ function SuiteDetails({ room, checkIn, checkOut, guests, onClose }: { room: any;
                         <Eyebrow className="mb-2 tracking-[0.22em]">{room.location}</Eyebrow>
                         {room.description && <p className="font-serif text-xl leading-snug font-light sm:text-2xl">{room.description}</p>}
                     </div>
-                    <ul className="flex flex-wrap gap-x-5 gap-y-1 border-y border-line py-3 text-sm">
-                        {roomFacts(room).map((fact) => <li key={fact}>{fact}</li>)}
-                    </ul>
+                    <RoomRate room={room} />
+                    <RoomFacts room={room} className="gap-x-5 border-y border-line py-3" />
                     {room.inclusions && (
                         <section>
                             <h3 className="mb-1 font-serif text-xl font-normal">Beds and inclusions</h3>
@@ -511,7 +541,7 @@ export function RoomCard({ room, feature, checkIn, checkOut, guests }: { room: a
 
     return (
         <article className={cn('group flex flex-1 flex-col', feature && 'lg:grid lg:grid-cols-12 lg:items-center lg:gap-14')}>
-            <button type="button" onClick={() => setViewing(true)} aria-label={`View ${room.name} photos and details`} className={cn('block w-full text-left', feature && 'lg:col-span-8')}>
+            <button type="button" onClick={() => setViewing(true)} aria-label={`See ${room.name} photos and details`} className={cn('block w-full text-left', feature && 'lg:col-span-8')}>
                 <SuitePhoto image={room.images?.[0]} name={room.name} className={feature ? 'aspect-[3/2] lg:aspect-[16/9]' : 'aspect-[3/2]'} />
             </button>
             <div className={cn('flex flex-1 flex-col pt-5', feature && 'lg:col-span-4 lg:pt-0')}>
@@ -520,11 +550,12 @@ export function RoomCard({ room, feature, checkIn, checkOut, guests }: { room: a
                     <button type="button" onClick={() => setViewing(true)} className="text-left tracking-[inherit] uppercase transition-colors hover:text-bronze pointer-coarse:py-1">{room.name}</button>
                 </h3>
                 {room.description && <p className={cn('mt-2 text-muted', feature ? 'text-base leading-relaxed' : 'text-sm leading-relaxed')}>{room.description}</p>}
-                <p className="mt-2 text-sm text-muted">{roomFacts(room).join(' · ')}</p>
+                <RoomFacts room={room} className="mt-3 text-muted" />
+                <RoomRate room={room} className="mt-4 border-t border-line pt-4" />
                 <div className="mt-auto flex flex-wrap items-center gap-x-6 gap-y-2 pt-5">
                     <BookNow key={`${checkIn}-${checkOut}`} room={room} initialIn={checkIn} initialOut={checkOut} guests={guests} />
-                    <button type="button" onClick={() => setViewing(true)} aria-label={`View ${room.name}`} className="inline-flex items-center gap-1.5 text-[0.8125rem] font-medium tracking-[0.14em] uppercase transition-colors hover:text-bronze pointer-coarse:min-h-11">
-                        View suite <ArrowRight size={14} strokeWidth={1.5} aria-hidden />
+                    <button type="button" onClick={() => setViewing(true)} aria-label={`View ${room.name} room`} className="inline-flex items-center gap-1.5 text-[0.8125rem] font-medium tracking-[0.14em] uppercase transition-colors hover:text-bronze pointer-coarse:min-h-11">
+                        View room <ArrowRight size={14} strokeWidth={1.5} aria-hidden />
                     </button>
                 </div>
             </div>

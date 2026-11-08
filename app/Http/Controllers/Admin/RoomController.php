@@ -14,12 +14,14 @@ use App\Models\RoomBlock;
 use App\Models\RoomImage;
 use App\Models\RoomSecret;
 use App\Models\RoomStatusEvent;
+use App\Support\AdminCategory;
 use App\Support\Audit;
 use App\Support\Local;
 use App\Support\Money;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
+
 
 class RoomController extends Controller
 {
@@ -30,7 +32,40 @@ class RoomController extends Controller
     public function index(Request $request)
     {
         $user = $request->user();
-        $rooms = Room::with(['property:id,name', 'type:id,name', 'rateRules' => fn ($q) => $q->orderByDesc('effective_from')])->orderBy('id')->get();
+        $rooms = AdminCategory::rooms(Room::query())->with(['property:id,name', 'type:id,name', 'rateRules' => fn ($q) => $q->orderByDesc('effective_from')])->orderBy('id')->get();
+
+        if (AdminCategory::isCameras()) {
+            return Inertia::render('Admin/Resource', [
+                'title' => 'Cameras',
+                'subtitle' => 'Each physical camera is a unit. Open one to add photos or take it out of service. Rates are per model, under Camera Rates.',
+                'headerLink' => ['label' => 'Camera Rates', 'href' => '/admin/camera-rates'],
+                'create' => $user->can('rooms.manage') ? ['label' => 'Add camera unit', 'url' => '/admin/cameras', 'fields' => [
+                    ['name' => 'room_type_id', 'label' => 'Model', 'type' => 'select', 'required' => true, 'options' => \App\Models\RoomType::whereHas('rooms', fn ($r) => $r->cameras())->orderBy('name')->get()->map(fn ($t) => ['value' => $t->id, 'label' => $t->name])->all()],
+                    ['name' => 'unit_code', 'label' => 'Unit code', 'type' => 'text', 'required' => true, 'help' => 'A short label staff use for this physical camera, such as N or O.'],
+                    ['name' => 'specs', 'label' => 'Kit or specs', 'type' => 'text'],
+                ], 'help' => 'For a new model with its own rates, use Add camera model on Camera Rates.'] : null,
+                'columns' => [
+                    ['key' => 'name', 'label' => 'Camera', 'type' => 'link'],
+                    ['key' => 'unit', 'label' => 'Unit'],
+                    ['key' => 'type', 'label' => 'Model'],
+                    ['key' => 'specs', 'label' => 'Kit'],
+                    ['key' => 'photos', 'label' => 'Photos'],
+                    ['key' => 'published', 'label' => 'Public', 'type' => 'status'],
+                    ['key' => 'status', 'label' => 'Status', 'type' => 'status'],
+                ],
+                'rows' => $rooms->loadCount('images')->map(fn ($r) => [
+                    'id' => $r->id,
+                    'name' => $user->can('rooms.manage') ? ['label' => $r->name, 'href' => "/admin/rooms/{$r->id}/edit"] : ['label' => $r->name],
+                    'unit' => $r->unit_code,
+                    'type' => $r->type->name,
+                    'specs' => $r->specs,
+                    'photos' => $r->images_count ?: 'Default image',
+                    'published' => $r->is_published ? 'published' : 'unpublished',
+                    'status' => $r->operational_status,
+                    '_actions' => $user->can('rooms.manage') ? [['label' => $r->is_published ? 'Unpublish' : 'Publish', 'url' => "/admin/rooms/{$r->id}/publish"]] : [],
+                ]),
+            ]);
+        }
 
         return Inertia::render('Admin/Resource', [
             'title' => 'Rooms & Properties',
@@ -77,6 +112,9 @@ class RoomController extends Controller
 
     public function edit(Request $request, Room $room)
     {
+        if ($room->isCamera()) {
+            return $this->editCamera($request, $room);
+        }
         $room->load(['property:id,name', 'type:id,name', 'images', 'amenities:id', 'rateRules' => fn ($q) => $q->orderByDesc('effective_from'), 'blocks' => fn ($q) => $q->whereNull('released_at')->orderBy('start_date')]);
         $secret = RoomSecret::where('room_id', $room->id)->first();
 
@@ -100,6 +138,9 @@ class RoomController extends Controller
 
     public function update(Request $request, Room $room)
     {
+        if ($room->isCamera()) {
+            return $this->updateCamera($request, $room);
+        }
         $data = $request->validate([
             'floor' => 'nullable|string|max:20',
             'bedrooms' => 'required|integer|min:0|max:10',
@@ -131,6 +172,59 @@ class RoomController extends Controller
         Audit::log('room.updated', $room);
 
         return back()->with('success', 'Room saved.');
+    }
+
+    /** A camera unit: its own facts, photos, rate card (per model) and out-of-service dates. Suite fields stay fixed. */
+    private function editCamera(Request $request, Room $room)
+    {
+        $room->load(['type', 'images', 'blocks' => fn ($q) => $q->whereNull('released_at')->orderBy('start_date')]);
+
+        return Inertia::render('Admin/CameraEdit', [
+            'room' => $room->only(['id', 'name', 'unit_code', 'specs', 'description', 'min_nights', 'max_advance_days', 'operational_status', 'operational_notes', 'is_published']) + ['model' => $room->type->name, 'brand' => $room->type->brand],
+            'images' => $room->images->map(fn ($i) => ['id' => $i->id, 'url' => '/storage/'.$i->path, 'alt' => $i->alt_text]),
+            'rates' => app(\App\Domain\Pricing\CameraPricing::class)->card($room->room_type_id, Local::today()),
+            'blocks' => $room->blocks->map(fn ($b) => ['id' => $b->id, 'start' => $b->start_date->toDateString(), 'end' => $b->end_date->toDateString(), 'kind' => $b->kind, 'reason' => $b->reason]),
+            'defaultImage' => \App\Http\Controllers\GrabCamController::DEFAULT_IMAGE,
+            'can' => ['rates' => $request->user()->can('rates.manage')],
+        ]);
+    }
+
+    private function updateCamera(Request $request, Room $room)
+    {
+        $data = $request->validate([
+            'name' => 'required|string|max:80',
+            'unit_code' => ['required', 'string', 'max:30', \Illuminate\Validation\Rule::unique('rooms', 'unit_code')->where('property_id', $room->property_id)->ignore($room->id)],
+            'specs' => 'nullable|string|max:120',
+            'description' => 'nullable|string|max:4000',
+            'min_nights' => 'nullable|integer|min:1|max:365',
+            'max_advance_days' => 'nullable|integer|min:1|max:1825',
+            'operational_status' => 'required|in:active,maintenance,retired',
+            'operational_notes' => 'nullable|string|max:4000',
+        ]);
+
+        if ($data['operational_status'] !== $room->operational_status) {
+            RoomStatusEvent::create(['room_id' => $room->id, 'dimension' => 'operational', 'from_status' => $room->operational_status, 'to_status' => $data['operational_status'], 'user_id' => $request->user()->id, 'created_at' => now()]);
+        }
+        $room->update($data);
+        Audit::log('camera.updated', $room);
+
+        return back()->with('success', 'Camera saved.');
+    }
+
+    /** Another physical unit of a camera model already on the rate card. */
+    public function storeCamera(Request $request)
+    {
+        $grabCam = \App\Models\Property::where('category', \App\Models\Property::CAMERAS)->value('id');
+        $data = $request->validate([
+            'room_type_id' => ['required', 'integer', \Illuminate\Validation\Rule::exists('rooms', 'room_type_id')->where('property_id', $grabCam)],
+            'unit_code' => ['required', 'string', 'max:30', \Illuminate\Validation\Rule::unique('rooms', 'unit_code')->where('property_id', $grabCam)],
+            'specs' => 'nullable|string|max:120',
+        ]);
+
+        $room = \App\Support\CameraUnits::create(\App\Models\RoomType::findOrFail($data['room_type_id']), $data['unit_code'], $data['specs'] ?? null);
+        Audit::log('camera.added', $room);
+
+        return back()->with('success', "{$room->name} added. It shares its model's rates and appears on the Grab Cam page.");
     }
 
     public function approve(Request $request, Room $room)

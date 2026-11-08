@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Support\AdminCategory;
 use App\Domain\Finance\FinanceService;
 use App\Http\Controllers\Controller;
 use App\Models\Guest;
@@ -22,7 +23,9 @@ class GuestController extends Controller
     public function index(Request $request)
     {
         $q = $request->validate(['q' => 'nullable|string|max:80'])['q'] ?? null;
-        $rows = Guest::withCount('bookings')
+        $ids = AdminCategory::propertyIds();
+        $rows = Guest::withCount(['bookings' => fn ($b) => $b->whereIn('property_id', $ids)])
+            ->where(fn ($w) => $w->whereHas('bookings', fn ($b) => $b->whereIn('property_id', $ids))->orWhereDoesntHave('bookings'))
             ->when($q, fn ($b, $v) => $b->where(fn ($w) => $w->where('full_name', 'like', "%{$v}%")->orWhere('phone', 'like', "%{$v}%")->orWhere('email', 'like', "%{$v}%")))
             ->orderByDesc('id')->paginate(15)->withQueryString();
 

@@ -58,6 +58,23 @@ class Room extends Model
         return $q->where('is_published', true)->where('operational_status', '!=', 'retired');
     }
 
+    /** Uniqa suites only. Every public suite page and suite-only screen starts here. */
+    public function scopeSuites(Builder $q): Builder
+    {
+        return $q->whereHas('property', fn ($p) => $p->where('category', Property::SUITES));
+    }
+
+    /** Grab Cam camera units. */
+    public function scopeCameras(Builder $q): Builder
+    {
+        return $q->whereHas('property', fn ($p) => $p->where('category', Property::CAMERAS));
+    }
+
+    public function isCamera(): bool
+    {
+        return $this->property?->category === Property::CAMERAS;
+    }
+
     public function hasOpenSafetyBlock(): bool
     {
         return WorkOrder::where('room_id', $this->id)

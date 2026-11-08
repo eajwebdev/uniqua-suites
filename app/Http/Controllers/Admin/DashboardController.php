@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Support\AdminCategory;
 use App\Domain\Availability\InventoryService;
 use App\Domain\Finance\FinanceService;
 use App\Domain\LegacyImport\WorkbookImporter;
@@ -15,6 +16,7 @@ use App\Models\Incident;
 use App\Models\InventoryItem;
 use App\Models\LaundryJob;
 use App\Models\ParkingAssignment;
+use App\Models\Property;
 use App\Models\Receipt;
 use App\Models\Room;
 use App\Models\RoomBlock;
@@ -62,7 +64,7 @@ class DashboardController extends Controller
                 'collected_cents' => $current['collected_cents'],
                 'collected_prior_cents' => $prior['collected_cents'],
                 'outstanding_cents' => $outstanding['total_cents'],
-                'expected_payout_cents' => (int) ExternalSettlement::whereNull('actual_payout_cents')->sum('expected_net_cents'),
+                'expected_payout_cents' => (int) AdminCategory::whereHasProperty(ExternalSettlement::query(), 'booking')->whereNull('actual_payout_cents')->sum('expected_net_cents'),
                 'earned_cents' => $current['earned_cents'],
                 'earned_prior_cents' => $prior['earned_cents'],
                 'expenses_cents' => $current['expenses_cents'],
@@ -101,11 +103,11 @@ class DashboardController extends Controller
             'expenses' => $expenses,
             'operations' => $this->details->operations($user),
             'team' => [
-                'open_tasks' => HousekeepingTask::whereIn('status', ['pending', 'assigned', 'in_progress'])->count(),
-                'late_tasks' => HousekeepingTask::whereIn('status', ['pending', 'assigned', 'in_progress'])->where('due_at', '<', now())->count(),
-                'for_inspection' => HousekeepingTask::where('status', 'for_inspection')->count(),
-                'open_laundry' => LaundryJob::whereIn('status', ['suggested', 'collected', 'processing'])->count(),
-                'open_work_orders' => WorkOrder::whereIn('status', ['open', 'in_progress'])->count(),
+                'open_tasks' => AdminCategory::isCameras() ? 0 : HousekeepingTask::whereIn('status', ['pending', 'assigned', 'in_progress'])->count(),
+                'late_tasks' => AdminCategory::isCameras() ? 0 : HousekeepingTask::whereIn('status', ['pending', 'assigned', 'in_progress'])->where('due_at', '<', now())->count(),
+                'for_inspection' => AdminCategory::isCameras() ? 0 : HousekeepingTask::where('status', 'for_inspection')->count(),
+                'open_laundry' => AdminCategory::isCameras() ? 0 : LaundryJob::whereIn('status', ['suggested', 'collected', 'processing'])->count(),
+                'open_work_orders' => AdminCategory::workOrders(WorkOrder::query())->whereIn('status', ['open', 'in_progress'])->count(),
                 'low_stock' => $this->lowStockCount(),
             ],
             'date' => $today,
@@ -152,7 +154,7 @@ class DashboardController extends Controller
         $days = (int) CarbonImmutable::parse($from)->diffInDays(CarbonImmutable::parse($to)) + 1;
         $booked = collect($this->reports->topRooms($from, $to))->keyBy('name');
 
-        return Room::where('operational_status', '!=', 'retired')->orderBy('id')->pluck('name')
+        return AdminCategory::rooms(Room::where('operational_status', '!=', 'retired'))->orderBy('id')->pluck('name')
             ->map(fn ($name) => [
                 'name' => $name,
                 'nights' => $booked[$name]['nights'] ?? 0,
@@ -172,7 +174,7 @@ class DashboardController extends Controller
             ->groupBy('room_id');
         $blocks = RoomBlock::whereNull('released_at')->where('start_date', '<=', $today)->where('end_date', '>', $today)->get()->keyBy('room_id');
 
-        return Room::where('operational_status', '!=', 'retired')->with('property:id,name')->orderBy('property_id')->orderBy('id')->get()
+        return AdminCategory::rooms(Room::where('operational_status', '!=', 'retired'))->with('property:id,name')->orderBy('property_id')->orderBy('id')->get()
             ->map(function ($room) use ($stays, $blocks, $today) {
                 $roomStays = $stays[$room->id] ?? collect();
                 $inHouse = $roomStays->firstWhere('status', Booking::CHECKED_IN);
@@ -205,33 +207,36 @@ class DashboardController extends Controller
             }
         };
 
-        $arrivals = Booking::where('status', Booking::CONFIRMED)->where('check_in', $today)->with('activeRooms.room')->get();
+        $cameras = AdminCategory::isCameras();
+        $bookings = fn () => AdminCategory::bookings(Booking::query());
+        $arrivals = $bookings()->where('status', Booking::CONFIRMED)->where('check_in', $today)->with('activeRooms.room')->get();
         $unpaid = $arrivals->filter(fn ($b) => $this->finance->balance($b)['balance_cents'] > 0)->count();
-        $dirty = $arrivals->filter(fn ($b) => $b->activeRooms->contains(fn ($r) => $r->room->housekeeping_status !== 'ready'))->count();
+        $dirty = $cameras ? 0 : $arrivals->filter(fn ($b) => $b->activeRooms->contains(fn ($r) => $r->room->housekeeping_status !== 'ready'))->count();
 
-        $add($this->inventory->overlaps($today)->count(), 'schedule conflict(s): a room has overlapping stays or blocks. Fix these first', '/admin/calendar', 'danger');
-        $add(RoomBlock::where('kind', WorkbookImporter::HOLD_KIND)->whereNull('released_at')->where('end_date', '>', $today)->count(), 'stay(s) held from the sales workbook: enter each real booking, then release its hold', '/admin/calendar');
+        $mine = AdminCategory::rooms(Room::query())->pluck('id')->all();
+        $add($this->inventory->overlaps($today)->whereIn('room_id', $mine)->count(), $cameras ? 'schedule conflict(s): a camera has overlapping rentals or blocks. Fix these first' : 'schedule conflict(s): a room has overlapping stays or blocks. Fix these first', '/admin/calendar', 'danger');
+        $add($cameras ? 0 : RoomBlock::where('kind', WorkbookImporter::HOLD_KIND)->whereNull('released_at')->where('end_date', '>', $today)->count(), 'stay(s) held from the sales workbook: enter each real booking, then release its hold', '/admin/calendar');
         $add($dirty, 'arrival(s) today in a room that is not ready', '/admin/housekeeping', 'danger');
-        $add($unpaid, 'arrival(s) today with an unpaid balance', '/admin/bookings?arrivals=today');
-        $add(Booking::where('status', Booking::TENTATIVE)->where('hold_expires_at', '<', now()->addHours(6))->count(), 'hold(s) expiring within 6 hours', '/admin/bookings?status=tentative');
-        $add(Booking::where('status', Booking::EXPIRED)->where('check_in', '>=', $today)->count(), 'expired hold(s) for upcoming dates', '/admin/bookings?status=expired_hold');
-        $add(WorkOrder::where('safety_block', true)->whereIn('status', ['open', 'in_progress'])->count(), 'unresolved safety work order(s)', '/admin/work-orders', 'danger');
-        $add(HousekeepingTask::where('status', 'for_inspection')->count(), 'room(s) waiting for inspection', '/admin/housekeeping');
+        $add($unpaid, $cameras ? 'pickup(s) today with an unpaid balance' : 'arrival(s) today with an unpaid balance', '/admin/bookings?arrivals=today');
+        $add($bookings()->where('status', Booking::TENTATIVE)->where('hold_expires_at', '<', now()->addHours(6))->count(), 'hold(s) expiring within 6 hours', '/admin/bookings?status=tentative');
+        $add($bookings()->where('status', Booking::EXPIRED)->where('check_in', '>=', $today)->count(), 'expired hold(s) for upcoming dates', '/admin/bookings?status=expired_hold');
+        $add(AdminCategory::workOrders(WorkOrder::query())->where('safety_block', true)->whereIn('status', ['open', 'in_progress'])->count(), 'unresolved safety work order(s)', '/admin/work-orders', 'danger');
+        $add($cameras ? 0 : HousekeepingTask::where('status', 'for_inspection')->count(), 'room(s) waiting for inspection', '/admin/housekeeping');
 
         if ($user->can('settings.manage')) {
             $lastRun = Settings::get('system.scheduler_last_run');
             $add($lastRun && now()->diffInMinutes($lastRun, true) <= 10 ? 0 : 1, 'scheduler not running: holds will not expire and alerts will not go out until it is started', '/admin/settings', 'danger');
         }
         if ($user->can('incidents.approve')) {
-            $add(Incident::whereIn('status', ['reported', 'under_review', 'evidence_pending'])->count(), 'incident(s) needing a decision', '/admin/incidents');
+            $add(AdminCategory::whereHasProperty(Incident::query(), 'room')->whereIn('status', ['reported', 'under_review', 'evidence_pending'])->count(), 'incident(s) needing a decision', '/admin/incidents');
         }
         if ($user->can('dashboard.finance')) {
-            $left = Booking::where('status', Booking::CHECKED_OUT)->whereHas('source', fn ($s) => $s->where('code', '!=', 'airbnb'))->get()
+            $left = $bookings()->where('status', Booking::CHECKED_OUT)->get()
                 ->filter(fn ($b) => $this->finance->balance($b)['balance_cents'] > 0)->count();
-            $add($left, 'guest(s) checked out with an unpaid balance', '/admin?tab=income');
+            $add($left, $cameras ? 'rental(s) returned with an unpaid balance' : 'guest(s) checked out with an unpaid balance', '/admin?tab=income');
         }
         if ($user->can('payments.verify')) {
-            $add(Receipt::where('verification_status', 'pending')->count(), 'receipt(s) awaiting verification', '/admin/payments?status=pending');
+            $add(AdminCategory::whereHasProperty(Receipt::query(), 'booking')->where('verification_status', 'pending')->count(), 'receipt(s) awaiting verification', '/admin/payments?status=pending');
         }
 
         return $items;
@@ -239,21 +244,23 @@ class DashboardController extends Controller
 
     private function today(string $today): array
     {
-        $rooms = Room::where('operational_status', '!=', 'retired')->count();
+        // Units of the selected business: suites, or cameras (a camera out on rental is "occupied").
+        $rooms = AdminCategory::rooms(Room::where('operational_status', '!=', 'retired'))->count();
         $occupied = DB::table('booking_rooms as br')->join('bookings as b', 'b.id', '=', 'br.booking_id')
+            ->join('rooms as r', 'r.id', '=', 'br.room_id')->join('properties as p', 'p.id', '=', 'r.property_id')->where('p.category', AdminCategory::current())
             ->whereNull('br.released_at')->where('b.status', Booking::CHECKED_IN)->distinct()->count('br.room_id');
-        $blocked = RoomBlock::whereNull('released_at')->where('start_date', '<=', $today)->where('end_date', '>', $today)->distinct()->count('room_id');
+        $blocked = RoomBlock::whereHas('room', fn ($r) => AdminCategory::rooms($r))->whereNull('released_at')->where('start_date', '<=', $today)->where('end_date', '>', $today)->distinct()->count('room_id');
 
         return [
             'rooms' => $rooms,
             'occupied' => $occupied,
             'blocked' => $blocked,
             'vacant' => max(0, $rooms - $occupied - $blocked),
-            'ready' => Room::where('housekeeping_status', 'ready')->where('operational_status', 'active')->count(),
-            'not_ready' => Room::where('housekeeping_status', '!=', 'ready')->where('operational_status', 'active')->count(),
-            'parking_in_use' => ParkingAssignment::where('status', 'active')->where('start_date', '<=', $today)->where('end_date', '>', $today)->count(),
-            'arrivals' => $this->agenda(Booking::where('status', Booking::CONFIRMED)->where('check_in', $today)),
-            'departures' => $this->agenda(Booking::where('status', Booking::CHECKED_IN)->where('check_out', $today)),
+            'ready' => AdminCategory::isCameras() ? 0 : Room::suites()->where('housekeeping_status', 'ready')->where('operational_status', 'active')->count(),
+            'not_ready' => AdminCategory::isCameras() ? 0 : Room::suites()->where('housekeeping_status', '!=', 'ready')->where('operational_status', 'active')->count(),
+            'parking_in_use' => AdminCategory::isCameras() ? 0 : ParkingAssignment::where('status', 'active')->where('start_date', '<=', $today)->where('end_date', '>', $today)->count(),
+            'arrivals' => $this->agenda(AdminCategory::bookings(Booking::where('status', Booking::CONFIRMED)->where('check_in', $today))),
+            'departures' => $this->agenda(AdminCategory::bookings(Booking::where('status', Booking::CHECKED_IN)->where('check_out', $today))),
         ];
     }
 

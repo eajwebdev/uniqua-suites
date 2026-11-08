@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react';
 import { ActionButton, Button, buttonClass, ClientPager, Empty, FieldDef, FormModal, Input, Pagination, RowAction, Select, Stat, StatusChip, Tabs, tableClass, tdClass, thClass, theadClass, trClass, usePaged } from '@/components/ui';
 import { dateOnly, dateTime, peso } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
+import { useLiveRefresh } from '@/lib/useLiveRefresh';
 
 type Column = { key: string; label: string; type?: 'money' | 'date' | 'datetime' | 'status' | 'link' };
 type CreateDef = { label: string; url: string; fields: FieldDef[]; confirm?: string };
@@ -51,6 +52,8 @@ function Cell({ column, value }: { column: Column; value: any }) {
 
 export default function Resource(props: Props) {
     const path = usePage().url.split('?')[0];
+    const live = ['/admin/payments', '/admin/work-orders', '/admin/incidents', '/admin/inventory', '/admin/parking'].includes(path);
+    useLiveRefresh(live ? ['rows', 'stats'] : [], live ? 30_000 : 24 * 60 * 60 * 1000);
     const [modal, setModal] = useState<CreateDef | null>(null);
     const [sorting, setSorting] = useState<SortingState>([]);
     const [term, setTerm] = useState(props.search?.value ?? '');

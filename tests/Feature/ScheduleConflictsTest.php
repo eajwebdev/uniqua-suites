@@ -303,7 +303,7 @@ class ScheduleConflictsTest extends DomainTestCase
 
     private function newBooking(string $slug, int $in, int $out, array $extra = [])
     {
-        return $this->post('/admin/bookings', $extra + ['guest_name' => 'Synthetic New', 'room_ids' => [$this->room($slug)->id], 'booking_source_id' => $this->source(), 'check_in' => $this->day($in), 'check_out' => $this->day($out), 'adults' => 2]);
+        return $this->post('/admin/bookings', $extra + ['guest_name' => 'Synthetic New', 'guest_phone' => '09170000005', 'room_ids' => [$this->room($slug)->id], 'booking_source_id' => $this->source(), 'check_in' => $this->day($in), 'check_out' => $this->day($out), 'adults' => 2]);
     }
 
     public function test_the_room_list_says_which_rooms_are_taken_for_the_chosen_dates(): void

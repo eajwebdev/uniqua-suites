@@ -2,6 +2,7 @@
 
 namespace App\Domain\Reporting;
 
+use App\Support\AdminCategory;
 use App\Models\Booking;
 use App\Models\Expense;
 use App\Models\HousekeepingTask;
@@ -27,9 +28,9 @@ class DashboardDetails
         $created = $channels->sum('total');
         $cancelled = $channels->sum('cancelled');
 
-        $upcoming = Booking::where('status', Booking::CONFIRMED)->where('check_in', '>=', $today)
+        $upcoming = AdminCategory::bookings(Booking::query())->where('status', Booking::CONFIRMED)->where('check_in', '>=', $today)
             ->where('check_in', '<=', CarbonImmutable::parse($today)->addDays(13)->toDateString());
-        $waiting = Booking::whereIn('status', [Booking::INQUIRY, Booking::TENTATIVE])->where('check_in', '>=', $today);
+        $waiting = AdminCategory::bookings(Booking::query())->whereIn('status', [Booking::INQUIRY, Booking::TENTATIVE])->where('check_in', '>=', $today);
 
         return [
             'created' => $created,
@@ -48,9 +49,10 @@ class DashboardDetails
 
     public function income(array $kpi, array $outstanding, bool $withGuests): array
     {
-        $methods = DB::table('receipts')->where('verification_status', 'verified')->whereBetween('receipt_date', [$kpi['from'], $kpi['to']])
-            ->groupBy('method')->selectRaw('method, SUM(amount_cents) as cents')->orderByDesc('cents')->get();
-        $pending = Receipt::where('verification_status', 'pending');
+        $methods = DB::table('receipts as r')->leftJoin('bookings as b', 'b.id', '=', 'r.booking_id')->tap(fn ($q) => AdminCategory::whereProperty($q, 'b.property_id'))
+            ->where('r.verification_status', 'verified')->whereBetween('r.receipt_date', [$kpi['from'], $kpi['to']])
+            ->groupBy('r.method')->selectRaw('r.method as method, SUM(r.amount_cents) as cents')->orderByDesc('cents')->get();
+        $pending = AdminCategory::whereHasProperty(Receipt::query(), 'booking')->where('verification_status', 'pending');
 
         return [
             'other_charges_cents' => $kpi['ancillary_cents'],
@@ -68,11 +70,12 @@ class DashboardDetails
     public function expenses(array $kpi, array $prior, bool $withItems): array
     {
         $byCategory = fn (string $from, string $to) => DB::table('expenses as e')->join('expense_categories as c', 'c.id', '=', 'e.expense_category_id')
+            ->leftJoin('rooms as r', 'r.id', '=', 'e.room_id')->tap(fn ($q) => AdminCategory::whereProperty($q, DB::raw('COALESCE(r.property_id, e.property_id)')))
             ->whereBetween('e.expense_date', [$from, $to])->groupBy('c.id', 'c.name')
             ->selectRaw('c.id, c.name, SUM(e.amount_cents) as cents, SUM(e.reverses_expense_id IS NULL) as entries')->get();
         $earlier = $byCategory($prior['from'], $prior['to'])->pluck('cents', 'id');
 
-        $real = fn () => Expense::whereNull('reverses_expense_id')
+        $real = fn () => AdminCategory::expenses(Expense::query())->whereNull('reverses_expense_id')
             ->whereNotIn('id', Expense::whereNotNull('reverses_expense_id')->select('reverses_expense_id'));
         $unpaid = $real()->where('status', 'incurred');
         $item = fn ($e) => [
@@ -94,7 +97,7 @@ class DashboardDetails
             'by_category' => $byCategory($kpi['from'], $kpi['to'])
                 ->map(fn ($c) => ['name' => $c->name, 'cents' => (int) $c->cents, 'prior_cents' => (int) ($earlier[$c->id] ?? 0), 'entries' => (int) $c->entries])
                 ->filter(fn ($c) => $c['cents'] !== 0)->sortByDesc('cents')->values()->all(),
-            'by_room' => DB::table('expenses as e')->leftJoin('rooms as r', 'r.id', '=', 'e.room_id')
+            'by_room' => DB::table('expenses as e')->leftJoin('rooms as r', 'r.id', '=', 'e.room_id')->tap(fn ($q) => AdminCategory::whereProperty($q, DB::raw('COALESCE(r.property_id, e.property_id)')))
                 ->whereBetween('e.expense_date', [$kpi['from'], $kpi['to']])->groupBy('r.id', 'r.name')
                 ->selectRaw('r.name, SUM(e.amount_cents) as cents')->get()
                 ->map(fn ($r) => ['name' => $r->name ?? 'General', 'cents' => (int) $r->cents])
@@ -113,9 +116,9 @@ class DashboardDetails
             ->whereIn('t.status', self::OPEN_TASKS);
 
         return [
-            'tasks_by_status' => HousekeepingTask::whereIn('status', [...self::OPEN_TASKS, 'for_inspection'])->groupBy('status')->selectRaw('status, COUNT(*) as total')->pluck('total', 'status')->map(fn ($n) => (int) $n)->all(),
-            'open_incidents' => Incident::whereIn('status', ['reported', 'under_review', 'evidence_pending'])->count(),
-            'tasks' => $user->can('housekeeping.manage')
+            'tasks_by_status' => AdminCategory::isCameras() ? [] : HousekeepingTask::whereIn('status', [...self::OPEN_TASKS, 'for_inspection'])->groupBy('status')->selectRaw('status, COUNT(*) as total')->pluck('total', 'status')->map(fn ($n) => (int) $n)->all(),
+            'open_incidents' => AdminCategory::whereHasProperty(Incident::query(), 'room')->whereIn('status', ['reported', 'under_review', 'evidence_pending'])->count(),
+            'tasks' => $user->can('housekeeping.manage') && ! AdminCategory::isCameras()
                 ? $tasks()->orderByRaw('t.due_at IS NULL')->orderBy('t.due_at')->limit(8)->get(['t.id', 't.title', 't.type', 't.status', 't.priority', 't.due_at', 'r.name as room', 'u.name as assignee'])
                     ->map(fn ($t) => [
                         'id' => $t->id,
@@ -128,7 +131,7 @@ class DashboardDetails
                     ])->all()
                 : null,
             'repairs' => $user->can('maintenance.manage')
-                ? DB::table('work_orders as w')->leftJoin('rooms as r', 'r.id', '=', 'w.room_id')->whereIn('w.status', ['open', 'in_progress'])
+                ? DB::table('work_orders as w')->leftJoin('rooms as r', 'r.id', '=', 'w.room_id')->tap(fn ($q) => AdminCategory::whereProperty($q, DB::raw('COALESCE(r.property_id, w.property_id)')))->whereIn('w.status', ['open', 'in_progress'])
                     ->orderByRaw("FIELD(w.severity, 'critical', 'high', 'normal', 'low')")->orderBy('w.id')->limit(6)
                     ->get(['w.id', 'w.title', 'w.severity', 'w.status', 'r.name as room'])->map(fn ($w) => (array) $w)->all()
                 : null,

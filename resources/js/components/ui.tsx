@@ -99,12 +99,12 @@ export function PasswordInput(props: React.InputHTMLAttributes<HTMLInputElement>
     );
 }
 
-export function Select({ options, placeholder, ...props }: React.SelectHTMLAttributes<HTMLSelectElement> & { options: { value: string | number; label: string }[]; placeholder?: string }) {
+export function Select({ options, placeholder, ...props }: React.SelectHTMLAttributes<HTMLSelectElement> & { options: { value: string | number; label: string; disabled?: boolean }[]; placeholder?: string }) {
     return (
         <select {...props} className={controlClass(props.className)}>
             {placeholder !== undefined && <option value="">{placeholder}</option>}
             {options.map((o) => (
-                <option key={o.value} value={o.value}>
+                <option key={o.value} value={o.value} disabled={o.disabled}>
                     {o.label}
                 </option>
             ))}

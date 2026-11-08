@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-label="Camera photo coming soon">
+  <rect width="400" height="300" fill="#f6efe1"/>
+  <g fill="none" stroke="#0f2847" stroke-width="8" stroke-linejoin="round">
+    <path d="M110 105h40l14-22h72l14 22h40a16 16 0 0 1 16 16v86a16 16 0 0 1-16 16H110a16 16 0 0 1-16-16v-86a16 16 0 0 1 16-16z"/>
+    <circle cx="200" cy="162" r="40"/>
+    <circle cx="200" cy="162" r="20" stroke-width="5" opacity=".5"/>
+  </g>
+  <circle cx="276" cy="126" r="6" fill="#0f2847"/>
+  <text x="200" y="262" text-anchor="middle" font-family="system-ui, sans-serif" font-size="18" font-weight="600" fill="#0f2847" opacity=".6">Photo coming soon</text>
+</svg>

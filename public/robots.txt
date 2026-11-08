@@ -1,6 +1,31 @@
+# UNIQA SUITES (https://uniqasuites.com) and Grab Cam Rental (/grabcam)
 User-agent: *
+Allow: /
+Allow: /suites/
+Allow: /grabcam
+Allow: /policies
+Allow: /storage/rooms/
+Allow: /brand/
+Allow: /build/
+
+# Staff areas and sign-in
 Disallow: /admin
+Disallow: /account
 Disallow: /login
+Disallow: /logout
 Disallow: /two-factor
 Disallow: /forgot-password
 Disallow: /reset-password
+
+# Live availability checks: data for the page, not pages to list
+Disallow: /suites/*/check-dates
+Disallow: /grabcam/*/check-dates
+
+# Filtered copies of the home page
+Disallow: /*?location=
+Disallow: /*?type=
+Disallow: /*?guests=
+Disallow: /*?bathrooms=
+Disallow: /*?balcony=
+
+Sitemap: https://uniqasuites.com/sitemap.xml

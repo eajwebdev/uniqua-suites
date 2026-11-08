@@ -1,7 +1,7 @@
 import { Link } from '@inertiajs/react';
 import { ArrowLeft, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { useRef, useState } from 'react';
-import { AmenityIcon, BookingPanel, Eyebrow, linkButton, PAGE_WIDTH, roomFacts, SuitePhoto, TakenDates, useChatLink } from '@/components/public';
+import { AmenityIcon, BookingPanel, Eyebrow, linkButton, PAGE_WIDTH, RoomFacts, RoomRate, SuitePhoto, TakenDates, useChatLink } from '@/components/public';
 import { cn } from '@/components/ui';
 import { time12 } from '@/lib/format';
 import PublicLayout from '@/layouts/PublicLayout';
@@ -68,9 +68,7 @@ export default function Suite({ room, policy }: any) {
                         <h1 className="font-serif text-5xl font-light tracking-[0.06em] uppercase sm:text-7xl">{room.name}</h1>
                         {room.description && <p className="mt-5 max-w-2xl font-serif text-2xl leading-snug font-light">{room.description}</p>}
 
-                        <ul className="mt-8 flex flex-wrap border-y border-line text-sm">
-                            {roomFacts(room).map((fact) => <li key={fact} className="py-4 pr-8">{fact}</li>)}
-                        </ul>
+                        <RoomFacts room={room} className="mt-8 gap-x-8 border-y border-line py-4" />
 
                         <section className="mt-12">
                             <h2 className="mb-2 font-serif text-3xl font-normal">Dates not available</h2>
@@ -108,6 +106,7 @@ export default function Suite({ room, policy }: any) {
                         <div className="border border-line bg-white p-5">
                             <Eyebrow className="mb-1">Book this suite</Eyebrow>
                             <h2 className="mb-3 font-serif text-3xl font-light">Choose your dates</h2>
+                            <RoomRate room={room} className="mb-4 border-b border-line pb-4" />
                             <BookingPanel room={room} />
                         </div>
                     </aside>

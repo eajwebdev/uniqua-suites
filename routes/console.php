@@ -11,6 +11,7 @@ use App\Models\Room;
 use App\Models\User;
 use App\Support\Local;
 use App\Support\Settings;
+use App\Support\Subscription;
 use App\Support\SystemNotice;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Artisan;
@@ -29,10 +30,14 @@ Artisan::command('uniqa:expire-holds', function (BookingService $bookings) {
 
 Artisan::command('uniqa:daily-alerts', function () {
     $lead = (int) Settings::get('alerts.arrival_lead_days');
-    $arrivals = Booking::where('status', Booking::CONFIRMED)->where('check_in', Local::now()->addDays($lead)->toDateString())->count();
-    if ($arrivals) {
-        $when = $lead === 1 ? 'tomorrow' : "in {$lead} days";
-        SystemNotice::toPermission('bookings.manage', "{$arrivals} arrival(s) {$when}. Check balances and special requests.", '/admin', 'arrivals');
+    $when = $lead === 1 ? 'tomorrow' : "in {$lead} days";
+    $due = fn (string $category) => Booking::where('status', Booking::CONFIRMED)->where('check_in', Local::now()->addDays($lead)->toDateString())
+        ->whereHas('property', fn ($p) => $p->where('category', $category))->count();
+    if ($arrivals = $due(Property::SUITES)) {
+        SystemNotice::toPermission('bookings.manage', "{$arrivals} arrival(s) {$when}. Check balances and special requests.", '/admin?business=suites', 'arrivals');
+    }
+    if ($pickups = $due(Property::CAMERAS)) {
+        SystemNotice::toPermission('bookings.manage', "{$pickups} camera pickup(s) {$when}. Check balances and the renter's ID.", '/admin?business=cameras', 'arrivals');
     }
 
     $overdue = HousekeepingTask::whereIn('status', ['pending', 'assigned', 'in_progress'])->where('due_at', '<', now())->count();
@@ -132,6 +137,13 @@ if (str_ends_with((string) config('database.connections.'.config('database.defau
     require __DIR__.'/simulation-console.php';
 }
 
+Artisan::command('uniqa:subscription-check', function () {
+    Subscription::ensureBill(); // the next month's bill always exists before anyone is reminded
+    $sent = Subscription::remind();
+    $this->info($sent ? "Reminder sent: {$sent}" : 'No subscription reminder today.');
+})->purpose('Remind the Owner and Administrator in the bell before and after the subscription ends');
+
 Schedule::command('uniqa:expire-holds')->everyMinute()->withoutOverlapping();
+Schedule::command('uniqa:subscription-check')->dailyAt('07:05')->timezone(config('uniqa.display_timezone'));
 Schedule::command('uniqa:daily-alerts')->dailyAt('07:00')->timezone(config('uniqa.display_timezone'));
 Schedule::command('uniqa:month-end')->monthlyOn(1, '07:30')->timezone(config('uniqa.display_timezone'));

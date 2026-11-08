@@ -14,7 +14,8 @@ router.on('navigate', (event) => {
 });
 
 createInertiaApp({
-    title: (title) => (title ? `${title} | UNIQA SUITES` : 'UNIQA SUITES'),
+    // A title that already names its site (the public pages' search titles) is used as it is.
+    title: (title) => (title ? (title.includes(' | ') ? title : `${title} | UNIQA SUITES`) : 'UNIQA SUITES'),
     resolve: (name) => resolvePageComponent(`./pages/${name}.tsx`, import.meta.glob('./pages/**/*.tsx')) as any,
     setup({ el, App, props }) {
         createRoot(el).render(<App {...props} />);

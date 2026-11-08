@@ -128,7 +128,7 @@ class AuthController extends Controller
     public function updatePassword(Request $request)
     {
         $data = $request->validate(['current_password' => 'required|current_password', 'password' => ['required', 'confirmed', PasswordRule::min(10)]]);
-        $request->user()->update(['password' => $data['password']]);
+        $request->user()->update(['password' => $data['password'], 'must_change_password' => false]);
         Auth::logoutOtherDevices($data['password']);
         Audit::log('auth.password_changed');
 

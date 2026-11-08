@@ -12,13 +12,16 @@ use App\Models\BookingCharge;
 use App\Models\BookingSource;
 use App\Models\Guest;
 use App\Models\ParkingAssignment;
+use App\Models\Property;
 use App\Models\Room;
+use App\Support\AdminCategory;
 use App\Support\Audit;
 use App\Support\Local;
 use App\Support\Money;
 use App\Support\Settings;
 use Illuminate\Http\Request;
 use App\Domain\Bookings\VacancySearch;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 
@@ -32,7 +35,7 @@ class BookingController extends Controller
     {
         $f = $request->validate(['status' => 'nullable|string|max:30', 'source' => 'nullable|integer', 'q' => 'nullable|string|max:80', 'arrivals' => 'nullable|string|max:10', 'room' => 'nullable|integer']);
 
-        $rows = Booking::with(['guest:id,full_name', 'source:id,name', 'activeRooms.room:id,name'])
+        $rows = AdminCategory::bookings(Booking::with(['guest:id,full_name', 'source:id,name', 'activeRooms.room:id,name']))
             ->when($f['status'] ?? null, fn ($q, $v) => $q->where('status', $v))
             ->when($f['source'] ?? null, fn ($q, $v) => $q->where('booking_source_id', $v))
             ->when($f['room'] ?? null, fn ($q, $v) => $q->whereHas('activeRooms', fn ($r) => $r->where('room_id', $v)))
@@ -70,17 +73,19 @@ class BookingController extends Controller
     public function formOptions()
     {
         return response()->json([
-            'rooms' => Room::where('operational_status', '!=', 'retired')->with('property:id,name')->orderBy('id')->get()
-                ->map(fn ($r) => ['id' => $r->id, 'label' => "{$r->name} ({$r->unit_code}), {$r->property->name}", 'max' => $r->max_guests, 'included' => $r->included_guests]),
+            'rooms' => AdminCategory::rooms(Room::where('operational_status', '!=', 'retired'))->with('property:id,name,category')->orderBy('id')->get()
+                ->map(fn ($r) => ['id' => $r->id, 'label' => "{$r->name} ({$r->unit_code}), {$r->property->name}", 'property_id' => $r->property_id, 'property' => $r->property->name, 'category' => $r->property->category, 'max' => $r->max_guests, 'included' => $r->included_guests]),
             'sources' => BookingSource::where('is_active', true)->where('is_legacy_only', false)->orderBy('id')->get(['id', 'code', 'name']),
-            'guests' => Guest::orderByDesc('id')->limit(200)->get(['id', 'full_name', 'phone']),
+            'guests' => Guest::where(fn ($w) => $w->whereHas('bookings', fn ($b) => AdminCategory::bookings($b))->orWhereDoesntHave('bookings'))->orderByDesc('id')->limit(200)->get(['id', 'full_name', 'phone']),
+            'today' => Local::today(),
+            'standard_check_in' => (string) Settings::get('pricing.standard_check_in'),
         ])->header('Cache-Control', 'no-store');
     }
 
     /** Which rooms cannot take these dates, and why. Capacity is left out: a group can share several rooms. */
     public function availability(Request $request, VacancySearch $vacancies)
     {
-        $data = $request->validate(['check_in' => 'required|date_format:Y-m-d', 'check_out' => 'required|date_format:Y-m-d|after:check_in', 'ignore_booking' => 'nullable|integer|exists:bookings,id']);
+        $data = $request->validate(['check_in' => 'required|date_format:Y-m-d|after_or_equal:'.Local::today(), 'check_out' => 'required|date_format:Y-m-d|after:check_in', 'ignore_booking' => 'nullable|integer|exists:bookings,id']);
 
         $taken = [];
         foreach (Room::where('operational_status', '!=', 'retired')->orderBy('id')->get() as $room) {
@@ -100,15 +105,18 @@ class BookingController extends Controller
             'guest_name' => 'required_without:guest_id|nullable|string|max:120',
             'guest_phone' => 'nullable|string|max:40',
             'guest_email' => 'nullable|email|max:120',
+            'guest_messenger_handle' => 'nullable|string|max:120',
             'room_ids' => 'required|array|min:1',
             'room_ids.*' => 'integer|exists:rooms,id',
             'booking_source_id' => 'required|exists:booking_sources,id',
             'source_reference' => 'nullable|string|max:120',
-            'check_in' => 'required|date_format:Y-m-d',
+            'check_in' => 'required|date_format:Y-m-d|after_or_equal:'.Local::today(),
             'check_out' => 'required|date_format:Y-m-d|after:check_in',
             'adults' => 'required|integer|min:1|max:30',
             'children' => 'nullable|integer|min:0|max:30',
             'approved_early_time' => 'nullable|date_format:H:i',
+            'pickup_time' => 'nullable|date_format:H:i',
+            'return_time' => 'nullable|date_format:H:i',
             'special_requests' => 'nullable|string|max:2000',
             'internal_notes' => 'nullable|string|max:2000',
             'idempotency_key' => 'nullable|string|max:60',
@@ -116,28 +124,53 @@ class BookingController extends Controller
         ]);
         abort_if(($data['then'] ?? null) === 'confirm' && ! $request->user()->can('bookings.confirm'), 403);
 
-        // A double-clicked Save carries the same key and returns the booking already made, so it skips this.
-        if (empty($data['idempotency_key']) || ! Booking::where('idempotency_key', $data['idempotency_key'])->exists()) {
-            foreach (Room::whereIn('id', $data['room_ids'])->orderBy('id')->get() as $room) {
-                $reason = $vacancies->reasonUnavailable($room, $data['check_in'], $data['check_out'], 1);
-                if ($reason) {
-                    throw ValidationException::withMessages(['room_ids' => "{$room->name} cannot be booked for these dates. {$reason}"]);
-                }
+        if (empty($data['guest_id']) && empty($data['guest_phone']) && empty($data['guest_email']) && empty($data['guest_messenger_handle'])) {
+            throw ValidationException::withMessages(['guest_phone' => 'Enter at least one contact method: phone, email, or Messenger.']);
+        }
+
+        $standardCheckIn = (string) Settings::get('pricing.standard_check_in');
+        if (! empty($data['approved_early_time']) && $data['approved_early_time'] >= $standardCheckIn) {
+            throw ValidationException::withMessages(['approved_early_time' => "Early check-in must be before {$standardCheckIn}."]);
+        }
+
+        $existing = ! empty($data['idempotency_key']) ? Booking::where('idempotency_key', $data['idempotency_key'])->first() : null;
+        if ($existing) {
+            return back()->with('success', "Booking {$existing->reference} is already saved.")
+                ->with('flash_action', ['label' => 'View booking', 'href' => "/admin/bookings/{$existing->id}"]);
+        }
+
+        $rooms = Room::whereIn('id', $data['room_ids'])->orderBy('id')->get();
+        if ($rooms->pluck('property_id')->unique()->count() > 1) {
+            throw ValidationException::withMessages(['room_ids' => 'All rooms in one booking must be at the same property. Create a separate booking for another property.']);
+        }
+        $party = (int) $data['adults'] + (int) ($data['children'] ?? 0);
+        $capacity = (int) $rooms->sum('max_guests');
+        if ($party > $capacity) {
+            throw ValidationException::withMessages(['room_ids' => "The selected room(s) allow at most {$capacity} guests; {$party} requested."]);
+        }
+
+        // The dates and rooms are checked again immediately before creating anything.
+        foreach ($rooms as $room) {
+            $reason = $vacancies->reasonUnavailable($room, $data['check_in'], $data['check_out'], 1);
+            if ($reason) {
+                throw ValidationException::withMessages(['room_ids' => "{$room->name} cannot be booked for these dates. {$reason}"]);
             }
         }
 
-        if (empty($data['guest_id'])) {
-            $data['guest_id'] = Guest::create(['full_name' => $data['guest_name'], 'phone' => $data['guest_phone'] ?? null, 'email' => $data['guest_email'] ?? null])->id;
-        }
+        try {
+            $booking = DB::transaction(function () use (&$data) {
+                if (empty($data['guest_id'])) {
+                    $data['guest_id'] = Guest::create(['full_name' => $data['guest_name'], 'phone' => $data['guest_phone'] ?? null, 'email' => $data['guest_email'] ?? null, 'messenger_handle' => $data['guest_messenger_handle'] ?? null])->id;
+                }
 
-        $booking = $this->bookings->createInquiry($data);
+                return $this->bookings->createInquiry($data);
+            });
+        } catch (RoomConflict $e) {
+            throw ValidationException::withMessages(['room_ids' => $e->getMessage()]);
+        }
 
         // Stays on the page it was opened from. A repeated click finds the booking already done.
         $view = ['label' => 'View booking', 'href' => "/admin/bookings/{$booking->id}"];
-        if (! $booking->wasRecentlyCreated) {
-            return back()->with('success', "Booking {$booking->reference} is already saved.")->with('flash_action', $view);
-        }
-
         try {
             match ($data['then'] ?? null) {
                 'hold' => $this->bookings->hold($booking),
@@ -155,7 +188,9 @@ class BookingController extends Controller
 
     public function show(Request $request, Booking $booking)
     {
-        $booking->load(['guest', 'source:id,name,code', 'property:id,name', 'activeRooms.room:id,name,unit_code,housekeeping_status,included_guests,max_guests', 'statusEvents.user:id,name', 'snapshots']);
+        // A link to a rental (or a stay) opens in its own business, so the menu and lists match it.
+        $request->session()->put('admin_category', $booking->property()->value('category'));
+        $booking->load(['guest', 'source:id,name,code', 'property:id,name,category', 'activeRooms.room:id,name,unit_code,housekeeping_status,included_guests,max_guests', 'statusEvents.user:id,name', 'snapshots']);
         $user = $request->user();
         $canPay = $user->can('payments.view');
 
@@ -181,6 +216,14 @@ class BookingController extends Controller
                 'internal_notes' => $booking->internal_notes,
                 'total_cents' => (int) $booking->total_cents,
                 'pricing_version' => $booking->pricing_version,
+                'is_camera' => $booking->property->category === Property::CAMERAS,
+                'pickup_time' => $booking->requested_arrival_time ? substr($booking->requested_arrival_time, 0, 5) : null,
+                'return_time' => $booking->return_time ? substr($booking->return_time, 0, 5) : null,
+                'deposit_cents' => (int) $booking->deposit_cents,
+                'deposit_status' => $booking->deposit_status,
+                'deposit_note' => $booking->deposit_note,
+                'id_type' => $booking->id_type,
+                'id_status' => $booking->id_status,
                 'rooms' => $booking->activeRooms->map(fn ($r) => ['id' => $r->room_id, 'name' => $r->room->name, 'unit' => $r->room->unit_code, 'housekeeping' => $r->room->housekeeping_status]),
             ],
             'charges' => $booking->charges()->orderByDesc('id')->get(['id', 'type', 'description', 'quantity', 'amount_cents', 'pricing_version', 'voided_at', 'void_reason']),
@@ -188,14 +231,16 @@ class BookingController extends Controller
             'receipts' => $canPay ? $this->receiptRows($booking) : [],
             'checkout' => $this->checkoutWarning($booking, $canPay),
             'nowLocal' => Local::now()->format('Y-m-d\TH:i'),
-            'downpaymentPercent' => $booking->source?->code === 'airbnb' ? null : ((int) Settings::get('finance.downpayment_percent') ?: null),
+            'today' => Local::today(),
+            'standardCheckIn' => (string) Settings::get('pricing.standard_check_in'),
+            'downpaymentPercent' => (int) Settings::get('finance.downpayment_percent') ?: null,
             'settlements' => $canPay ? $booking->settlements()->orderByDesc('id')->get() : [],
             'refunds' => $canPay ? $booking->refunds()->orderByDesc('id')->get() : [],
             'events' => $booking->statusEvents->map(fn ($e) => ['from' => $e->from_status, 'to' => $e->to_status, 'note' => $e->note, 'by' => $e->user?->name, 'at' => $e->created_at]),
             'snapshots' => $booking->snapshots->map(fn ($s) => ['version' => $s->version, 'total_cents' => (int) $s->total_cents, 'reason' => $s->reason, 'at' => $s->created_at]),
             'parking' => ParkingAssignment::where('booking_id', $booking->id)->with('space:id,code')->get()->map(fn ($p) => ['code' => $p->space->code, 'start' => $p->start_date->toDateString(), 'end' => $p->end_date->toDateString(), 'status' => $p->status]),
             'messages' => $this->messages->renderAll($booking),
-            'rooms' => Room::where('operational_status', '!=', 'retired')->orderBy('id')->get(['id', 'name', 'unit_code']),
+            'rooms' => Room::where('operational_status', '!=', 'retired')->whereHas('property', fn ($p) => $p->where('category', $booking->property->category))->orderBy('id')->get(['id', 'name', 'unit_code', 'max_guests']),
         ]);
     }
 
@@ -282,7 +327,7 @@ class BookingController extends Controller
         }
         $this->bookings->checkIn($booking, $override, $data['override_note'] ?? null);
 
-        return back()->with('success', 'Guest checked in.');
+        return back()->with('success', $booking->property->category === Property::CAMERAS ? 'Camera marked as picked up.' : 'Guest checked in.');
     }
 
     /** Unpaid money never stops a guest leaving, but it needs a reason, so it cannot be forgotten by accident. */
@@ -292,7 +337,9 @@ class BookingController extends Controller
         if ($unpaid <= 0) {
             $this->bookings->checkOut($booking);
 
-            return back()->with('success', 'Checked out. Turnover work has been created; the room is not ready until inspected.');
+            return back()->with('success', $booking->property->category === Property::CAMERAS
+                ? 'Camera marked as returned. Hand back the renter\'s ID if you kept it.'
+                : 'Checked out. Turnover work has been created; the room is not ready until inspected.');
         }
 
         $reason = $request->validate(['unpaid_reason' => 'required|string|max:200'], ['unpaid_reason.required' => 'This booking still has a balance. Say why it is not fully paid.'])['unpaid_reason'];
@@ -303,10 +350,10 @@ class BookingController extends Controller
             : 'Checked out. The unpaid balance stays on the booking.');
     }
 
-    /** What the guest still owes here. An Airbnb guest paid Airbnb, so the payout is tracked separately instead. */
+    /** What the guest still owes here, regardless of where the booking came from. */
     private function unpaidAtCheckOut(Booking $booking): int
     {
-        return $booking->source?->code === 'airbnb' ? 0 : max(0, $this->finance->balance($booking)['balance_cents']);
+        return max(0, $this->finance->balance($booking)['balance_cents']);
     }
 
     public function amend(Request $request, Booking $booking)
@@ -321,6 +368,13 @@ class BookingController extends Controller
             'approved_early_time' => 'nullable|date_format:H:i',
             'reason' => 'required|string|max:255',
         ]);
+        if ($booking->status !== Booking::CHECKED_IN && isset($data['check_in']) && $data['check_in'] < Local::today()) {
+            throw ValidationException::withMessages(['check_in' => 'Check-in cannot be before today.']);
+        }
+        $standardCheckIn = substr((string) Settings::get('pricing.standard_check_in'), 0, 5);
+        if (! empty($data['approved_early_time']) && $data['approved_early_time'] >= $standardCheckIn) {
+            throw ValidationException::withMessages(['approved_early_time' => "Early check-in must be before {$standardCheckIn}."]);
+        }
         $data = array_filter($data, fn ($v) => $v !== null);
         $this->bookings->amend($booking, $data);
 
@@ -368,5 +422,20 @@ class BookingController extends Controller
         Audit::log('charge.voided', $charge, ['reason' => $reason]);
 
         return back()->with('success', 'Charge voided.');
+    }
+
+    /** Camera rentals: the renter's ID, checked at pickup and handed back on return. Downpayments are agreed in Messenger and recorded as payments. */
+    public function rentalSecurity(Request $request, Booking $booking)
+    {
+        abort_unless($booking->property->category === Property::CAMERAS, 422, 'The ID check applies to camera rentals only.');
+        $data = $request->validate([
+            'id_type' => 'nullable|string|max:80',
+            'id_status' => 'required|in:none,held,returned',
+        ]);
+
+        $booking->update($data);
+        Audit::log('booking.rental_security', $booking, $data);
+
+        return back()->with('success', 'ID check updated.');
     }
 }

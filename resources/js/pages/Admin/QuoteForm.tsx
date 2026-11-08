@@ -1,11 +1,22 @@
-import { router, useForm } from '@inertiajs/react';
+import { router, useForm, usePage } from '@inertiajs/react';
 import { Check, Copy, Loader2 } from 'lucide-react';
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { Button, Card, cn, copyToClipboard, Field, Input, Select, StatusChip } from '@/components/ui';
 import { peso } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
 
-export default function QuoteForm({ rooms, sources, filters, preview, vacancy, bookingId, parkingRate }: any) {
+const nextDay = (date: string) => new Date(Date.parse(`${date}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+const nightsBetween = (from: string, to: string) => from && to && to > from ? Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000) : 0;
+const minuteBefore = (time: string) => {
+    const [hours, minutes] = time.split(':').map(Number);
+    const total = Math.max(0, hours * 60 + minutes - 1);
+
+    return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+};
+
+export default function QuoteForm({ rooms, sources, filters, preview, vacancy, bookingId, parkingRate, today, standardCheckIn }: any) {
+    const permissions: string[] = (usePage<any>().props as any).auth.user?.permissions ?? [];
+    const canDiscount = permissions.includes('bookings.discount');
     const form = useForm<any>({
         room_id: filters.room_id ?? '', check_in: filters.check_in ?? '', check_out: filters.check_out ?? '', guests: filters.guests ?? 2,
         early_time: filters.early_time ?? '', source_id: filters.source_id ?? '', discount: filters.discount ?? '', parking_nights: filters.parking_nights ?? '', parking_rate: filters.parking_rate ?? parkingRate,
@@ -13,6 +24,11 @@ export default function QuoteForm({ rooms, sources, filters, preview, vacancy, b
     });
     const e = form.errors as any;
     const set = (k: string) => (ev: any) => form.setData(k, ev.target.value);
+    const chooseCheckIn = (value: string) => form.setData((current: any) => ({
+        ...current,
+        check_in: value,
+        check_out: value && (!current.check_out || current.check_out <= value) ? nextDay(value) : current.check_out,
+    }));
 
     const [searching, setSearching] = useState(false);
     const pickedRoom = useRef(false);
@@ -24,7 +40,15 @@ export default function QuoteForm({ rooms, sources, filters, preview, vacancy, b
 
     // The vacant list follows the form: choosing dates is all it takes, with no button to press.
     const { room_id, check_in, check_out, guests, early_time, source_id, discount, parking_nights, parking_rate } = form.data;
+    const stayNights = nightsBetween(check_in, check_out);
+    const parkingCount = Number(parking_nights || 0);
+    const parkingOptions = Array.from({ length: stayNights }, (_, index) => ({ value: index + 1, label: `${index + 1} night${index === 0 ? '' : 's'}` }));
     const firstRender = useRef(true);
+
+    // Shortening a stay also shortens parking, so an old value cannot become an accidental overcharge.
+    useEffect(() => {
+        if (parkingCount > stayNights) form.setData('parking_nights', stayNights > 0 ? String(stayNights) : '');
+    }, [parkingCount, stayNights]);
     useEffect(() => {
         if (firstRender.current) {
             firstRender.current = false;
@@ -52,7 +76,9 @@ export default function QuoteForm({ rooms, sources, filters, preview, vacancy, b
     }
 
     const room = rooms.find((r: any) => String(r.id) === String(form.data.room_id));
-    const ready = preview && !preview.error;
+    const pricedFields = ['room_id', 'check_in', 'check_out', 'guests', 'early_time', 'source_id', 'discount', 'parking_nights', 'parking_rate'];
+    const previewCurrent = pricedFields.every((key) => String(filters[key] ?? '') === String(form.data[key] ?? ''));
+    const ready = preview && !preview.error && previewCurrent && !searching;
     const takenIds = (vacancy?.unavailable ?? []).map((u: any) => u.id);
 
     // The guest's name can be typed after the price is worked out. Staff may still reword it before copying.
@@ -65,8 +91,9 @@ export default function QuoteForm({ rooms, sources, filters, preview, vacancy, b
     }, [preview?.copyText, form.data.guest_name]);
 
     async function copyMessage() {
+        if (!ready) return;
         setCopy({ state: 'checking' });
-        const query = new URLSearchParams({ room_id: filters.room_id, check_in: filters.check_in, check_out: filters.check_out, guests: filters.guests ?? 1, ...(bookingId ? { booking_id: bookingId } : {}) });
+        const query = new URLSearchParams({ room_id: String(form.data.room_id), check_in: form.data.check_in, check_out: form.data.check_out, guests: String(form.data.guests ?? 1), ...(bookingId ? { booking_id: String(bookingId) } : {}) });
         const live = await fetch(`/admin/quotes/check?${query}`, { headers: { Accept: 'application/json' } }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
         if (!live) {
             setCopy({ state: 'taken', detail: 'We could not check these dates, so nothing was copied. Please try again.' });
@@ -91,23 +118,26 @@ export default function QuoteForm({ rooms, sources, filters, preview, vacancy, b
                     <Card title="Stay details">
                         <form onSubmit={calculate} className="space-y-3">
                             <div className="grid gap-3 sm:grid-cols-2">
-                                <Field label="Check-in" required error={e.check_in}><Input type="date" required value={form.data.check_in} onChange={set('check_in')} /></Field>
-                                <Field label="Check-out" required error={e.check_out}><Input type="date" required value={form.data.check_out} onChange={set('check_out')} /></Field>
+                                <Field label="Check-in" required error={e.check_in}><Input type="date" required min={today} value={form.data.check_in} onChange={(ev) => chooseCheckIn(ev.target.value)} /></Field>
+                                <Field label="Check-out" required error={e.check_out}><Input type="date" required min={form.data.check_in ? nextDay(form.data.check_in) : today} value={form.data.check_out} onChange={set('check_out')} /></Field>
                             </div>
+                            {stayNights > 0 && <p className="rounded-md bg-ivory px-3 py-2 text-sm font-medium" role="status">Stay length: {stayNights} night{stayNights === 1 ? '' : 's'}</p>}
                             <div className="grid gap-3 sm:grid-cols-2">
-                                <Field label="Guests" required error={e.guests} help={room ? `Includes ${room.included}, maximum ${room.max}` : undefined}><Input type="number" min={1} value={form.data.guests} onChange={set('guests')} /></Field>
-                                <Field label="Requested early check-in" error={e.early_time} help="₱ per started hour before standard check-in"><Input type="time" value={form.data.early_time} onChange={set('early_time')} /></Field>
+                                <Field label="Guests" required error={e.guests} help={room ? `Includes ${room.included}; this room allows at most ${room.max}.` : 'Choose the total number of adults and children.'}><Input type="number" min={1} max={room?.max ?? 30} step={1} value={form.data.guests} onChange={set('guests')} /></Field>
+                                <Field label="Requested early check-in" error={e.early_time} help={`Only choose a time before the standard ${standardCheckIn} check-in. Fee is per started hour.`}><Input type="time" max={minuteBefore(standardCheckIn)} value={form.data.early_time} onChange={set('early_time')} /></Field>
                             </div>
                             <Field label="Booking source" error={e.source_id} help="Applies any channel-specific rate">
                                 <Select placeholder="None" options={sources.map((s: any) => ({ value: s.id, label: s.name }))} value={form.data.source_id} onChange={set('source_id')} />
                             </Field>
                             <div className="grid grid-cols-2 gap-3">
-                                <Field label="Parking nights" error={e.parking_nights} help="Leave blank for no parking."><Input type="number" min={0} inputMode="numeric" value={form.data.parking_nights} onChange={set('parking_nights')} /></Field>
-                                <Field label="Parking rate per night (PHP)" error={e.parking_rate}><Input inputMode="decimal" value={form.data.parking_rate} onChange={set('parking_rate')} /></Field>
+                                <Field label="Parking" error={e.parking_nights} help={stayNights > 0 ? `Cannot exceed this ${stayNights}-night stay.` : 'Choose valid stay dates first.'}>
+                                    <Select placeholder="No parking" options={parkingOptions} disabled={stayNights === 0} value={form.data.parking_nights} onChange={set('parking_nights')} />
+                                </Field>
+                                <Field label="Parking rate per night (PHP)" error={e.parking_rate} help={parkingCount > 0 ? `${parkingCount} night${parkingCount === 1 ? '' : 's'} selected.` : 'Enabled after parking is selected.'}><Input type="number" min={0.01} step="0.01" inputMode="decimal" disabled={parkingCount === 0} value={form.data.parking_rate} onChange={set('parking_rate')} /></Field>
                             </div>
-                            <Field label="Authorized discount (PHP)" error={e.discount}><Input inputMode="decimal" value={form.data.discount} onChange={set('discount')} /></Field>
+                            {canDiscount && <Field label="Authorized discount (PHP)" error={e.discount} help="Enter only an approved peso amount."><Input type="number" min={0} step="0.01" inputMode="decimal" value={form.data.discount} onChange={set('discount')} /></Field>}
                             <Field label="Unit" error={e.room_id} help="Optional. Leave as is to choose from the vacant list.">
-                                <Select placeholder="Choose from the vacant list" options={rooms.map((r: any) => ({ value: r.id, label: takenIds.includes(r.id) ? `${r.label} - not available` : r.label }))} value={form.data.room_id} onChange={set('room_id')} />
+                                <Select placeholder="Choose from the vacant list" options={rooms.map((r: any) => ({ value: r.id, label: takenIds.includes(r.id) ? `${r.label} - not available` : r.label, disabled: takenIds.includes(r.id) }))} value={form.data.room_id} onChange={set('room_id')} />
                             </Field>
                             <p className="flex items-center gap-2 text-sm text-muted" role="status">
                                 {searching ? <><Loader2 size={15} className="animate-spin" aria-hidden /> Finding vacant units…</> : check_in && check_out && check_in >= check_out ? 'Check-out must be after check-in.' : !check_in || !check_out ? 'Choose your dates and the vacant units appear by themselves.' : 'The vacant units below update as you change anything.'}
@@ -150,6 +180,7 @@ export default function QuoteForm({ rooms, sources, filters, preview, vacancy, b
                 <div id="estimate" className="scroll-mt-16">
                     <Card title={room ? `Estimate: ${room.label}` : 'Estimate'}>
                         {!preview && <p className="text-sm text-muted">Enter the dates and guests, then choose a vacant unit.</p>}
+                        {preview && !previewCurrent && <p role="status" className="flex items-center gap-2 rounded-md bg-ivory px-3 py-2 text-sm text-muted"><Loader2 size={15} className="animate-spin" aria-hidden /> Updating this estimate…</p>}
                         {preview?.error && <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-900">{preview.error}</p>}
                         {ready && (
                             <>
@@ -170,11 +201,11 @@ export default function QuoteForm({ rooms, sources, filters, preview, vacancy, b
                                         <textarea ref={messageBox} rows={20} value={message} onChange={(ev) => setMessage(ev.target.value)} className="w-full rounded-lg border border-line bg-white px-3 py-2 text-sm shadow-xs focus:border-gold-dark focus:ring-2 focus:ring-gold/30 focus:outline-none pointer-coarse:text-base" />
                                     </Field>
                                     <div className="flex flex-wrap gap-2">
-                                        <Button variant="primary" disabled={copy.state === 'checking'} onClick={copyMessage}>
+                                        <Button variant="primary" disabled={!ready || copy.state === 'checking'} onClick={copyMessage}>
                                             {copy.state === 'checking' ? <Loader2 size={15} className="animate-spin" aria-hidden /> : copy.state === 'copied' ? <Check size={15} aria-hidden /> : <Copy size={15} aria-hidden />}
                                             {copy.state === 'checking' ? 'Checking dates…' : copy.state === 'copied' ? 'Copied' : 'Copy for Messenger'}
                                         </Button>
-                                        <Button type="submit" disabled={form.processing}>Save quote version</Button>
+                                        <Button type="submit" disabled={!ready || form.processing}>Save quote version</Button>
                                     </div>
                                     <div role="status">
                                         {copy.state === 'copied' && <p className="rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-950">Copied. Paste it into Messenger with Ctrl+V. Press Save quote version to keep a record of it.</p>}

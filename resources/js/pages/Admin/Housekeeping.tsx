@@ -5,6 +5,7 @@ import { ActionButton, Button, Card, cn, Empty, Field, FieldDef, Input, Modal, S
 import { fileSize, shrinkPhoto } from '@/lib/images';
 import { dateOnly, shortDate, time12 } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
+import { useLiveRefresh } from '@/lib/useLiveRefresh';
 
 type Row = any;
 
@@ -531,6 +532,7 @@ const VIEWS = [
 ];
 
 export default function Housekeeping({ tasks, planned = [], date, isToday, prevDate, nextDate, nowMinute, window: turnWindow, staff, can, tabs, items, rooms = [], taskTypes = [] }: any) {
+    useLiveRefresh(['tasks', 'planned', 'nowMinute'], 20_000);
     const page = usePage<any>();
     const path = page.url.split('?')[0];
     const unread = page.props.auth?.user?.unread;

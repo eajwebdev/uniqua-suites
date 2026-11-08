@@ -1,6 +1,6 @@
 import { Link, router, usePage } from '@inertiajs/react';
 import {
-    AlertTriangle, ArrowRight, Ban, BedDouble, CalendarCheck, CalendarDays, Car, CheckCircle2, ChevronRight, CircleDollarSign, ClipboardCheck, DoorOpen, Hourglass, HandCoins, HelpCircle, LayoutDashboard, LogIn, LogOut, MessageCircle, Minus, Package, PieChart, Plus, Receipt, Shirt, ShieldAlert, Sparkles, TrendingDown,
+    AlertTriangle, ArrowRight, Ban, BedDouble, CalendarCheck, Camera, CalendarDays, Car, CheckCircle2, ChevronRight, CircleDollarSign, ClipboardCheck, DoorOpen, Hourglass, HandCoins, HelpCircle, LayoutDashboard, LogIn, LogOut, MessageCircle, Minus, Package, PieChart, Plus, Receipt, Shirt, ShieldAlert, Sparkles, TrendingDown,
     TrendingUp, Wallet, Wrench, XCircle,
 } from 'lucide-react';
 import { KeyboardEvent, ReactNode, useEffect, useMemo, useState } from 'react';
@@ -9,6 +9,12 @@ import { openNewBooking } from '@/components/NewBooking';
 import { buttonClass, Card, cn, Empty, Stat, StatusChip } from '@/components/ui';
 import { dateOnly, dateTime, pesoWhole, shortDate, time12 } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
+import { useLiveRefresh } from '@/lib/useLiveRefresh';
+
+/** True while the admin's Suites / Cameras switch is on Cameras: the dashboard then speaks of rentals, not stays. */
+function useCameras(): boolean {
+    return (usePage<any>().props as any).category === 'cameras';
+}
 
 const PERIODS = [
     { key: 'month', label: 'This month' },
@@ -24,6 +30,8 @@ const ROOM_STATE: Record<string, { label: string; icon: any; style: string }> = 
     maintenance: { label: 'Maintenance', icon: Wrench, style: 'bg-amber-50 text-amber-950' },
 };
 
+const CAMERA_STATE: Record<string, string> = { occupied: 'Out on rental', arriving: 'Pickup today', vacant: 'Available', blocked: 'Blocked', maintenance: 'Out for repair' };
+
 function SectionTitle({ title, children, right }: { title: string; children?: ReactNode; right?: ReactNode }) {
     return (
         <div className="mt-8 mb-3 flex flex-wrap items-end justify-between gap-3">
@@ -37,6 +45,8 @@ function SectionTitle({ title, children, right }: { title: string; children?: Re
 }
 
 function Agenda({ title, icon: Icon, rows, empty }: { title: string; icon: any; rows: any[]; empty: string }) {
+    const cam = useCameras();
+
     return (
         <Card title={<><Icon size={16} strokeWidth={1.75} className="text-bronze" aria-hidden /> {title} <span className="rounded-full bg-beige px-2 text-xs font-medium">{rows.length}</span></>}>
             {rows.length === 0 ? <Empty>{empty}</Empty> : (
@@ -49,7 +59,7 @@ function Agenda({ title, icon: Icon, rows, empty }: { title: string; icon: any; 
                             </div>
                             <div className="mt-1 flex flex-wrap items-center gap-1.5">
                                 {b.rooms.map((r: any) => (
-                                    <span key={r.name} className="inline-flex items-center gap-1 text-xs">{r.name} <StatusChip value={r.housekeeping} /></span>
+                                    <span key={r.name} className="inline-flex items-center gap-1 text-xs">{r.name} {!cam && <StatusChip value={r.housekeeping} />}</span>
                                 ))}
                                 {b.early && <span className="text-xs text-muted">Early {time12(b.early)}</span>}
                             </div>
@@ -63,7 +73,8 @@ function Agenda({ title, icon: Icon, rows, empty }: { title: string; icon: any; 
 }
 
 function RoomTile({ room }: { room: any }) {
-    const state = ROOM_STATE[room.state];
+    const cam = useCameras();
+    const state = cam ? { ...ROOM_STATE[room.state], label: CAMERA_STATE[room.state] ?? ROOM_STATE[room.state].label } : ROOM_STATE[room.state];
     const href = room.stay ? `/admin/bookings/${room.stay.booking_id}` : room.next ? `/admin/bookings/${room.next.booking_id}` : `/admin/rooms/${room.id}/edit`;
     const { auth } = usePage<any>().props as any;
     const canOpen = room.stay || room.next || auth.user.permissions.includes('rooms.manage');
@@ -74,11 +85,11 @@ function RoomTile({ room }: { room: any }) {
                 <span className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap', state.style)}><state.icon size={12} aria-hidden /> {state.label}</span>
             </div>
             <p className="mt-1.5 min-h-8 text-xs leading-4 text-muted">
-                {room.stay ? <><strong className="font-medium text-chocolate">{room.stay.guest}</strong>, leaves {shortDate(room.stay.check_out)}</>
+                {room.stay ? <><strong className="font-medium text-chocolate">{room.stay.guest}</strong>, {cam ? 'returns' : 'leaves'} {shortDate(room.stay.check_out)}</>
                     : room.next ? <>Next: <strong className="font-medium text-chocolate">{room.next.guest}</strong>, {shortDate(room.next.check_in)}</>
                         : 'Nothing booked yet'}
             </p>
-            <div className="mt-2"><StatusChip value={room.housekeeping} /></div>
+            {!cam && <div className="mt-2"><StatusChip value={room.housekeeping} /></div>}
         </>
     );
     const frame = 'block rounded-lg border border-line/80 p-3 transition-colors';
@@ -190,6 +201,7 @@ function BarList({ rows, colour, empty, right }: { rows: { name: string; cents: 
 }
 
 function BookingList({ rows, empty, showStatus }: { rows: any[]; empty: string; showStatus?: boolean }) {
+    const cam = useCameras();
     if (rows.length === 0) return <Empty>{empty}</Empty>;
 
     return (
@@ -201,7 +213,7 @@ function BookingList({ rows, empty, showStatus }: { rows: any[]; empty: string; 
                         {showStatus ? <StatusChip value={b.status} /> : <span className="text-xs text-muted">{b.source}</span>}
                     </div>
                     <p className="mt-0.5 text-xs text-muted">
-                        {shortDate(b.check_in)} to {shortDate(b.check_out)} · {b.nights} night{b.nights === 1 ? '' : 's'}{b.rooms.length > 0 && ` · ${b.rooms.join(', ')}`}
+                        {shortDate(b.check_in)} to {shortDate(b.check_out)} · {b.nights} {cam ? 'day' : 'night'}{b.nights === 1 ? '' : 's'}{b.rooms.length > 0 && ` · ${b.rooms.join(', ')}`}
                         {b.hold_expires_at && ` · hold ends ${dateTime(b.hold_expires_at)}`}
                     </p>
                 </li>
@@ -229,6 +241,8 @@ function ExpenseList({ rows, empty }: { rows: any[]; empty: string }) {
 }
 
 function Overview({ actions, today, forecastData, nextBusy, money, performance, period, donut, can, openTab }: any) {
+    const cam = useCameras();
+
     return (
         <>
             {actions.length === 0 ? (
@@ -252,10 +266,12 @@ function Overview({ actions, today, forecastData, nextBusy, money, performance, 
 
             <SectionTitle title="Today" />
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                <Stat label="Guests staying" value={<>{today.occupied} <span className="text-sm font-normal text-muted">of {today.rooms} rooms</span></>} icon={BedDouble} />
-                <Stat label="Arriving today" value={today.arrivals.length} icon={LogIn} />
-                <Stat label="Leaving today" value={today.departures.length} icon={LogOut} />
-                <Stat label="Rooms to get ready" value={today.not_ready} icon={Sparkles} href={can('housekeeping.manage') || can('housekeeping.inspect') ? '/admin/housekeeping' : undefined} />
+                <Stat label={cam ? 'Cameras out' : 'Guests staying'} value={<>{today.occupied} <span className="text-sm font-normal text-muted">of {today.rooms} {cam ? 'cameras' : 'rooms'}</span></>} icon={cam ? Camera : BedDouble} />
+                <Stat label={cam ? 'Pickups today' : 'Arriving today'} value={today.arrivals.length} icon={LogIn} />
+                <Stat label={cam ? 'Returns today' : 'Leaving today'} value={today.departures.length} icon={LogOut} />
+                {cam
+                    ? <Stat label="Available now" value={today.vacant} icon={CheckCircle2} />
+                    : <Stat label="Rooms to get ready" value={today.not_ready} icon={Sparkles} href={can('housekeeping.manage') || can('housekeeping.inspect') ? '/admin/housekeeping' : undefined} />}
             </div>
 
             {money && performance && (
@@ -272,7 +288,7 @@ function Overview({ actions, today, forecastData, nextBusy, money, performance, 
                         {shortDate(period.from)} to {shortDate(period.to)}
                     </SectionTitle>
                     <div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
-                        <Kpi label="Earned from stays" value={pesoWhole(money.earned_cents)} icon={CircleDollarSign}><Delta now={money.earned_cents} prior={money.earned_prior_cents} compare={period.compare} /></Kpi>
+                        <Kpi label={cam ? 'Earned from rentals' : 'Earned from stays'} value={pesoWhole(money.earned_cents)} icon={CircleDollarSign}><Delta now={money.earned_cents} prior={money.earned_prior_cents} compare={period.compare} /></Kpi>
                         <Kpi label="Money collected" value={pesoWhole(money.collected_cents)} icon={Wallet}><Delta now={money.collected_cents} prior={money.collected_prior_cents} compare={period.compare} /></Kpi>
                         <Kpi label="Still to collect" value={pesoWhole(money.outstanding_cents)} icon={ClipboardCheck} note="As of today" />
                         <Kpi label="Expenses" value={pesoWhole(money.expenses_cents)} icon={Receipt}><Delta now={money.expenses_cents} prior={money.expenses_prior_cents} compare={period.compare} upIsGood={false} /></Kpi>
@@ -282,19 +298,19 @@ function Overview({ actions, today, forecastData, nextBusy, money, performance, 
                 </>
             )}
 
-            <SectionTitle title="Who is coming and going" />
+            <SectionTitle title={cam ? 'Pickups and returns' : 'Who is coming and going'} />
             <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
-                <Agenda title="Arrivals" icon={LogIn} rows={today.arrivals} empty="No arrivals today." />
-                <Agenda title="Departures" icon={LogOut} rows={today.departures} empty="No departures today." />
-                <Card title="Rooms today" className="lg:col-span-2 xl:col-span-1" action={<button type="button" onClick={() => openTab('rooms')} className="inline-flex items-center gap-1 text-xs font-medium text-muted hover:text-chocolate pointer-coarse:min-h-11">All rooms <ArrowRight size={12} aria-hidden /></button>}>
-                    <RoomsDonut segments={donut} label={`${today.occupied} occupied, ${today.vacant} vacant and ${today.blocked} blocked out of ${today.rooms} rooms.`} centre={<><span className="text-3xl font-semibold">{today.rooms ? Math.round((today.occupied / today.rooms) * 100) : 0}%</span><span className="text-xs text-muted">occupied</span></>} />
+                <Agenda title={cam ? 'Pickups' : 'Arrivals'} icon={LogIn} rows={today.arrivals} empty={cam ? 'No pickups today.' : 'No arrivals today.'} />
+                <Agenda title={cam ? 'Returns' : 'Departures'} icon={LogOut} rows={today.departures} empty={cam ? 'No returns today.' : 'No departures today.'} />
+                <Card title={cam ? 'Cameras today' : 'Rooms today'} className="lg:col-span-2 xl:col-span-1" action={<button type="button" onClick={() => openTab('rooms')} className="inline-flex items-center gap-1 text-xs font-medium text-muted hover:text-chocolate pointer-coarse:min-h-11">{cam ? 'All cameras' : 'All rooms'} <ArrowRight size={12} aria-hidden /></button>}>
+                    <RoomsDonut segments={donut} label={cam ? `${today.occupied} out on rental, ${today.vacant} available and ${today.blocked} blocked out of ${today.rooms} cameras.` : `${today.occupied} occupied, ${today.vacant} vacant and ${today.blocked} blocked out of ${today.rooms} rooms.`} centre={<><span className="text-3xl font-semibold">{today.rooms ? Math.round((today.occupied / today.rooms) * 100) : 0}%</span><span className="text-xs text-muted">{cam ? 'out' : 'occupied'}</span></>} />
                     <div className="mt-3 flex justify-center"><Legend items={donut.map((d: any) => ({ label: d.label, colour: d.colour, value: d.value }))} /></div>
                 </Card>
             </div>
 
             <div className="mt-3">
-                <Card title="Next 14 days" action={<span className="text-xs text-muted">Rooms booked each day</span>}>
-                    {nextBusy === 0 ? <Empty>No rooms are booked in the next 14 days yet.</Empty> : <ForecastChart data={forecastData} rooms={today.rooms} />}
+                <Card title="Next 14 days" action={<span className="text-xs text-muted">{cam ? 'Cameras rented each day' : 'Rooms booked each day'}</span>}>
+                    {nextBusy === 0 ? <Empty>{cam ? 'No cameras are rented in the next 14 days yet.' : 'No rooms are booked in the next 14 days yet.'}</Empty> : <ForecastChart data={forecastData} rooms={today.rooms} />}
                 </Card>
             </div>
         </>
@@ -302,13 +318,14 @@ function Overview({ actions, today, forecastData, nextBusy, money, performance, 
 }
 
 function BookingsTab({ data, money, performance, period }: any) {
+    const cam = useCameras();
     return (
         <>
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
-                <Stat label="New bookings" value={data.created} icon={Plus} />
+                <Stat label={cam ? 'New rentals' : 'New bookings'} value={data.created} icon={Plus} />
                 <Stat label="Confirmed" value={data.confirmed} icon={CheckCircle2} />
                 <Stat label="Cancelled" value={<>{data.cancelled}{data.cancelled_pct !== null && <span className="text-sm font-normal text-muted"> {data.cancelled_pct}%</span>}</>} icon={XCircle} />
-                <Stat label="Arriving in 14 days" value={data.upcoming_count} icon={CalendarCheck} />
+                <Stat label={cam ? 'Pickups in 14 days' : 'Arriving in 14 days'} value={data.upcoming_count} icon={CalendarCheck} />
                 <Stat label="Open inquiries" value={data.inquiries} icon={MessageCircle} href="/admin/bookings?status=inquiry" />
                 <Stat label="Holds waiting" value={data.holds} icon={Hourglass} href="/admin/bookings?status=tentative" />
             </div>
@@ -324,7 +341,7 @@ function BookingsTab({ data, money, performance, period }: any) {
             </div>
 
             <div className="mt-3">
-                <Card title="Where bookings come from" action={performance ? <MoreLink href="/admin/reports?type=channels">Report</MoreLink> : undefined}>
+                <Card title={cam ? 'Where rentals come from' : 'Where bookings come from'} action={performance ? <MoreLink href="/admin/reports?type=channels">Report</MoreLink> : undefined}>
                     {data.channels.length === 0 ? <Empty>No bookings in this period.</Empty> : (
                         <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Bookings by source">
                             <table className="w-full text-right text-sm">
@@ -351,46 +368,49 @@ function BookingsTab({ data, money, performance, period }: any) {
 }
 
 function RoomsTab({ today, board, forecastData, nextBusy, performance, period, hasTrend, trend, spark, donut }: any) {
+    const cam = useCameras();
     return (
         <>
             {performance && (
                 <div className="mb-3 grid grid-cols-2 gap-3 xl:grid-cols-4">
                     <Kpi label="Occupancy" value={performance.occupancy_pct === null ? '—' : `${performance.occupancy_pct}%`} icon={PieChart} spark={spark('occupancy')}>
                         <Delta now={performance.occupancy_pct} prior={performance.occupancy_prior_pct} compare={period.compare} format="points" />
-                        <p className="mt-1 text-xs text-muted">{performance.occupied_nights} of {performance.available_nights} room nights</p>
+                        <p className="mt-1 text-xs text-muted">{performance.occupied_nights} of {performance.available_nights} {cam ? 'camera days' : 'room nights'}</p>
                     </Kpi>
-                    <Kpi label="Average rate per night" value={pesoWhole(performance.adr_cents)} icon={BedDouble}><Delta now={performance.adr_cents} prior={performance.adr_prior_cents} compare={period.compare} /><p className="mt-1 text-xs text-muted">ADR</p></Kpi>
-                    <Kpi label="Earned per available room" value={pesoWhole(performance.revpar_cents)} icon={DoorOpen}><Delta now={performance.revpar_cents} prior={performance.revpar_prior_cents} compare={period.compare} /><p className="mt-1 text-xs text-muted">RevPAR</p></Kpi>
-                    <Stat label="Rooms ready" value={<>{today.ready} <span className="text-sm font-normal text-muted">of {today.rooms}</span></>} icon={Sparkles} />
+                    <Kpi label={cam ? 'Average rate per day' : 'Average rate per night'} value={pesoWhole(performance.adr_cents)} icon={BedDouble}><Delta now={performance.adr_cents} prior={performance.adr_prior_cents} compare={period.compare} /><p className="mt-1 text-xs text-muted">ADR</p></Kpi>
+                    <Kpi label={cam ? 'Earned per available camera' : 'Earned per available room'} value={pesoWhole(performance.revpar_cents)} icon={DoorOpen}><Delta now={performance.revpar_cents} prior={performance.revpar_prior_cents} compare={period.compare} /><p className="mt-1 text-xs text-muted">RevPAR</p></Kpi>
+                    {cam
+                        ? <Stat label="Available now" value={<>{today.vacant} <span className="text-sm font-normal text-muted">of {today.rooms}</span></>} icon={CheckCircle2} />
+                        : <Stat label="Rooms ready" value={<>{today.ready} <span className="text-sm font-normal text-muted">of {today.rooms}</span></>} icon={Sparkles} />}
                 </div>
             )}
 
             <div className="grid gap-3 xl:grid-cols-3">
-                <Card title="Your rooms right now" className="xl:col-span-2">
-                    {board.length === 0 ? <Empty>No rooms yet.</Empty> : <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{board.map((r: any) => <RoomTile key={r.id} room={r} />)}</div>}
+                <Card title={cam ? 'Your cameras right now' : 'Your rooms right now'} className="xl:col-span-2">
+                    {board.length === 0 ? <Empty>{cam ? 'No cameras yet.' : 'No rooms yet.'}</Empty> : <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{board.map((r: any) => <RoomTile key={r.id} room={r} />)}</div>}
                 </Card>
-                <Card title="Rooms today">
-                    <RoomsDonut segments={donut} label={`${today.occupied} occupied, ${today.vacant} vacant and ${today.blocked} blocked out of ${today.rooms} rooms.`} centre={<><span className="text-3xl font-semibold">{today.rooms ? Math.round((today.occupied / today.rooms) * 100) : 0}%</span><span className="text-xs text-muted">occupied</span></>} />
+                <Card title={cam ? 'Cameras today' : 'Rooms today'}>
+                    <RoomsDonut segments={donut} label={cam ? `${today.occupied} out on rental, ${today.vacant} available and ${today.blocked} blocked out of ${today.rooms} cameras.` : `${today.occupied} occupied, ${today.vacant} vacant and ${today.blocked} blocked out of ${today.rooms} rooms.`} centre={<><span className="text-3xl font-semibold">{today.rooms ? Math.round((today.occupied / today.rooms) * 100) : 0}%</span><span className="text-xs text-muted">{cam ? 'out' : 'occupied'}</span></>} />
                     <div className="mt-3 flex justify-center"><Legend items={donut.map((d: any) => ({ label: d.label, colour: d.colour, value: d.value }))} /></div>
                 </Card>
             </div>
 
             {performance && (
                 <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                    <Card title="How each room is doing">
-                        {performance.rooms.length === 0 ? <Empty>No rooms yet.</Empty> : (
-                            <BarList rows={performance.rooms.map((r: any) => ({ ...r, cents: r.earned_cents }))} colour={SERIES.earned} empty="" right={(r) => <>{r.nights} night{r.nights === 1 ? '' : 's'} · {r.booked_pct}% booked ·</>} />
+                    <Card title={cam ? 'How each camera is doing' : 'How each room is doing'}>
+                        {performance.rooms.length === 0 ? <Empty>{cam ? 'No cameras yet.' : 'No rooms yet.'}</Empty> : (
+                            <BarList rows={performance.rooms.map((r: any) => ({ ...r, cents: r.earned_cents }))} colour={SERIES.earned} empty="" right={(r) => <>{r.nights} {cam ? 'day' : 'night'}{r.nights === 1 ? '' : 's'} · {r.booked_pct}% booked ·</>} />
                         )}
                     </Card>
                     <Card title="Occupancy by month">
-                        {hasTrend ? <OccupancyTrendChart data={trend} /> : <Empty>No stays recorded yet.</Empty>}
+                        {hasTrend ? <OccupancyTrendChart data={trend} /> : <Empty>{cam ? 'No rentals recorded yet.' : 'No stays recorded yet.'}</Empty>}
                     </Card>
                 </div>
             )}
 
             <div className="mt-3">
-                <Card title="Next 14 days" action={<span className="text-xs text-muted">Rooms booked each day</span>}>
-                    {nextBusy === 0 ? <Empty>No rooms are booked in the next 14 days yet.</Empty> : <ForecastChart data={forecastData} rooms={today.rooms} />}
+                <Card title="Next 14 days" action={<span className="text-xs text-muted">{cam ? 'Cameras rented each day' : 'Rooms booked each day'}</span>}>
+                    {nextBusy === 0 ? <Empty>{cam ? 'No cameras are rented in the next 14 days yet.' : 'No rooms are booked in the next 14 days yet.'}</Empty> : <ForecastChart data={forecastData} rooms={today.rooms} />}
                 </Card>
             </div>
         </>
@@ -398,6 +418,7 @@ function RoomsTab({ today, board, forecastData, nextBusy, performance, period, h
 }
 
 function IncomeTab({ money, income, period, hasTrend, trend, spark }: any) {
+    const cam = useCameras();
     const inflow = [
         ...income.by_method.map((m: any) => ({ name: METHODS[m.method] ?? m.method, cents: m.cents })),
         ...(income.payouts_cents ? [{ name: 'Channel payouts', cents: income.payouts_cents }] : []),
@@ -406,12 +427,12 @@ function IncomeTab({ money, income, period, hasTrend, trend, spark }: any) {
     return (
         <>
             <div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
-                <Kpi label="Earned from stays" value={pesoWhole(money.earned_cents)} icon={CircleDollarSign} spark={spark('earned')} colour={SERIES.earned}><Delta now={money.earned_cents} prior={money.earned_prior_cents} compare={period.compare} /></Kpi>
+                <Kpi label={cam ? 'Earned from rentals' : 'Earned from stays'} value={pesoWhole(money.earned_cents)} icon={CircleDollarSign} spark={spark('earned')} colour={SERIES.earned}><Delta now={money.earned_cents} prior={money.earned_prior_cents} compare={period.compare} /></Kpi>
                 <Kpi label="Money collected" value={pesoWhole(money.collected_cents)} icon={Wallet} spark={spark('collected')} colour={SERIES.collected}><Delta now={money.collected_cents} prior={money.collected_prior_cents} compare={period.compare} /></Kpi>
                 <Kpi label="Left after expenses" value={pesoWhole(money.contribution_cents)} icon={HandCoins}><Delta now={money.contribution_cents} prior={money.contribution_prior_cents} compare={period.compare} /><p className="mt-1 text-xs text-muted">Not audited net income</p></Kpi>
                 <Kpi label="Still to collect" value={pesoWhole(money.outstanding_cents)} icon={ClipboardCheck} note={`As of today, across ${income.unpaid_count} booking${income.unpaid_count === 1 ? '' : 's'}`} />
                 <Kpi label="Payments to verify" value={pesoWhole(income.pending_cents)} icon={Hourglass} note={`${income.pending_count} waiting. Not counted as collected yet.`} />
-                <Kpi label="Other charges" value={pesoWhole(income.other_charges_cents)} icon={Receipt} note={`Extras on stays. ${pesoWhole(money.expected_payout_cents)} expected from channels. ${pesoWhole(money.collected_today_cents)} collected today.`} />
+                <Kpi label="Other charges" value={pesoWhole(income.other_charges_cents)} icon={Receipt} note={cam ? `Extras on rentals. ${pesoWhole(money.collected_today_cents)} collected today.` : `Extras on stays. ${pesoWhole(money.expected_payout_cents)} expected from channels. ${pesoWhole(money.collected_today_cents)} collected today.`} />
             </div>
 
             <div className="mt-3 grid gap-3 xl:grid-cols-3">
@@ -451,6 +472,7 @@ function IncomeTab({ money, income, period, hasTrend, trend, spark }: any) {
 }
 
 function ExpensesTab({ money, expenses, period, trend, spark }: any) {
+    const cam = useCameras();
     return (
         <>
             <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
@@ -464,9 +486,9 @@ function ExpensesTab({ money, expenses, period, trend, spark }: any) {
                 <Card title="By category" action={<MoreLink href="/admin/reports?type=expenses">Report</MoreLink>}>
                     <BarList rows={expenses.by_category} colour={SERIES.expenses} empty="No expenses in this period." right={(c) => <span>{c.prior_cents ? `was ${pesoWhole(c.prior_cents)} ·` : 'new ·'}</span>} />
                 </Card>
-                <Card title="By room">
+                <Card title={cam ? 'By camera' : 'By room'}>
                     <BarList rows={expenses.by_room} colour={SERIES.expenses} empty="No expenses in this period." />
-                    {expenses.by_room.length > 0 && <p className="mt-3 text-xs text-muted">General covers costs not tied to one room, such as shared bills.</p>}
+                    {expenses.by_room.length > 0 && <p className="mt-3 text-xs text-muted">{cam ? 'General covers Grab Cam costs not tied to one camera.' : 'General covers costs not tied to one room, such as shared bills.'}</p>}
                 </Card>
             </div>
 
@@ -493,12 +515,22 @@ function ExpensesTab({ money, expenses, period, trend, spark }: any) {
 }
 
 function OperationsTab({ team, today, operations, can }: any) {
+    const cam = useCameras();
     const counts = operations.tasks_by_status;
     const steps = [['Not started', (counts.pending ?? 0) + (counts.assigned ?? 0)], ['In progress', counts.in_progress ?? 0], ['For inspection', counts.for_inspection ?? 0]];
 
     return (
         <>
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                {cam ? (
+                    <>
+                        <Stat label="Repairs open" value={team.open_work_orders} icon={Wrench} href={can('maintenance.manage') ? '/admin/work-orders' : undefined} />
+                        <Stat label="Damage claims open" value={operations.open_incidents} icon={ShieldAlert} href={can('incidents.view') ? '/admin/incidents' : undefined} />
+                        <Stat label="Out for repair" value={today.blocked} icon={Ban} />
+                        <Stat label="Available now" value={today.vacant} icon={CheckCircle2} />
+                    </>
+                ) : (
+                <>
                 <Stat label="Cleaning tasks open" value={team.open_tasks} icon={Sparkles} href={can('housekeeping.manage') ? '/admin/housekeeping' : undefined} />
                 <Stat label="Cleaning tasks late" value={team.late_tasks} icon={AlertTriangle} href={can('housekeeping.manage') ? '/admin/housekeeping' : undefined} />
                 <Stat label="Waiting for inspection" value={team.for_inspection} icon={ClipboardCheck} href={can('housekeeping.inspect') ? '/admin/housekeeping' : undefined} />
@@ -507,10 +539,12 @@ function OperationsTab({ team, today, operations, can }: any) {
                 <Stat label="Supplies running low" value={team.low_stock} icon={Package} href={can('inventory.view') ? '/admin/inventory' : undefined} />
                 <Stat label="Damage claims open" value={operations.open_incidents} icon={ShieldAlert} href={can('incidents.view') ? '/admin/incidents' : undefined} />
                 <Stat label="Parking in use" value={today.parking_in_use} icon={Car} href={can('parking.view') ? '/admin/parking' : undefined} />
+                </>
+                )}
             </div>
 
             <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                {operations.tasks && (
+                {operations.tasks && !cam && (
                     <Card title="Cleaning tasks, soonest first" action={<MoreLink href="/admin/housekeeping">Cleaning</MoreLink>} className="lg:col-span-2">
                         <dl className="mb-3 flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted">
                             {steps.map(([label, n]) => <div key={label} className="flex gap-1.5"><dt>{label}</dt><dd className="font-semibold text-chocolate tabular-nums">{n}</dd></div>)}
@@ -547,7 +581,7 @@ function OperationsTab({ team, today, operations, can }: any) {
                         )}
                     </Card>
                 )}
-                {operations.low_stock && (
+                {operations.low_stock && !cam && (
                     <Card title="Supplies to reorder" action={<MoreLink href="/admin/inventory">Inventory</MoreLink>}>
                         {operations.low_stock.length === 0 ? <Empty>Supplies are above their reorder levels.</Empty> : (
                             <ul className="-my-1 divide-y divide-line/70">
@@ -579,11 +613,14 @@ const TAB_LIST = [
 ];
 
 export default function Dashboard({ actions, today, board, forecast, period, money, performance, bookingsTab, income, expenses, operations, team, date }: any) {
+    const cam = useCameras();
+    useLiveRefresh(['actions', 'board', 'forecast', 'bookingsTab', 'income', 'expenses', 'operations', 'team'], 30_000);
     const { auth } = usePage<any>().props as any;
     const can = (p: string) => auth.user.permissions.includes(p);
     const firstName = String(auth.user.name).split(' ')[0];
 
-    const tabs = TAB_LIST.filter((t) => (t.key === 'bookings' ? bookingsTab : t.key === 'income' ? income : t.key === 'expenses' ? expenses : true));
+    const tabs = TAB_LIST.filter((t) => (t.key === 'bookings' ? bookingsTab : t.key === 'income' ? income : t.key === 'expenses' ? expenses : true))
+        .map((t) => (cam && t.key === 'rooms' ? { ...t, label: 'Cameras', icon: Camera } : cam && t.key === 'bookings' ? { ...t, label: 'Rentals' } : t));
     // Kept in the address, so a refresh, the back button or a shared link returns to the same tab.
     const [tab, setTab] = useState(() => {
         const wanted = new URLSearchParams(window.location.search).get('tab');
@@ -624,8 +661,8 @@ export default function Dashboard({ actions, today, board, forecast, period, mon
     const usesPeriod = tab === 'bookings' || tab === 'income' || tab === 'expenses' || ((tab === 'overview' || tab === 'rooms') && !!money);
 
     const donut = [
-        { label: 'Occupied', value: today.occupied, colour: CHART.occupancy },
-        { label: 'Vacant', value: today.vacant, colour: CHART.vacant },
+        { label: cam ? 'Out on rental' : 'Occupied', value: today.occupied, colour: CHART.occupancy },
+        { label: cam ? 'Available' : 'Vacant', value: today.vacant, colour: CHART.vacant },
         { label: 'Blocked', value: today.blocked, colour: SERIES.expenses },
     ];
 
@@ -634,12 +671,12 @@ export default function Dashboard({ actions, today, board, forecast, period, mon
             title="Dashboard"
             heading={`${greeting()}, ${firstName}`}
             showSection={false}
-            subtitle={`${dateOnly(date)}. Here is what is happening at your suites.`}
+            subtitle={`${dateOnly(date)}. Here is what is happening ${cam ? 'with your Grab Cam rentals' : 'at your suites'}.`}
             actions={(
                 <>
                     {can('bookings.view') && <Link href="/admin/calendar" className={buttonClass('secondary')}><CalendarDays size={15} aria-hidden /> Calendar</Link>}
-                    {can('quotes.manage') && <Link href="/admin/quotes/create" className={buttonClass('secondary')}><Receipt size={15} aria-hidden /> New quote</Link>}
-                    {can('bookings.manage') && <button type="button" onClick={() => openNewBooking()} className={buttonClass('primary')}><Plus size={15} aria-hidden /> New booking</button>}
+                    {can('quotes.manage') && !cam && <Link href="/admin/quotes/create" className={buttonClass('secondary')}><Receipt size={15} aria-hidden /> New quote</Link>}
+                    {can('bookings.manage') && <button type="button" onClick={() => openNewBooking()} className={buttonClass('primary')}><Plus size={15} aria-hidden /> {cam ? 'New rental' : 'New booking'}</button>}
                 </>
             )}
         >

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Support\AdminCategory;
 use App\Domain\Availability\RoomConflict;
 use App\Domain\Bookings\BookingService;
 use App\Domain\Finance\FinanceService;
@@ -28,7 +29,7 @@ class MaintenanceController extends Controller
     {
         $user = $request->user();
         $manager = $user->can('maintenance.manage');
-        $rows = WorkOrder::with(['room:id,name', 'assignee:id,name', 'vendor:id,name'])
+        $rows = AdminCategory::workOrders(WorkOrder::query())->with(['room:id,name', 'assignee:id,name', 'vendor:id,name'])
             ->when(! $manager, fn ($q) => $q->where('assigned_to', $user->id))
             ->orderByRaw("FIELD(status,'open','in_progress','resolved','closed')")->orderByDesc('safety_block')->orderByDesc('id')->paginate(15);
 
@@ -122,7 +123,7 @@ class MaintenanceController extends Controller
     public function incidents(Request $request)
     {
         $user = $request->user();
-        $rows = Incident::with(['room:id,name', 'booking:id,reference', 'guest:id,full_name', 'evidence:id,incident_id'])->orderByDesc('id')->paginate(15);
+        $rows = AdminCategory::whereHasProperty(Incident::query(), 'room')->with(['room:id,name', 'booking:id,reference', 'guest:id,full_name', 'evidence:id,incident_id'])->orderByDesc('id')->paginate(15);
 
         return Inertia::render('Admin/Resource', [
             'title' => 'Damage & incidents',
@@ -318,7 +319,7 @@ class MaintenanceController extends Controller
 
     private function rooms(): array
     {
-        return Room::orderBy('id')->get()->map(fn ($r) => ['value' => $r->id, 'label' => "{$r->name} ({$r->unit_code})"])->all();
+        return AdminCategory::rooms(Room::query())->orderBy('id')->get()->map(fn ($r) => ['value' => $r->id, 'label' => "{$r->name} ({$r->unit_code})"])->all();
     }
 
     private function opts(array $values): array

@@ -17,6 +17,7 @@ class SettledSetupTest extends DomainTestCase
     {
         return $this->from('/admin/calendar')->post('/admin/bookings', $overrides + [
             'guest_name' => 'Synthetic Transfer',
+            'guest_phone' => '09170000004',
             'room_ids' => [$this->room('venice')->id],
             'booking_source_id' => $this->source('airbnb'),
             'source_reference' => 'HMSYNTH123',
@@ -128,13 +129,14 @@ class SettledSetupTest extends DomainTestCase
         $this->assertSame("/admin/bookings/{$booking->id}", session('flash_action')['href']);
     }
 
-    public function test_an_airbnb_transfer_confirms_even_when_direct_bookings_need_a_verified_payment(): void
+    public function test_airbnb_uses_the_same_confirmation_policy_as_other_sources(): void
     {
         Settings::set('finance.require_verification_to_confirm', true);
 
-        $this->booking(['then' => 'confirm'])->assertSessionHas('success');
+        $this->booking(['then' => 'confirm'])
+            ->assertSessionHas('error', fn ($message) => str_contains($message, 'saved as an inquiry') && str_contains($message, 'verified payment'));
 
-        $this->assertSame(Booking::CONFIRMED, Booking::sole()->status);
+        $this->assertSame(Booking::INQUIRY, Booking::sole()->status);
     }
 
     public function test_a_direct_booking_still_needs_its_payment_and_is_kept_as_an_inquiry(): void

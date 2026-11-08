@@ -10,6 +10,7 @@ use App\Models\RoomBlock;
 use App\Support\Local;
 use App\Support\Settings;
 use Carbon\CarbonImmutable;
+use App\Support\AdminCategory;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -23,7 +24,7 @@ class CalendarController extends Controller
         $start = CarbonImmutable::parse(($data['month'] ?? Local::now()->format('Y-m')).'-01');
         $end = $start->addMonth();
 
-        $rooms = Room::where('operational_status', '!=', 'retired')
+        $rooms = AdminCategory::rooms(Room::where('operational_status', '!=', 'retired'))
             ->when($data['property'] ?? null, fn ($q, $v) => $q->where('property_id', $v))
             ->with('property:id,name')->orderBy('property_id')->orderBy('id')->get();
 
@@ -47,7 +48,7 @@ class CalendarController extends Controller
             'today' => Local::today(),
             'weekend_days' => Settings::get('pricing.weekend_days') ?? [],
             'property' => $data['property'] ?? null,
-            'properties' => Property::orderBy('id')->get(['id', 'name']),
+            'properties' => Property::where('category', AdminCategory::current())->orderBy('id')->get(['id', 'name']),
             'rooms' => $rooms->map(fn ($r) => ['id' => $r->id, 'name' => $r->name, 'unit' => $r->unit_code, 'property' => $r->property->name, 'housekeeping' => $r->housekeeping_status]),
             'events' => $events,
             'blocks' => $blocks,

@@ -1,4 +1,7 @@
-import { AmenityIcon, datesAreFree, Eyebrow, MessageButton, PAGE_WIDTH, RoomCard, roomMatches, SuiteFilterPanel, SuitePhoto, SWIPE_CARD, SWIPE_ROW, SwipeHint, useStayDates, useSuiteFilters } from '@/components/public';
+import { Link } from '@inertiajs/react';
+import { CalendarCheck, CalendarX, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { AmenityIcon, BookNow, DateFilter, datesAreFree, Eyebrow, MessageButton, monthLabel, MonthGrid, PAGE_WIDTH, RoomCard, roomMatches, shiftMonth, SuiteFilterPanel, SuitePhoto, SWIPE_CARD, SWIPE_ROW, SwipeHint, todayInManila, useStayDates, useSuiteFilters } from '@/components/public';
 import { cn } from '@/components/ui';
 import { shortDate } from '@/lib/format';
 import PublicLayout from '@/layouts/PublicLayout';
@@ -10,11 +13,70 @@ const STEPS = [
 ];
 
 const FINDER_ID = 'availability';
+const SUITES_ID = 'suites';
 
 // Only published suites reach this page, so a photo can only come from one of them.
 const photoOf = (rooms: any[], slug: string) => rooms.find((r) => r.slug === slug && r.images.length)?.images[0] ?? rooms.find((r) => r.images.length)?.images[0];
 
 const suiteCount = (n: number) => `${n} suite${n === 1 ? '' : 's'}`;
+
+function Availability({ rooms, stay }: { rooms: any[]; stay: ReturnType<typeof useStayDates> }) {
+    const today = todayInManila();
+    const [month, setMonth] = useState(today.slice(0, 7));
+    const all = [...rooms].reverse();
+    const shown = stay.chosen ? all.filter((room) => datesAreFree(room, stay.checkIn, stay.checkOut)) : all;
+    const taken = all.filter((room) => !shown.includes(room));
+
+    // Keep the calendars on the month the guest selects in the shared date fields.
+    useEffect(() => {
+        if (stay.checkIn) setMonth(stay.checkIn.slice(0, 7));
+    }, [stay.checkIn]);
+
+    return (
+        <section id={FINDER_ID} className="scroll-mt-16 bg-beige py-12 sm:py-24">
+            <div className={PAGE_WIDTH}>
+                <Eyebrow className="mb-3">Availability</Eyebrow>
+                <h2 className="max-w-3xl font-serif text-4xl font-light sm:text-6xl">Dates not available</h2>
+                <p className="mt-4 max-w-2xl leading-relaxed text-muted">Crossed-out dates are already taken and cannot be booked. A new guest can arrive on the day another leaves.</p>
+
+                <div className="mt-8 flex flex-wrap items-end justify-between gap-x-4 gap-y-3">
+                    <DateFilter stay={stay} />
+                    <div className="flex items-center">
+                        <button type="button" aria-label="Previous month" disabled={month <= today.slice(0, 7)} onClick={() => setMonth(shiftMonth(month, -1))} className="flex size-11 items-center justify-center disabled:opacity-30"><ChevronLeft size={20} strokeWidth={1.5} /></button>
+                        <h3 className="min-w-44 text-center font-serif text-2xl font-normal" aria-live="polite">{monthLabel(month)}</h3>
+                        <button type="button" aria-label="Next month" onClick={() => setMonth(shiftMonth(month, 1))} className="flex size-11 items-center justify-center"><ChevronRight size={20} strokeWidth={1.5} /></button>
+                    </div>
+                </div>
+
+                <div role="status" className="mt-5 text-sm">
+                    {stay.chosen && (
+                        <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <span className="inline-flex items-center gap-1.5 font-medium text-emerald-900"><CalendarCheck size={16} aria-hidden /> {suiteCount(shown.length)} free for {shortDate(stay.checkIn)} to {shortDate(stay.checkOut)}</span>
+                            {taken.length > 0 && <span className="inline-flex items-center gap-1.5 text-muted"><CalendarX size={16} aria-hidden /> Not available: {taken.map((room) => room.name).join(', ')}</span>}
+                        </p>
+                    )}
+                </div>
+
+                {shown.length === 0 ? (
+                    <p className="mt-6 bg-white p-10 text-center text-muted">No suite is free for all of those dates. Please try other dates.</p>
+                ) : (
+                    <div className="mt-6 grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+                        {shown.map((room: any) => (
+                            <article key={room.slug} className="flex flex-col bg-white p-5">
+                                <div className="mb-3 min-w-0">
+                                    <Link href={`/suites/${room.slug}`} className="font-serif text-2xl tracking-[0.08em] uppercase transition-colors hover:text-bronze pointer-coarse:inline-block pointer-coarse:py-1">{room.name}</Link>
+                                    <p className="text-xs text-muted">{room.location}</p>
+                                </div>
+                                <MonthGrid room={room} month={month} checkIn={stay.chosen ? stay.checkIn : undefined} checkOut={stay.chosen ? stay.checkOut : undefined} />
+                                <div className="mt-4"><BookNow key={`${stay.checkIn}-${stay.checkOut}`} room={room} initialIn={stay.chosen ? stay.checkIn : undefined} initialOut={stay.chosen ? stay.checkOut : undefined} className="w-full" /></div>
+                            </article>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </section>
+    );
+}
 
 export default function Home({ rooms, amenities, properties, types }: any) {
     const stay = useStayDates();
@@ -35,7 +97,7 @@ export default function Home({ rooms, amenities, properties, types }: any) {
     // The same list, narrowed where the guest already is: no trip to another page.
     const showLocation = (slug: string) => {
         setFilter('location', slug);
-        document.getElementById(FINDER_ID)?.scrollIntoView();
+        document.getElementById(SUITES_ID)?.scrollIntoView();
     };
 
     return (
@@ -52,7 +114,9 @@ export default function Home({ rooms, amenities, properties, types }: any) {
                 </div>
             </section>
 
-            <section id={FINDER_ID} className="scroll-mt-16 py-12 sm:py-24">
+            {rooms.length > 0 && <Availability rooms={rooms} stay={stay} />}
+
+            <section id={SUITES_ID} className="scroll-mt-16 py-12 sm:py-24">
                 <div className={PAGE_WIDTH}>
                     <Eyebrow className="mb-3">Our suites</Eyebrow>
                     <h2 className="font-serif text-4xl font-light sm:text-6xl">Find your suite</h2>

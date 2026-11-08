@@ -1,12 +1,35 @@
 import { Head, Link, router, usePage } from '@inertiajs/react';
 import {
-    Bell, BookOpen, Building2, CalendarDays, Car, ChevronsLeft, ChevronsRight, ClipboardList, Coins, HandCoins, LayoutDashboard, LogOut, Menu, MessageSquareText, Package, Plus,
-    ScrollText, Settings, Sparkles, Users, UsersRound, Wallet, Wrench, BarChart3, X,
+    Bell, BookOpen, Building2, CalendarDays, Car, ChevronsLeft, ChevronsRight, AlertTriangle, ClipboardList, Clock, Coins, CreditCard, HandCoins, LayoutDashboard, Lock, LogOut, Menu, MessageSquareText, Package, Plus,
+    ScrollText, Settings, Sparkles, Tags, TableProperties, Users, UsersRound, Wallet, Wrench, BarChart3, X,
 } from 'lucide-react';
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import NewBookingHost, { openNewBooking } from '@/components/NewBooking';
 import QuickFind, { QuickItem } from '@/components/QuickFind';
 import { Button, cn, CopyButton, Modal } from '@/components/ui';
+
+const CATEGORIES = [['suites', 'Suites'], ['cameras', 'Cameras']] as const;
+
+// Pages that belong to one business only. They stay, hidden from the menu while the other business is selected.
+// Keep in step with App\Support\AdminCategory.
+const SUITES_ONLY = ['/admin/quotes', '/admin/housekeeping', '/admin/laundry', '/admin/parking', '/admin/inventory', '/admin/advances', '/admin/imports'];
+const CAMERAS_ONLY = ['/admin/camera-rates'];
+// Camera wording for shared pages.
+const CAMERA_LABELS: Record<string, string> = { '/admin/calendar': 'Rental Calendar', '/admin/bookings': 'Rentals', '/admin/guests': 'Customers', '/admin/rooms': 'Cameras' };
+
+/** Which business every admin page shows: Uniqa suites or Grab Cam cameras. */
+function CategorySwitch({ value }: { value: string }) {
+    return (
+        <div role="radiogroup" aria-label="Business" className="mb-3 grid grid-cols-2 gap-0.5 rounded-lg bg-espresso p-0.5">
+            {CATEGORIES.map(([key, label]) => (
+                <button key={key} type="button" role="radio" aria-checked={value === key} onClick={() => value !== key && router.post('/admin/category', { category: key }, { preserveScroll: true })}
+                    className={cn('min-h-8 rounded-md text-xs font-medium transition-colors pointer-coarse:min-h-10', value === key ? 'bg-gold text-chocolate' : 'text-beige hover:text-ivory')}>
+                    {label}
+                </button>
+            ))}
+        </div>
+    );
+}
 
 const NAV_GROUPS: { label: string; items: { label: string; href: string; icon: any; any: string[] }[] }[] = [
     {
@@ -23,6 +46,7 @@ const NAV_GROUPS: { label: string; items: { label: string; href: string; icon: a
         label: 'Property',
         items: [
             { label: 'Rooms & Properties', href: '/admin/rooms', icon: Building2, any: ['rooms.view'] },
+            { label: 'Camera Rates', href: '/admin/camera-rates', icon: Tags, any: ['rooms.view'] },
             { label: 'Cleaning', href: '/admin/housekeeping', icon: Sparkles, any: ['housekeeping.own', 'housekeeping.manage', 'housekeeping.inspect'] },
             { label: 'Maintenance & Damage', href: '/admin/work-orders', icon: Wrench, any: ['maintenance.own', 'maintenance.manage'] },
             { label: 'Damage Claims', href: '/admin/incidents', icon: BookOpen, any: ['__incidents_only'] },
@@ -42,8 +66,10 @@ const NAV_GROUPS: { label: string; items: { label: string; href: string; icon: a
     {
         label: 'Admin',
         items: [
+            { label: 'Import & Data Quality', href: '/admin/imports', icon: TableProperties, any: ['settings.manage'] },
             { label: 'Team & Permissions', href: '/admin/team', icon: UsersRound, any: ['team.manage'] },
             { label: 'Settings', href: '/admin/settings', icon: Settings, any: ['settings.manage'] },
+            { label: 'Subscription', href: '/admin/subscription', icon: CreditCard, any: ['__owner_or_admin'] },
             { label: 'Audit Log', href: '/admin/audit', icon: ScrollText, any: ['audit.view'] },
         ],
     },
@@ -62,6 +88,40 @@ function storedCollapsed(): boolean {
     } catch {
         return false;
     }
+}
+
+const BADGE_TONE: Record<string, { box: string; icon: any }> = {
+    trial: { box: 'border-sky-200 bg-sky-50 text-sky-950', icon: Clock },
+    due: { box: 'border-amber-300 bg-amber-50 text-amber-950', icon: AlertTriangle },
+    locked: { box: 'border-red-300 bg-red-50 text-red-950', icon: Lock },
+};
+
+/** Bottom right on every admin page while on trial, expired or locked. Hidden once the subscription is paid. */
+function SubscriptionBadge({ badge, raised }: { badge: { status: string; title: string; detail: string }; raised: boolean }) {
+    const tone = BADGE_TONE[badge.status] ?? BADGE_TONE.due;
+    const Icon = tone.icon;
+    return (
+        <Link
+            href="/admin/subscription"
+            aria-label={`${badge.title}, ${badge.detail}. Open the subscription page.`}
+            className={cn('fixed right-4 z-30 flex items-center gap-2 rounded-full border px-3.5 py-2 text-xs shadow-lg transition hover:shadow-xl lg:right-6 lg:bottom-6', raised ? 'bottom-20' : 'bottom-4', tone.box)}
+        >
+            <Icon size={15} className="shrink-0" aria-hidden />
+            <span><strong className="font-semibold">{badge.title}</strong> · {badge.detail}</span>
+        </Link>
+    );
+}
+
+/** While the subscription is ending, due or locked: shown to the Owner and Administrator on every page. */
+function SubscriptionBanner({ notice }: { notice: { status: string; label: string; message: string; url: string } }) {
+    const urgent = notice.status === 'due' || notice.status === 'locked';
+    return (
+        <div role={urgent ? 'alert' : 'status'} className={cn('mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-4 py-3 text-sm', urgent ? 'border-red-200 bg-red-50 text-red-950' : 'border-amber-200 bg-amber-50 text-amber-950')}>
+            <CreditCard size={17} className="shrink-0" aria-hidden />
+            <span className="min-w-0 flex-1"><strong>{notice.label}.</strong> {notice.message}</span>
+            <Link href={notice.url} className="font-medium underline underline-offset-2">View subscription</Link>
+        </div>
+    );
 }
 
 /** Stays on screen when a page is scrolled, so the result of an action far down a list is seen. Errors stay until dismissed. */
@@ -216,7 +276,9 @@ function CredentialDialog({ credential }: { credential?: { name: string; email: 
 }
 
 export default function AdminLayout({ title, heading, subtitle, showSection = true, children, actions }: { title: string; heading?: string; subtitle?: ReactNode; showSection?: boolean; children: ReactNode; actions?: ReactNode }) {
-    const { auth, flash } = usePage<any>().props as any;
+    const { auth, flash, category, subscription, subscriptionBadge } = usePage<any>().props as any;
+    const roles: string[] = auth.user?.roles ?? [];
+    const business: string = category ?? 'suites';
     const path = usePage().url.split('?')[0];
     const [open, setOpen] = useState(false);
     const [collapsed, setCollapsed] = useState(storedCollapsed);
@@ -251,9 +313,11 @@ export default function AdminLayout({ title, heading, subtitle, showSection = tr
     const groups = NAV_GROUPS.map((g) => ({
         ...g,
         items: g.items.filter((n) => {
+            if ((business === 'cameras' ? SUITES_ONLY : CAMERAS_ONLY).includes(n.href)) return false;
+            if (n.any[0] === '__owner_or_admin') return roles.includes('Owner') || roles.includes('Administrator');
             if (n.any[0] === '__incidents_only') return can('incidents.view') && !can('maintenance.own') && !can('maintenance.manage');
             return n.any.some(can);
-        }),
+        }).map((n) => (business === 'cameras' && CAMERA_LABELS[n.href] ? { ...n, label: CAMERA_LABELS[n.href] } : n)),
     })).filter((g) => g.items.length > 0);
 
     const allItems = groups.flatMap((g) => g.items.map((i) => ({ ...i, group: g.label })));
@@ -266,7 +330,7 @@ export default function AdminLayout({ title, heading, subtitle, showSection = tr
         ...(perms.includes('quotes.manage') ? [{ label: 'New quote: find vacant units and prices', href: '/admin/quotes/create', icon: Plus, group: 'Create' }] : []),
         ...allItems.map((i) => ({ label: i.label, href: i.href, icon: i.icon, group: i.group })),
         { label: 'My notifications', href: '/admin/account#notifications', icon: Bell, group: 'Account' },
-    ], [perms.join(',')]);
+    ], [perms.join(','), business]);
 
     const quickSearches = useMemo(() => [
         ...(perms.includes('bookings.view') ? [{ label: 'Find bookings for', href: (q: string) => `/admin/bookings?q=${encodeURIComponent(q)}`, icon: ClipboardList }] : []),
@@ -278,6 +342,7 @@ export default function AdminLayout({ title, heading, subtitle, showSection = tr
 
     const nav = (rail: boolean) => (
         <nav aria-label="Main" className={cn('sidebar-scroll flex-1 overflow-y-auto py-2', rail ? 'sidebar-scroll-hidden px-2' : 'px-3')}>
+            {!rail && <CategorySwitch value={business} />}
             {groups.map((g) => (
                 <div key={g.label} className="mb-3 last:mb-0">
                     {groups.length > 1 && (rail ? <div className="mx-2 mb-2 border-t border-espresso first:hidden" aria-hidden /> : <p className="px-3 pb-1 text-[11px] font-medium tracking-wider text-gold uppercase">{g.label}</p>)}
@@ -304,8 +369,10 @@ export default function AdminLayout({ title, heading, subtitle, showSection = tr
             <a href="#main" className="skip-link">Skip to main content</a>
             <Head title={title} />
             <aside className={cn('sticky top-0 hidden h-screen shrink-0 flex-col bg-chocolate transition-[width] duration-200 lg:flex', collapsed ? 'w-[4.25rem]' : 'w-64')}>
-                <Link href="/admin" aria-label="UNIQA SUITES dashboard" className={cn('flex h-16 shrink-0 items-center border-b border-espresso', collapsed ? 'justify-center' : 'px-4')}>
-                    <img src={collapsed ? '/brand/uniqa-monogram.png' : '/brand/uniqa-wordmark.png'} alt="" className={collapsed ? 'h-9 w-auto' : 'h-10 w-auto'} />
+                <Link href="/admin" aria-label={business === 'cameras' ? 'Grab Cam Rental dashboard' : 'UNIQA SUITES dashboard'} className={cn('flex h-16 shrink-0 items-center gap-2.5 border-b border-espresso', collapsed ? 'justify-center' : 'px-4')}>
+                    {business === 'cameras'
+                        ? <><img src="/brand/grabcam-logo.png" alt="" className="size-11" />{!collapsed && <span className="text-sm leading-tight font-semibold text-ivory">Grab Cam<span className="block text-[11px] font-normal tracking-[0.25em] text-beige uppercase">Rental</span></span>}</>
+                        : <img src={collapsed ? '/brand/uniqa-monogram.png' : '/brand/uniqa-wordmark.png'} alt="" className={collapsed ? 'h-9 w-auto' : 'h-10 w-auto'} />}
                 </Link>
                 {nav(collapsed)}
                 <button type="button" onClick={toggleCollapsed} aria-label={collapsed ? 'Expand menu' : 'Collapse menu'} title={collapsed ? 'Expand menu' : undefined} className={cn('flex h-11 shrink-0 items-center gap-3 border-t border-espresso text-sm text-beige transition-colors hover:text-gold', collapsed ? 'justify-center' : 'px-6')}>
@@ -318,7 +385,7 @@ export default function AdminLayout({ title, heading, subtitle, showSection = tr
                     <div className="absolute inset-0 bg-chocolate/60" onClick={() => setOpen(false)} />
                     <aside className="absolute inset-y-0 left-0 flex w-72 max-w-[85%] flex-col bg-chocolate">
                         <div className="flex items-center justify-between border-b border-espresso px-3 py-2">
-                            <img src="/brand/uniqa-wordmark.png" alt="UNIQA SUITES" className="h-9 w-auto" />
+                            {business === 'cameras' ? <img src="/brand/grabcam-logo.png" alt="Grab Cam Rental" className="size-10" /> : <img src="/brand/uniqa-wordmark.png" alt="UNIQA SUITES" className="h-9 w-auto" />}
                             <button ref={closeButton} aria-label="Close menu" className="flex size-11 items-center justify-center text-ivory" onClick={() => setOpen(false)}>
                                 <X size={18} />
                             </button>
@@ -351,6 +418,7 @@ export default function AdminLayout({ title, heading, subtitle, showSection = tr
 
                 <main id="main" tabIndex={-1} className={cn('mx-auto w-full max-w-[90rem] flex-1 p-4 outline-none sm:p-6 lg:p-8', phoneTabs.length >= 2 && 'pb-24 lg:pb-8')}>
                     <FlashMessage flash={flash} />
+                    {subscription && path !== '/admin/subscription' && <SubscriptionBanner notice={subscription} />}
                     <LiveNotice notice={auth.user?.latest_notice} />
                     <CredentialDialog credential={flash?.credential} />
                     {can('bookings.manage') && <NewBookingHost />}
@@ -365,6 +433,8 @@ export default function AdminLayout({ title, heading, subtitle, showSection = tr
                     {children}
                 </main>
             </div>
+
+            {subscriptionBadge && <SubscriptionBadge badge={subscriptionBadge} raised={phoneTabs.length >= 2} />}
 
             {phoneTabs.length >= 2 && (
                 <nav aria-label="Quick" className="fixed inset-x-0 bottom-0 z-30 grid auto-cols-fr grid-flow-col border-t border-line bg-white pb-[env(safe-area-inset-bottom)] lg:hidden">

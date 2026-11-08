@@ -1,32 +1,35 @@
-import { Link, router } from '@inertiajs/react';
+import { Link, router, usePage } from '@inertiajs/react';
 import { Plus } from 'lucide-react';
 import { useState } from 'react';
 import { openNewBooking } from '@/components/NewBooking';
 import { buttonClass, Empty, Input, Pagination, Select, StatusChip, tableClass, tdClass, thClass, theadClass, trClass } from '@/components/ui';
 import { dateOnly, dateTime, humanize, peso } from '@/lib/format';
+import { useLiveRefresh } from '@/lib/useLiveRefresh';
 import AdminLayout from '@/layouts/AdminLayout';
 
 export default function BookingList({ bookings, filters, sources, statuses }: any) {
+    useLiveRefresh(['bookings'], 30_000);
+    const cam = (usePage<any>().props as any).category === 'cameras';
     const [q, setQ] = useState(filters.q ?? '');
     const apply = (changes: any) => router.get('/admin/bookings', { ...filters, ...changes }, { preserveState: true, replace: true });
 
     return (
-        <AdminLayout title="Reservations & Inquiries" actions={<button type="button" onClick={() => openNewBooking()} className={buttonClass('primary')}><Plus size={15} aria-hidden /> New booking</button>}>
+        <AdminLayout title={cam ? 'Camera Rentals' : 'Reservations & Inquiries'} actions={<button type="button" onClick={() => openNewBooking()} className={buttonClass('primary')}><Plus size={15} aria-hidden /> {cam ? 'New rental' : 'New booking'}</button>}>
             <div className="mb-4 flex flex-wrap gap-2">
                 <form onSubmit={(e) => { e.preventDefault(); apply({ q: q || undefined }); }} className="min-w-52 flex-1 sm:max-w-sm">
-                    <Input type="search" aria-label="Search" placeholder="Search reference or guest" value={q} onChange={(e) => setQ(e.target.value)} />
+                    <Input type="search" aria-label="Search" placeholder={cam ? 'Search reference or customer' : 'Search reference or guest'} value={q} onChange={(e) => setQ(e.target.value)} />
                 </form>
                 <Select aria-label="Status" className="w-auto" placeholder="All statuses" options={statuses.map((s: string) => ({ value: s, label: humanize(s) }))} value={filters.status ?? ''} onChange={(e) => apply({ status: e.target.value || undefined })} />
                 <Select aria-label="Source" className="w-auto" placeholder="All sources" options={sources.map((s: any) => ({ value: s.id, label: s.name }))} value={filters.source ?? ''} onChange={(e) => apply({ source: e.target.value || undefined })} />
             </div>
 
             <div className="overflow-hidden rounded-xl border border-line/80 bg-white shadow-xs">
-                {bookings.data.length === 0 ? <Empty>No reservations match these filters.</Empty> : (
+                {bookings.data.length === 0 ? <Empty>{cam ? 'No rentals match these filters.' : 'No reservations match these filters.'}</Empty> : (
                     <>
                         <div className="overflow-x-auto">
                             <table className={tableClass}>
                                 <thead className={theadClass}>
-                                    <tr>{['Reference', 'Guest', 'Rooms', 'Source', 'Status', 'Check-in', 'Check-out', 'Total'].map((h) => <th key={h} scope="col" className={thClass}>{h}</th>)}</tr>
+                                    <tr>{(cam ? ['Reference', 'Customer', 'Camera', 'Source', 'Status', 'Pickup', 'Return', 'Total'] : ['Reference', 'Guest', 'Rooms', 'Source', 'Status', 'Check-in', 'Check-out', 'Total']).map((h) => <th key={h} scope="col" className={thClass}>{h}</th>)}</tr>
                                 </thead>
                                 <tbody>
                                     {bookings.data.map((b: any) => (

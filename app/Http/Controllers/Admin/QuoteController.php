@@ -71,12 +71,15 @@ class QuoteController extends Controller
             'check_out' => 'nullable|date_format:Y-m-d',
             'guests' => 'nullable|integer|min:1|max:30',
             'early_time' => 'nullable|date_format:H:i',
-            'source_id' => 'nullable|integer',
+            'source_id' => 'nullable|integer|exists:booking_sources,id',
             'discount' => ['nullable', Money::RULE],
             'parking' => ['nullable', Money::RULE],
             'parking_nights' => 'nullable|integer|min:0|max:365',
             'parking_rate' => ['nullable', Money::RULE],
         ]);
+        if (! empty($f['discount']) && ! $request->user()->can('bookings.discount')) {
+            throw ValidationException::withMessages(['discount' => 'You are not authorized to apply discounts.']);
+        }
 
         $preview = null;
         if (! empty($f['room_id']) && ! empty($f['check_in']) && ! empty($f['check_out'])) {
@@ -106,6 +109,8 @@ class QuoteController extends Controller
             'vacancy' => $vacancy,
             'bookingId' => $request->integer('booking_id') ?: null,
             'parkingRate' => Money::pesos((int) Settings::get('pricing.parking_night_cents')),
+            'today' => Local::today(),
+            'standardCheckIn' => (string) Settings::get('pricing.standard_check_in'),
         ]);
     }
 
@@ -319,11 +324,11 @@ class QuoteController extends Controller
         return [$down, $totalCents - $down];
     }
 
-    /** Airbnb guests pay Airbnb, so there is nothing for them to put down here. */
+    /** Booking source is informational and does not change the payment terms. */
     private function downpaymentPercent(mixed $sourceId): ?int
     {
         $percent = (int) Settings::get('finance.downpayment_percent');
-        if ($percent <= 0 || ($sourceId && BookingSource::whereKey($sourceId)->value('code') === 'airbnb')) {
+        if ($percent <= 0) {
             return null;
         }
 

@@ -34,7 +34,7 @@ class OwnerDefaults
         'stay_rules' => 'No minimum stay or booking window, because none of the source documents set one.',
         'guest_policies' => 'Nothing is published until the wording is written under Settings, because none of the source documents state these terms.',
         'ical_future' => 'Not used. Airbnb bookings are transferred by hand, as new bookings with the source set to Airbnb.',
-        'public_no_prices' => 'In use: guests see taken dates only, and staff send prices in Messenger.',
+        'public_no_prices' => 'In use: guests see taken dates and each suite’s nightly rate; staff send the final quotation in Messenger.',
         'source_room_catalog' => 'In use: nine rooms from the room list, with current details from the flyers.',
         'flyer_differences' => 'The flyers are used as the newer source. NEW YORK is shown on the 22nd floor, because its unit is 2224 and every other numbered unit\'s first digits are its floor. Its flyer\'s 5th floor matches PARIS, so it looks copied. MILAN is ₱2,600 weekday and ₱2,800 weekend, as the owner\'s booking calculator states.',
     ];

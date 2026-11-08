@@ -24,7 +24,7 @@ class TeamController extends Controller
         return Inertia::render('Admin/Resource', [
             'title' => 'Team & Permissions',
             'subtitle' => 'Click a name to choose the pages that person can open. '.(config('mail.default') === 'log' ? 'New staff get a temporary password to hand over, shown once.' : 'Invited staff set their own password through a reset link.').' Deactivating removes access on the next request.',
-            'columns' => [['key' => 'name', 'label' => 'Name', 'type' => 'link'], ['key' => 'email', 'label' => 'Email'], ['key' => 'role', 'label' => 'Role'], ['key' => 'access', 'label' => 'Access'], ['key' => 'state', 'label' => 'Status', 'type' => 'status'], ['key' => 'two_factor', 'label' => 'Two-factor']],
+            'columns' => [['key' => 'name', 'label' => 'Name (click to edit access)', 'type' => 'link'], ['key' => 'email', 'label' => 'Email'], ['key' => 'role', 'label' => 'Role'], ['key' => 'access', 'label' => 'Access'], ['key' => 'state', 'label' => 'Status', 'type' => 'status'], ['key' => 'two_factor', 'label' => 'Two-factor']],
             'rows' => User::with('roles')->orderBy('name')->get()->map(fn ($u) => [
                 'id' => $u->id,
                 'name' => ['label' => $u->name, 'href' => "/admin/team/{$u->id}/edit"],
@@ -74,7 +74,7 @@ class TeamController extends Controller
     {
         $data = $request->validate(['name' => 'required|string|max:120', 'email' => 'required|email|max:120|unique:users,email', 'role' => ['required', Rule::in(Permissions::ROLES)], 'pages' => 'nullable|array', 'pages.*' => ['string', Rule::in(array_keys(Permissions::PAGES))]]);
         $this->assertCanGiveRole($request->user(), $data['role']);
-        $pages = $data['pages'] ?? Permissions::ROLE_PAGES[$data['role']] ?? [];
+        $pages = Permissions::withRequired($data['pages'] ?? Permissions::ROLE_PAGES[$data['role']] ?? []);
         $this->assertCanGrant($request->user(), Permissions::isFullAccess($data['role']) ? [] : $pages, []);
 
         $user = User::create(['name' => $data['name'], 'email' => $data['email'], 'password' => Str::random(40)]);
@@ -129,7 +129,7 @@ class TeamController extends Controller
         $pages = $request->has('pages') ? ($data['pages'] ?? []) : ($roleChanged ? (Permissions::ROLE_PAGES[$data['role']] ?? []) : $before);
 
         if (! Permissions::isFullAccess($data['role'])) {
-            $pages = $this->assertCanGrant($editor, $pages, $before);
+            $pages = $this->assertCanGrant($editor, Permissions::withRequired($pages), $before);
         }
 
         Permissions::apply($user, $data['role'], $pages);
@@ -144,9 +144,12 @@ class TeamController extends Controller
         if ($user->roles->pluck('name')->contains(fn ($r) => Permissions::isFullAccess($r))) {
             return 'Everything';
         }
-        $count = count(Permissions::pagesOf($user));
+        $pages = collect(Permissions::pagesOf($user))->map(fn ($key) => Permissions::PAGES[$key][0]);
+        if ($pages->isEmpty()) {
+            return 'No access yet';
+        }
 
-        return $count === 1 ? '1 item' : "{$count} items";
+        return $pages->take(3)->join(', ').($pages->count() > 3 ? ' +'.($pages->count() - 3).' more' : '');
     }
 
     private function formProps(User $editor): array
@@ -155,14 +158,20 @@ class TeamController extends Controller
             'roles' => array_values(array_filter(Permissions::ROLES, fn ($role) => $this->mayGiveRole($editor, $role))),
             'fullAccess' => Permissions::FULL_ACCESS,
             'presets' => Permissions::ROLE_PAGES + ['Administrator' => [], 'Owner' => []],
-            'pages' => collect(Permissions::PAGES)->map(fn ($page, $key) => ['key' => $key, 'label' => $page[0], 'group' => $page[1]])->values(),
+            'pages' => collect(Permissions::PAGES)->map(fn ($page, $key) => ['key' => $key, 'label' => $page[0], 'group' => $page[1], 'help' => Permissions::HELP[$key] ?? null, 'requires' => Permissions::REQUIRES[$key] ?? null])->values(),
+            'areas' => Permissions::AREAS,
             'allowed' => Permissions::pagesOf($editor),
         ];
     }
 
     private function mayGiveRole(User $editor, string $role): bool
     {
-        return ! Permissions::isFullAccess($role) || $editor->hasRole('Owner') || ($role === 'Administrator' && $editor->hasRole('Administrator'));
+        // The Administrator (EAJ) controls the system subscription and its lock, so only an Administrator can make one.
+        return match ($role) {
+            'Administrator' => $editor->hasRole('Administrator'),
+            'Owner' => $editor->hasRole('Owner'),
+            default => true,
+        };
     }
 
     private function assertCanGiveRole(User $editor, string $role): void
@@ -170,7 +179,7 @@ class TeamController extends Controller
         abort_unless($this->mayGiveRole($editor, $role), 403, "You cannot give the {$role} role.");
     }
 
-    /** Only an Owner may change an Owner, and only full-access people may change an Administrator. */
+    /** Only an Owner may change an Owner, and only an Administrator may change an Administrator. */
     private function assertCanManage(User $editor, User $target): void
     {
         abort_unless($this->mayManage($editor, $target), 403, "You cannot change {$target->name}'s access.");
@@ -180,7 +189,7 @@ class TeamController extends Controller
     {
         return match (true) {
             $target->hasRole('Owner') => $editor->hasRole('Owner'),
-            $target->hasRole('Administrator') => $editor->hasAnyRole(Permissions::FULL_ACCESS),
+            $target->hasRole('Administrator') => $editor->hasRole('Administrator'),
             default => true,
         };
     }

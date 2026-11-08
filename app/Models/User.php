@@ -13,7 +13,7 @@ class User extends Authenticatable
     /** @use HasFactory<UserFactory> */
     use HasFactory, HasRoles, Notifiable;
 
-    protected $fillable = ['name', 'email', 'password', 'is_active'];
+    protected $fillable = ['name', 'email', 'password', 'is_active', 'must_change_password'];
 
     protected $hidden = ['password', 'remember_token', 'two_factor_secret', 'two_factor_recovery_codes', 'two_factor_last_step'];
 
@@ -25,6 +25,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'is_active' => 'boolean',
+            'must_change_password' => 'boolean',
             'two_factor_secret' => 'encrypted',
             'two_factor_recovery_codes' => 'array',
             'two_factor_confirmed_at' => 'datetime',

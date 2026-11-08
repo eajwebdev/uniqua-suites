@@ -176,13 +176,13 @@ class PaymentSafetyTest extends DomainTestCase
         $this->assertSame(Booking::CHECKED_OUT, $booking->fresh()->status);
     }
 
-    public function test_an_airbnb_guest_needs_no_reason(): void
+    public function test_airbnb_source_does_not_bypass_the_unpaid_checkout_warning(): void
     {
         $booking = $this->checkedIn();
         $booking->update(['booking_source_id' => BookingSource::where('code', 'airbnb')->value('id')]);
 
-        $this->post("/admin/bookings/{$booking->id}/check-out")->assertSessionHasNoErrors();
-        $this->assertSame(Booking::CHECKED_OUT, $booking->fresh()->status);
+        $this->post("/admin/bookings/{$booking->id}/check-out")->assertSessionHasErrors('unpaid_reason');
+        $this->assertSame(Booking::CHECKED_IN, $booking->fresh()->status);
     }
 
     public function test_clicking_check_out_twice_is_harmless(): void

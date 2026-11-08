@@ -34,6 +34,11 @@ class HandleInertiaRequests extends Middleware
                 'credential' => fn () => $request->session()->get('credential'),
             ],
             'contact' => config('uniqa.contact'),
+            'category' => fn () => $user ? \App\Support\AdminCategory::current() : null,
+            // The banner on admin pages while the subscription is ending, due or locked. Owner and Administrator only.
+            'subscription' => fn () => $user && $user->hasAnyRole(['Owner', 'Administrator']) ? \App\Support\Subscription::banner() : null,
+            // The corner badge: on trial, expired or locked. Nothing once paid. Owner and Administrator only.
+            'subscriptionBadge' => fn () => $user && $user->hasAnyRole(['Owner', 'Administrator']) ? \App\Support\Subscription::badge() : null,
         ]);
     }
 

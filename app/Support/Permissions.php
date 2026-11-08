@@ -66,6 +66,73 @@ class Permissions
         'reports_money' => ['See money reports and export them', 'Extra actions', ['reports.finance', 'reports.export']],
     ];
 
+    /** Each extra action works on one page, so ticking the action also ticks that page. */
+    public const REQUIRES = [
+        'dashboard_money' => 'dashboard',
+        'confirm' => 'bookings', 'discount' => 'bookings', 'override' => 'bookings',
+        'room_edit' => 'rooms', 'wifi' => 'rooms',
+        'verify' => 'payments', 'refunds' => 'payments', 'lock' => 'payments',
+        'expense_approve' => 'expenses',
+        'damage_charge' => 'incidents',
+        'reports_money' => 'reports',
+    ];
+
+    /** How the Team screen groups the pages, in order. */
+    public const AREAS = [
+        'Front desk' => ['dashboard', 'bookings', 'quotes', 'guests', 'rooms', 'parking'],
+        'Cleaning & repairs' => ['housekeeping_own', 'housekeeping', 'inspect', 'maintenance_own', 'maintenance', 'incidents', 'inventory'],
+        'Money' => ['payments', 'expenses', 'reports', 'advances'],
+        'Admin' => ['team', 'settings', 'audit'],
+    ];
+
+    /** One line under each box on the Team screen, saying what it lets the person do. */
+    public const HELP = [
+        'dashboard' => "Today's arrivals, pickups, departures and alerts.",
+        'bookings' => 'Calendar and reservations for suites and camera rentals: create, change, check in and out.',
+        'quotes' => 'Prepare quotations and copy ready-to-send messages.',
+        'guests' => 'Guest and renter records and their booking history.',
+        'rooms' => 'Suites, cameras and their rate cards (view only unless "Edit rooms" is ticked).',
+        'parking' => 'Parking calendar and assignments.',
+        'housekeeping_own' => 'Only the cleaning tasks given to this person, plus using supplies.',
+        'housekeeping' => 'All cleaning tasks and laundry: assign, schedule and follow up.',
+        'inspect' => 'Pass or fail a cleaned room so it can be checked in.',
+        'maintenance_own' => 'Only the repair jobs given to this person.',
+        'maintenance' => 'All repair jobs: create, assign and close.',
+        'incidents' => 'Damage reports with photos and notes.',
+        'inventory' => 'Supplies, stock levels and movements.',
+        'payments' => 'Record payments, see receipts, channel payouts and reconciliation.',
+        'expenses' => 'Expenses and the cashbook.',
+        'reports' => 'Occupancy and booking reports.',
+        'advances' => 'Staff cash advances and repayments.',
+        'team' => 'This screen: invite people and choose their access.',
+        'settings' => 'Business rules, rates policy, message templates and security.',
+        'audit' => 'Who changed what, and when.',
+        'dashboard_money' => 'Earnings, balances and other peso amounts on the Dashboard.',
+        'confirm' => 'Turn an inquiry or hold into a confirmed booking.',
+        'discount' => 'Lower the price of a booking.',
+        'override' => 'Check a guest in before housekeeping marks the room ready.',
+        'room_edit' => 'Change room and camera details, rates and Wi-Fi details.',
+        'wifi' => 'Reveal the saved Wi-Fi passwords.',
+        'verify' => 'Mark payments and channel payouts as verified.',
+        'refunds' => 'Approve refunds.',
+        'lock' => 'Close a finished month so it cannot be changed silently.',
+        'expense_approve' => 'Approve submitted expenses.',
+        'damage_charge' => 'Approve charging a guest for damage.',
+        'reports_money' => 'Revenue and finance reports, and exporting them.',
+    ];
+
+    /** Adds the page each ticked action works on. */
+    public static function withRequired(array $pages): array
+    {
+        foreach ($pages as $page) {
+            if (isset(self::REQUIRES[$page])) {
+                $pages[] = self::REQUIRES[$page];
+            }
+        }
+
+        return array_values(array_unique($pages));
+    }
+
     /** The ticks a new person starts with, before anyone adjusts them. */
     public const ROLE_PAGES = [
         'Operations Manager' => ['dashboard', 'bookings', 'quotes', 'guests', 'rooms', 'housekeeping_own', 'housekeeping', 'inspect', 'maintenance_own', 'maintenance', 'incidents', 'inventory', 'parking', 'reports', 'override', 'wifi'],

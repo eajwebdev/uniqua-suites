@@ -6,6 +6,7 @@ use App\Domain\Finance\FinanceService;
 use App\Models\Booking;
 use App\Models\Room;
 use App\Models\User;
+use App\Support\AdminCategory;
 use App\Support\Local;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
@@ -49,7 +50,7 @@ class ReportService
     {
         $endExclusive = CarbonImmutable::parse($to)->addDay()->toDateString();
         $roomIds = Room::where('operational_status', '!=', 'retired')
-            ->when($propertyId, fn ($q) => $q->where('property_id', $propertyId))->pluck('id');
+            ->tap($this->scoped('property_id', $propertyId))->pluck('id');
 
         $days = CarbonImmutable::parse($from)->diffInDays(CarbonImmutable::parse($to)) + 1;
         $blocked = $this->blockedNights($roomIds->all(), $from, $endExclusive);
@@ -65,33 +66,33 @@ class ReportService
             ->whereNotIn('c.type', ['accommodation', 'tax'])
             ->whereBetween('c.charge_date', [$from, $to])
             ->whereIn('b.status', self::STAYED)
-            ->when($propertyId, fn ($q) => $q->where('b.property_id', $propertyId))
+            ->tap($this->scoped('b.property_id', $propertyId))
             ->sum('c.amount_cents');
 
         $booked = (int) Booking::whereNotIn('status', [Booking::CANCELLED, Booking::NO_SHOW, Booking::INQUIRY, Booking::EXPIRED, Booking::TENTATIVE])
             ->whereBetween(DB::raw($this->localDate('created_at')), [$from, $to])
-            ->when($propertyId, fn ($q) => $q->where('property_id', $propertyId))
+            ->tap($this->scoped('property_id', $propertyId))
             ->sum('total_cents');
         $booked -= (int) DB::table('booking_charges as c')->join('bookings as b', 'b.id', '=', 'c.booking_id')
             ->where('c.type', 'tax')->whereNull('c.voided_at')
             ->whereNotIn('b.status', [Booking::CANCELLED, Booking::NO_SHOW, Booking::INQUIRY, Booking::EXPIRED, Booking::TENTATIVE])
             ->whereBetween(DB::raw($this->localDate('b.created_at')), [$from, $to])
-            ->when($propertyId, fn ($q) => $q->where('b.property_id', $propertyId))
+            ->tap($this->scoped('b.property_id', $propertyId))
             ->sum('c.amount_cents');
 
         $receipts = (int) DB::table('receipts as r')->leftJoin('bookings as b', 'b.id', '=', 'r.booking_id')
             ->where('r.verification_status', 'verified')->whereBetween('r.receipt_date', [$from, $to])
-            ->when($propertyId, fn ($q) => $q->where('b.property_id', $propertyId))->sum('r.amount_cents');
+            ->tap($this->scoped('b.property_id', $propertyId))->sum('r.amount_cents');
         $payouts = (int) DB::table('external_settlements as s')->leftJoin('bookings as b', 'b.id', '=', 's.booking_id')
             ->whereNotNull('s.actual_payout_cents')->whereBetween('s.payout_date', [$from, $to])
-            ->when($propertyId, fn ($q) => $q->where('b.property_id', $propertyId))->sum('s.actual_payout_cents');
+            ->tap($this->scoped('b.property_id', $propertyId))->sum('s.actual_payout_cents');
         $refunds = (int) DB::table('refunds as x')->join('bookings as b', 'b.id', '=', 'x.booking_id')
             ->where('x.status', 'executed')->whereBetween('x.executed_on', [$from, $to])
-            ->when($propertyId, fn ($q) => $q->where('b.property_id', $propertyId))->sum('x.amount_cents');
+            ->tap($this->scoped('b.property_id', $propertyId))->sum('x.amount_cents');
 
         $expenses = DB::table('expenses as e')->leftJoin('rooms as r', 'r.id', '=', 'e.room_id')
             ->whereBetween('e.expense_date', [$from, $to])
-            ->when($propertyId, fn ($q) => $q->where(fn ($w) => $w->where('e.property_id', $propertyId)->orWhere('r.property_id', $propertyId)));
+            ->tap($this->expenseInProperty($propertyId));
         $expenseTotal = (int) (clone $expenses)->sum('e.amount_cents');
         $expenseUnpaid = (int) (clone $expenses)->where('e.status', 'incurred')->sum('e.amount_cents');
 
@@ -124,7 +125,7 @@ class ReportService
         $total = 0;
         $rows = [];
         $bookings = Booking::whereIn('status', self::STAYED)->with(['guest:id,full_name', 'source:id,name'])
-            ->when($propertyId, fn ($q) => $q->where('property_id', $propertyId))->get();
+            ->tap($this->scoped('property_id', $propertyId))->get();
 
         foreach ($bookings as $b) {
             $balance = $this->finance->balance($b);
@@ -150,7 +151,7 @@ class ReportService
     {
         $rows = DB::table('booking_sources as s')
             ->leftJoin('bookings as b', fn ($j) => $j->on('b.booking_source_id', '=', 's.id')->whereBetween(DB::raw($this->localDate('b.created_at')), [$from, $to])
-                ->when($propertyId, fn ($q) => $q->where('b.property_id', $propertyId)))
+                ->tap($this->scoped('b.property_id', $propertyId)))
             ->groupBy('s.id', 's.name')
             ->selectRaw("s.id, s.name,
                 SUM(b.status IN ('confirmed','checked_in','checked_out')) as confirmed,
@@ -175,7 +176,7 @@ class ReportService
     public function topRooms(string $from, string $to, ?int $propertyId = null): array
     {
         return $this->nightsQuery($from, $to, null)->join('rooms as r', 'r.id', '=', 'n.room_id')
-            ->when($propertyId, fn ($q) => $q->where('r.property_id', $propertyId))
+            ->tap($this->scoped('r.property_id', $propertyId))
             ->groupBy('r.id', 'r.name')->selectRaw('r.name, COUNT(*) as nights, SUM(n.rate_cents) as cents')
             ->orderByDesc('cents')->limit(9)->get()
             ->map(fn ($r) => ['name' => $r->name, 'nights' => (int) $r->nights, 'earned_cents' => (int) $r->cents])->all();
@@ -210,7 +211,7 @@ class ReportService
     public function table(string $type, string $from, string $to, ?int $propertyId = null, string $basis = 'stay', array $filters = []): array
     {
         $peso = fn ($c) => number_format(((int) $c) / 100, 2, '.', '');
-        $roomInProperty = fn ($q) => $propertyId ? $q->where('r.property_id', $propertyId) : $q;
+        $roomInProperty = $this->scoped('r.property_id', $propertyId);
 
         return match ($type) {
             'room_ledger' => [
@@ -274,7 +275,7 @@ class ReportService
 
     private function collectionRows(string $from, string $to, callable $peso, ?int $propertyId = null, ?string $method = null): array
     {
-        $inProperty = fn ($q) => $propertyId ? $q->where('b.property_id', $propertyId) : $q;
+        $inProperty = $this->scoped('b.property_id', $propertyId);
 
         $receipts = DB::table('receipts as r')->leftJoin('bookings as b', 'b.id', '=', 'r.booking_id')->where('r.verification_status', 'verified')->whereBetween('r.receipt_date', [$from, $to])->tap($inProperty)->when($method, fn ($q, $v) => $q->where('r.method', $v))
             ->get(['r.receipt_date as d', 'r.reference', 'r.method', 'b.reference as booking', 'r.amount_cents'])
@@ -293,7 +294,7 @@ class ReportService
     /** The owner's familiar month sheet: a row per day, a column per room, channel tallies underneath. */
     private function roomGrid(string $from, string $to, ?int $propertyId, callable $peso): array
     {
-        $rooms = Room::when($propertyId, fn ($q) => $q->where('property_id', $propertyId))->orderBy('id')->get(['id', 'name', 'unit_code', 'operational_status']);
+        $rooms = Room::query()->tap($this->scoped('property_id', $propertyId))->orderBy('id')->get(['id', 'name', 'unit_code', 'operational_status']);
         $nights = $this->nightsQuery($from, $to, null)->join('booking_sources as s', 's.id', '=', 'b.booking_source_id')
             ->whereIn('n.room_id', $rooms->pluck('id'))->get(['n.stay_date', 'n.room_id', 'n.rate_cents', 's.name as source']);
         $rooms = $rooms->filter(fn ($r) => $r->operational_status !== 'retired' || $nights->contains('room_id', $r->id))->values();
@@ -352,7 +353,7 @@ class ReportService
     private function byBasis(string $from, string $to, ?int $propertyId, string $basis, callable $peso): array
     {
         abort_unless(isset(self::BASES[$basis]), 404);
-        $inBooking = fn ($q) => $propertyId ? $q->where('b.property_id', $propertyId) : $q;
+        $inBooking = $this->scoped('b.property_id', $propertyId);
 
         $query = match ($basis) {
             'created' => DB::table('bookings as b')->whereNotIn('b.status', [Booking::CANCELLED, Booking::NO_SHOW, Booking::INQUIRY, Booking::EXPIRED, Booking::TENTATIVE])
@@ -407,7 +408,7 @@ class ReportService
         $rows = DB::table('parking_assignments as a')->join('parking_spaces as s', 's.id', '=', 'a.parking_space_id')->join('properties as p', 'p.id', '=', 's.property_id')
             ->leftJoin('bookings as b', 'b.id', '=', 'a.booking_id')->leftJoin('booking_charges as c', 'c.id', '=', 'a.charge_id')
             ->where('a.start_date', '<', $endExclusive)->where('a.end_date', '>', $from)
-            ->when($propertyId, fn ($q) => $q->where('s.property_id', $propertyId))
+            ->tap($this->scoped('s.property_id', $propertyId))
             ->orderBy('a.start_date')->orderBy('s.code')
             ->get(['s.code', 'p.name as property', 'a.holder_name', 'a.vehicle', 'a.start_date', 'a.end_date', 'a.status', 'b.reference', 'c.amount_cents', 'c.voided_at']);
 
@@ -435,7 +436,7 @@ class ReportService
 
         $history = DB::table('legacy_rows as l')->leftJoin('rooms as r', 'r.id', '=', 'l.room_id')
             ->where('l.record_type', 'daily_sale')->where('l.review_status', '!=', 'rejected')->whereBetween('l.record_date', [$from, $to])
-            ->when($propertyId, fn ($q) => $q->where('r.property_id', $propertyId))
+            ->tap($this->scoped('r.property_id', $propertyId))
             ->get(['l.room_id', 'r.id as sort', DB::raw('COALESCE(r.name, l.room_label) as room'), 'l.record_date as date', 'l.guest_name as guest', 'l.source_label as source', 'l.payment_label as payment', 'l.amount_cents', 'l.extra_cents', 'l.raw'])
             ->reject(fn ($x) => $x->room_id && isset($liveNights["{$x->room_id}|{$x->date}"]));
 
@@ -468,7 +469,7 @@ class ReportService
     /** Job costs and expenses stay in separate columns: the same bill may be entered in both. */
     private function cleaningLaundry(string $from, string $to, ?int $propertyId, callable $peso): array
     {
-        $rooms = Room::when($propertyId, fn ($q) => $q->where('property_id', $propertyId))->orderBy('id')->get(['id', 'name']);
+        $rooms = Room::query()->tap($this->scoped('property_id', $propertyId))->orderBy('id')->get(['id', 'name']);
         $tasks = DB::table('housekeeping_tasks')->where('type', 'turnover')->whereNotNull('completed_at')
             ->whereBetween(DB::raw($this->localDate('completed_at')), [$from, $to])->groupBy('room_id')->selectRaw('room_id, COUNT(*) as n')->pluck('n', 'room_id');
         $jobs = DB::table('laundry_jobs')->where('status', '!=', 'cancelled')->whereBetween(DB::raw($this->localDate('created_at')), [$from, $to])
@@ -508,14 +509,36 @@ class ReportService
     /** Expects the expense as `e` and its room as `r`, matching how kpis() attributes a cost to a property. */
     private function expenseInProperty(?int $propertyId): callable
     {
-        return fn ($q) => $propertyId ? $q->where(fn ($w) => $w->where('e.property_id', $propertyId)->orWhere('r.property_id', $propertyId)) : $q;
+        return function ($q) use ($propertyId) {
+            if ($propertyId) {
+                $q->where(fn ($w) => $w->where('e.property_id', $propertyId)->orWhere('r.property_id', $propertyId));
+            }
+
+            // A room's property wins; an expense with neither is a general (Suites) cost.
+            return AdminCategory::whereProperty($q, DB::raw('COALESCE(r.property_id, e.property_id)'));
+        };
+    }
+
+    /**
+     * The selected admin business (Suites or Grab Cam cameras), plus one property when asked.
+     * A null column, such as a payment with no booking, counts as Suites.
+     */
+    private function scoped(string $column, ?int $propertyId): callable
+    {
+        return function ($q) use ($column, $propertyId) {
+            if ($propertyId) {
+                $q->where($column, $propertyId);
+            }
+
+            return AdminCategory::whereProperty($q, $column);
+        };
     }
 
     private function nightsQuery(string $from, string $to, ?int $propertyId)
     {
         return DB::table('booking_nights as n')->join('bookings as b', 'b.id', '=', 'n.booking_id')
             ->where('n.is_current', true)->whereIn('b.status', self::STAYED)->whereBetween('n.stay_date', [$from, $to])
-            ->when($propertyId, fn ($q) => $q->where('b.property_id', $propertyId));
+            ->tap($this->scoped('b.property_id', $propertyId));
     }
 
     private function blockedNights(array $roomIds, string $from, string $endExclusive): int

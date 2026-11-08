@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Support\AdminCategory;
 use App\Domain\Finance\FinanceService;
 use App\Http\Controllers\Controller;
 use App\Models\Booking;
@@ -35,7 +36,7 @@ class FinanceController extends Controller
     {
         $status = $request->validate(['status' => 'nullable|in:pending,verified,rejected'])['status'] ?? null;
         $user = $request->user();
-        $rows = Receipt::with(['booking:id,reference', 'account:id,name', 'enteredBy:id,name'])
+        $rows = AdminCategory::whereHasProperty(Receipt::query(), 'booking')->with(['booking:id,reference', 'account:id,name', 'enteredBy:id,name'])
             ->when($status, fn ($q, $v) => $q->where('verification_status', $v))
             ->orderByDesc('id')->paginate(15)->withQueryString();
         $reversed = Receipt::whereNotNull('reverses_receipt_id')->pluck('reverses_receipt_id');
@@ -164,7 +165,7 @@ class FinanceController extends Controller
     public function settlements(Request $request)
     {
         $user = $request->user();
-        $rows = ExternalSettlement::with(['booking:id,reference', 'account:id,name'])->orderByDesc('id')->paginate(15);
+        $rows = AdminCategory::whereHasProperty(ExternalSettlement::query(), 'booking')->with(['booking:id,reference', 'account:id,name'])->orderByDesc('id')->paginate(15);
 
         return Inertia::render('Admin/Resource', [
             'title' => 'Channel settlements',
@@ -253,7 +254,7 @@ class FinanceController extends Controller
     public function reconciliation(Request $request)
     {
         $user = $request->user();
-        $exceptions = $this->finance->reconciliationExceptions();
+        $exceptions = $this->finance->reconciliationExceptions(AdminCategory::current());
 
         $locks =PeriodLock::with('locker:id,name')->orderByDesc('period')->limit(24)->get();
 

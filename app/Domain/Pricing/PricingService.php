@@ -21,6 +21,10 @@ class PricingService
      */
     public function quote(Room $room, string $checkIn, string $checkOut, int $guests, array $opts = []): array
     {
+        // Grab Cam units are priced from the camera rate card, not nightly suite rates.
+        if ($room->isCamera()) {
+            return app(CameraPricing::class)->quote($room, $checkIn, $checkOut, $opts);
+        }
         if ($checkIn >= $checkOut) {
             throw new RoomConflict('Check-out must be after check-in.');
         }
@@ -67,6 +71,9 @@ class PricingService
 
         if (! empty($opts['early_time'])) {
             $early = $this->earlyFee($opts['early_time']);
+            if ($early['hours'] === 0) {
+                throw new PricingInputInvalid("Requested early check-in must be before the standard {$early['standard']} check-in time.");
+            }
             if ($early['hours'] > 0) {
                 $lines[] = [
                     'type' => 'early_check_in',
@@ -85,7 +92,10 @@ class PricingService
 
         $parkingNights = (int) ($opts['parking_nights'] ?? 0);
         if ($parkingNights > count($nights)) {
-            throw new RoomConflict('Parking nights cannot be more than the nights in the stay.');
+            throw new PricingInputInvalid('Parking nights cannot be more than the nights in the stay.');
+        }
+        if ($parkingNights > 0 && ($opts['parking_rate_cents'] ?? 0) <= 0) {
+            throw new PricingInputInvalid('Enter a parking rate when parking is selected.');
         }
         if ($parkingNights > 0 && ($opts['parking_rate_cents'] ?? 0) > 0) {
             $rate = (int) $opts['parking_rate_cents'];
@@ -103,6 +113,9 @@ class PricingService
         }
         if (($opts['service_cents'] ?? 0) > 0) {
             $lines[] = ['type' => 'service', 'description' => 'Other services', 'quantity' => 1, 'unit_cents' => $opts['service_cents'], 'amount_cents' => $opts['service_cents'], 'charge_date' => $checkIn];
+        }
+        if (($opts['discount_cents'] ?? 0) > array_sum(array_column($lines, 'amount_cents'))) {
+            throw new PricingInputInvalid('The discount cannot be more than the charges being discounted.');
         }
         if (($opts['discount_cents'] ?? 0) > 0) {
             $lines[] = [

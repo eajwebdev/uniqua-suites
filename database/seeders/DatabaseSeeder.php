@@ -16,6 +16,7 @@ use App\Models\RoomType;
 use App\Models\User;
 use App\Support\OwnerDefaults;
 use App\Support\Permissions;
+use App\Support\Subscription;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
@@ -113,21 +114,65 @@ class DatabaseSeeder extends Seeder
         // Tests stay pinned to the room list's rates, and would otherwise copy every photo per test.
         if (! app()->environment('testing')) {
             $this->call(SuiteCatalogSeeder::class);
+            $this->call(GrabCamSeeder::class);
             OwnerDefaults::apply();
+            $this->subscription();
         }
 
-        // A clean production install must not finish with no way to sign in. Tests
-        // create their own users, and existing databases are never given a new user.
+        // A clean install gets one account per role. Tests create their own users, and a database
+        // that already has users is never given new ones, so re-seeding cannot bring back a starting password.
         if (! User::exists() && ! app()->environment('testing')) {
-            $password = Str::random(16);
-            $owner = User::create([
-                'name' => config('uniqa.bootstrap_owner.name'),
-                'email' => config('uniqa.bootstrap_owner.email'),
-                'password' => Hash::make($password),
-            ]);
-            $owner->assignRole('Owner');
-            $this->command?->warn("Owner login: {$owner->email} / {$password}  (change this after first sign-in)");
+            $this->accounts();
         }
+    }
+
+    /** One account per role on the starting password, each forced to set its own at first sign-in. */
+    /** The system subscription as agreed: a free trial, then monthly billing from the day after it ends. */
+    public const SUBSCRIPTION = [
+        'monthly_fee_cents' => 400000,
+        'trial_start' => '2026-11-09',
+        'trial_end' => '2026-11-22',
+        'start' => '2026-11-23',
+        'grace_days' => 3,
+    ];
+
+    /** Only where no subscription is set yet, so re-seeding never moves dates the Administrator changed. Creates the first bill. */
+    private function subscription(): void
+    {
+        if (Subscription::settings()['start'] !== null || Subscription::settings()['trial_end'] !== null) {
+            return;
+        }
+        Subscription::save(self::SUBSCRIPTION);
+        $bill = Subscription::ensureBill();
+        $this->command?->line('  Subscription: trial '.self::SUBSCRIPTION['trial_start'].' to '.self::SUBSCRIPTION['trial_end'].", first bill due {$bill?->due_on?->toDateString()}");
+    }
+
+    public const STARTING_PASSWORD = 'password@123';
+
+    /** Role => [name, email]. */
+    public const ACCOUNTS = [
+        'Owner' => ['Owner', 'owner@uniqasuites.com'],
+        'Administrator' => ['Administrator', 'admin@uniqasuites.com'],
+        'Operations Manager' => ['Operations Manager', 'manager@uniqasuites.com'],
+        'Booking / Reception' => ['Reception', 'reception@uniqasuites.com'],
+        'Staff' => ['Staff', 'staff@uniqasuites.com'],
+    ];
+
+    private function accounts(): void
+    {
+        $password = self::STARTING_PASSWORD;
+
+        foreach (self::ACCOUNTS as $role => [$name, $email]) {
+            $user = User::create([
+                'name' => $name,
+                'email' => $email,
+                'password' => Hash::make($password),
+                'must_change_password' => true,
+            ]);
+            Permissions::apply($user, $role); // the role's starting pages, as when a person is added under Users
+            $this->command?->line(sprintf('  %-20s %s', $role, $user->email));
+        }
+        $this->command?->warn("All accounts start with the password \"{$password}\". Each must set its own at first sign-in.");
     }
 
     private function templates(): void
@@ -172,7 +217,7 @@ class DatabaseSeeder extends Seeder
             ['stay_rules', 'Minimum stay and booking window', 'The source sets no limits, so none are enforced. Set them under Settings, or per room under Rooms.', 'default_needs_approval'],
             ['guest_policies', 'Cancellation policy and house rules', 'None were supplied. The public policies page shows them only after you write them under Settings.', 'default_needs_approval'],
             ['ical_future', 'Airbnb iCal import', 'Read-only blocked dates are available once private feed URLs are supplied. No two-way sync is offered.', 'future_optional'],
-            ['public_no_prices', 'The public website shows taken dates but no prices', 'Owner decisions, 4 November 2026. Guests browse suites and see which dates are taken, by date only. Book Now opens Facebook Messenger with free dates they chose. Only staff see prices and send the quotation, and a booking exists only when staff enter it.', 'source_fact'],
+            ['public_no_prices', 'The public website shows taken dates and each suite’s nightly rate', 'Owner decisions, 4 and 8 November 2026. Guests browse suites, see which dates are taken (by date only) and each suite’s posted weekday and weekend rate. Book Now opens Facebook Messenger with free dates they chose. Staff send the quotation with the final amount, and a booking exists only when staff enter it.', 'source_fact'],
             ['source_room_catalog', 'Nine rooms from ROOM DETAILS', 'Names, units, capacities and rates come directly from the room list. Approve each room under Rooms before publishing.', 'source_fact'],
         ];
         foreach ($rows as [$key, $title, $detail, $kind]) {

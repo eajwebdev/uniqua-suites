@@ -110,7 +110,7 @@ export default function Settings({ settings: s, decisions, templates, placeholde
                         </Field>
                         <Field label="Early check-in fee per started hour (PHP)" error={e.early_fee}><Input value={form.data.early_fee} onChange={set('early_fee')} /></Field>
                         <Field label="Parking rate per night (PHP)" error={e.parking_rate} help="Filled in on new quotes. It can be changed per quote."><Input value={form.data.parking_rate} onChange={set('parking_rate')} /></Field>
-                        <Field label="Downpayment (%)" error={e.downpayment_percent} help="Shown on new quotes, except Airbnb. Use 0 for none. Quotes already saved keep theirs."><Input type="number" min={0} max={100} value={form.data.downpayment_percent} onChange={set('downpayment_percent')} /></Field>
+                        <Field label="Downpayment (%)" error={e.downpayment_percent} help="Shown on new quotes for every booking source. Use 0 for none. Quotes already saved keep theirs."><Input type="number" min={0} max={100} value={form.data.downpayment_percent} onChange={set('downpayment_percent')} /></Field>
                         <Field label="Standard check-in" error={e.standard_check_in}><Input type="time" value={form.data.standard_check_in} onChange={set('standard_check_in')} /></Field>
                         <Field label="Standard check-out" error={e.standard_check_out}><Input type="time" value={form.data.standard_check_out} onChange={set('standard_check_out')} /></Field>
                                                 <Field label="Default hold length (hours)" error={e.hold_hours}><Input type="number" value={form.data.hold_hours} onChange={set('hold_hours')} /></Field>

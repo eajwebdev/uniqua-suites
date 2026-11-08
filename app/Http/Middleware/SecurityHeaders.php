@@ -19,14 +19,22 @@ class SecurityHeaders
         // PHP adds this outside Laravel's response, and it only tells attackers the version.
         header_remove('X-Powered-By');
 
-        $headers->set('X-Frame-Options', 'SAMEORIGIN');
+        // Grab Cam's page is made to be embedded on its own site; everything else stays unframeable.
+        $embeddable = $request->is('grabcam', 'grabcam/*');
+        if ($embeddable) {
+            $headers->remove('X-Frame-Options');
+        } else {
+            $headers->set('X-Frame-Options', 'SAMEORIGIN');
+        }
         $headers->set('X-Content-Type-Options', 'nosniff');
         $headers->set('Referrer-Policy', 'strict-origin-when-cross-origin');
         $headers->set('Permissions-Policy', 'geolocation=(), microphone=(), payment=()');
 
         // The Vite dev server serves scripts from another port, which this policy would rightly block.
         if (! Vite::isRunningHot()) {
-            $headers->set('Content-Security-Policy', self::POLICY);
+            $headers->set('Content-Security-Policy', $embeddable
+                ? str_replace("frame-ancestors 'self'", 'frame-ancestors '.self::frameAncestors(), self::POLICY)
+                : self::POLICY);
         }
         if ($request->isSecure()) {
             $headers->set('Strict-Transport-Security', 'max-age=31536000');
@@ -36,5 +44,13 @@ class SecurityHeaders
         }
 
         return $response;
+    }
+
+    /** Only CSP source tokens: a stray ";" in the environment must not rewrite the rest of the policy. */
+    private static function frameAncestors(): string
+    {
+        $value = trim((string) config('uniqa.grabcam.frame_ancestors'));
+
+        return preg_match("~^[A-Za-z0-9'*:/.\- ]+$~", $value) ? $value : "'self'";
     }
 }

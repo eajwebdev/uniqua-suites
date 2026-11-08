@@ -7,6 +7,7 @@ use App\Models\Booking;
 use App\Models\HousekeepingTask;
 use App\Models\InventoryMovement;
 use App\Models\LaundryJob;
+use App\Models\Property;
 use App\Models\Room;
 use App\Models\RoomStatusEvent;
 use App\Models\TaskEvent;
@@ -33,6 +34,8 @@ class TurnoverService
         return DB::table('booking_rooms as br')
             ->join('bookings as b', 'b.id', '=', 'br.booking_id')
             ->join('rooms as r', 'r.id', '=', 'br.room_id')
+            ->join('properties as p', 'p.id', '=', 'r.property_id')
+            ->where('p.category', Property::SUITES) // camera returns need no cleaning
             ->whereNull('br.released_at')
             ->where('br.check_out', $date)
             ->whereIn('b.status', [Booking::CONFIRMED, Booking::CHECKED_IN])

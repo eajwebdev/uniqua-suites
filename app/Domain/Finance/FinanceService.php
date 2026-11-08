@@ -349,24 +349,35 @@ class FinanceService
     }
 
     /** Everything open for the reconciliation screen and the month-end notice. */
-    public function reconciliationExceptions(): Collection
+    /** @param  string|null  $category  suites or cameras for the admin's selected business; null for both (month-end). */
+    public function reconciliationExceptions(?string $category = null): Collection
     {
         $exceptions = collect();
+        // A payment or payout with no booking belongs to Suites, as everywhere else.
+        $in = function ($query) use ($category) {
+            if ($category === null) {
+                return $query;
+            }
+            $ids = \App\Models\Property::where('category', $category)->pluck('id');
 
-        Receipt::where('verification_status', 'pending')->get()
+            return $query->where(fn ($w) => $w->whereHas('booking', fn ($b) => $b->whereIn('property_id', $ids))
+                ->when($category === \App\Models\Property::SUITES, fn ($o) => $o->orWhereNull('booking_id')));
+        };
+
+        $in(Receipt::where('verification_status', 'pending'))->get()
             ->each(fn ($r) => $exceptions->push(['type' => 'Pending verification', 'detail' => "{$r->reference}, ".Money::format((int) $r->amount_cents), 'href' => '/admin/payments?status=pending']));
-        Receipt::whereNull('booking_id')->whereNull('reverses_receipt_id')->where('verification_status', '!=', 'rejected')->get()
+        $in(Receipt::whereNull('booking_id'))->whereNull('reverses_receipt_id')->where('verification_status', '!=', 'rejected')->get()
             ->each(fn ($r) => $exceptions->push(['type' => 'Unmatched receipt', 'detail' => "{$r->reference}, ".Money::format((int) $r->amount_cents), 'href' => '/admin/payments']));
-        Receipt::whereNull('evidence_path')->whereNull('reverses_receipt_id')->where('method', '!=', 'cash')->where('verification_status', '!=', 'rejected')->get()
+        $in(Receipt::whereNull('evidence_path'))->whereNull('reverses_receipt_id')->where('method', '!=', 'cash')->where('verification_status', '!=', 'rejected')->get()
             ->each(fn ($r) => $exceptions->push(['type' => 'Missing proof', 'detail' => "{$r->reference}, {$r->method}", 'href' => '/admin/payments']));
         foreach ($this->duplicateReferences() as $ref => $n) {
             $exceptions->push(['type' => 'Duplicate reference', 'detail' => "{$ref} appears {$n} times", 'href' => '/admin/payments']);
         }
-        ExternalSettlement::whereNull('actual_payout_cents')->get()
+        $in(ExternalSettlement::whereNull('actual_payout_cents'))->get()
             ->each(fn ($s) => $exceptions->push(['type' => 'Payout not received', 'detail' => "{$s->provider}, expected ".Money::format((int) $s->expected_net_cents), 'href' => '/admin/settlements']));
-        ExternalSettlement::whereNotNull('actual_payout_cents')->whereColumn('actual_payout_cents', '!=', 'expected_net_cents')->get()
+        $in(ExternalSettlement::whereNotNull('actual_payout_cents'))->whereColumn('actual_payout_cents', '!=', 'expected_net_cents')->get()
             ->each(fn ($s) => $exceptions->push(['type' => 'Payout mismatch', 'detail' => $s->provider.', '.Money::format((int) $s->actual_payout_cents - (int) $s->expected_net_cents).' difference', 'href' => '/admin/settlements']));
-        ExternalSettlement::whereNull('booking_id')->get()
+        $in(ExternalSettlement::whereNull('booking_id'))->get()
             ->each(fn ($s) => $exceptions->push(['type' => 'Unlinked payout', 'detail' => "{$s->provider} {$s->payout_reference}", 'href' => '/admin/settlements']));
 
         return $exceptions;

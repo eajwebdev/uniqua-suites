@@ -47,6 +47,9 @@ class BookingService
         if ($rooms->isEmpty()) {
             throw new RoomConflict('Select at least one room.');
         }
+        if ($rooms->pluck('property_id')->unique()->count() > 1) {
+            throw new RoomConflict('All rooms in one booking must be at the same property.');
+        }
         if ($data['check_in'] >= $data['check_out']) {
             throw new RoomConflict('Check-out must be after check-in.');
         }
@@ -67,6 +70,8 @@ class BookingService
                 'check_in' => $data['check_in'],
                 'check_out' => $data['check_out'],
                 'approved_early_time' => $data['approved_early_time'] ?? null,
+                'requested_arrival_time' => $data['pickup_time'] ?? null,
+                'return_time' => $data['return_time'] ?? null,
                 'adults' => $data['adults'],
                 'children' => $data['children'] ?? 0,
                 'guest_count' => $guestCount,
@@ -110,9 +115,7 @@ class BookingService
                 $this->event($fresh, Booking::TENTATIVE, Booking::TENTATIVE, 'Confirmed after hold lapse; availability rechecked');
             }
 
-            // An Airbnb guest paid Airbnb, and the payout arrives later: there is nothing to verify at this point.
             if (Settings::get('finance.require_verification_to_confirm')
-                && $fresh->source?->code !== 'airbnb'
                 && ! $fresh->receipts()->where('verification_status', 'verified')->exists()) {
                 throw new RoomConflict('Policy requires a verified payment before confirmation.');
             }
@@ -148,6 +151,13 @@ class BookingService
             $rooms = Room::whereIn('id', $roomIds)->orderBy('id')->get();
             if ($rooms->isEmpty()) {
                 throw new RoomConflict('Select at least one room.');
+            }
+            if ($rooms->pluck('property_id')->unique()->count() > 1) {
+                throw new RoomConflict('All rooms in one booking must be at the same property. Create a separate booking for another property.');
+            }
+            // A suite stay cannot become a camera rental or the reverse: its money, guest and reports would change business.
+            if ($rooms->first()->isCamera() !== ($fresh->property->category === \App\Models\Property::CAMERAS)) {
+                throw new RoomConflict('A booking cannot be moved to the other business. Cancel it and create a new booking instead.');
             }
             $this->assertCapacity($rooms, $adults + $children);
 
@@ -243,7 +253,8 @@ class BookingService
                 if ($stillIn) {
                     throw new RoomConflict("{$room->name} still has a guest checked in ({$stillIn->reference}). Check them out first.");
                 }
-                if ($room->housekeeping_status !== 'ready' && ! $overrideReadiness) {
+                // Camera units have no cleaning turnover, so there is no readiness to wait for.
+                if (! $room->isCamera() && $room->housekeeping_status !== 'ready' && ! $overrideReadiness) {
                     throw new RoomConflict("{$room->name} is vacant but not ready (housekeeping: {$room->housekeeping_status}). Complete turnover and inspection first.");
                 }
             }
@@ -270,7 +281,9 @@ class BookingService
             $this->event($fresh, Booking::CHECKED_IN, Booking::CHECKED_OUT, $note ?? 'Checked out');
 
             foreach ($rooms as $room) {
-                $this->turnover->onCheckout($fresh, $room);
+                if (! $room->isCamera()) {
+                    $this->turnover->onCheckout($fresh, $room);
+                }
             }
 
             return $fresh;

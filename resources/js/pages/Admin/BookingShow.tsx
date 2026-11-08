@@ -6,13 +6,66 @@ import { dateOnly, dateTime, humanize, peso, time12 } from '@/lib/format';
 import { shrinkPhoto } from '@/lib/images';
 import AdminLayout from '@/layouts/AdminLayout';
 
+const minuteBefore = (time: string) => {
+    const [hour, minute] = time.slice(0, 5).split(':').map(Number);
+    const total = Math.max(0, hour * 60 + minute - 1);
+
+    return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+};
+
+const ID_STATUS = [['none', 'Not checked yet'], ['held', 'Seen or kept at pickup'], ['returned', 'Handed back']];
+const labelOf = (list: string[][], value: string) => list.find(([v]) => v === value)?.[1] ?? value;
+const daysBetween = (from: string, to: string) => Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000);
+
+/** Grab Cam rentals: pickup and return instead of check-in and check-out, and the renter's ID check. Downpayments are agreed in Messenger and recorded as payments. */
+function CameraRental({ booking: b }: { booking: any }) {
+    const { auth } = usePage<any>().props as any;
+    const canManage = (auth.user?.permissions ?? []).includes('bookings.manage');
+    const days = daysBetween(b.check_in, b.check_out);
+
+    return (
+        <Card
+            title="Camera rental"
+            action={canManage ? (
+                <ActionButton action={{
+                    label: 'ID check', url: `/admin/bookings/${b.id}/rental-security`, fields: [
+                        { name: 'id_type', label: 'ID type', type: 'text', help: "For example Driver's license or Passport. For a pickup on someone's behalf, their ID." },
+                        { name: 'id_status', label: 'ID', type: 'select', required: true, options: ID_STATUS.map(([value, label]) => ({ value, label })) },
+                    ],
+                    data: { id_type: b.id_type ?? '', id_status: b.id_status },
+                }} />
+            ) : undefined}
+        >
+            <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+                <Row label="Customer"><Link href={`/admin/guests/${b.guest.id}`} className="underline">{b.guest.full_name}</Link></Row>
+                <Row label="Contact">{[b.guest.phone, b.guest.email, b.guest.messenger_handle].filter(Boolean).join(' · ') || '—'}</Row>
+                <Row label="Camera">{b.rooms.map((r: any) => `${r.name} (${r.unit})`).join(', ')}</Row>
+                <Row label="Rental">{days} day{days === 1 ? '' : 's'}</Row>
+                <Row label="Pickup">{dateOnly(b.check_in)}{b.pickup_time ? `, ${time12(b.pickup_time)}` : ''}</Row>
+                <Row label="Return">{dateOnly(b.check_out)}{b.return_time ? `, ${time12(b.return_time)}` : ''}</Row>
+                <Row label="ID">{labelOf(ID_STATUS, b.id_status)}{b.id_type ? ` · ${b.id_type}` : ''}</Row>
+                <Row label="Booking source">{b.source}{b.source_reference ? ` · ${b.source_reference}` : ''}</Row>
+                <Row label="Picked up">{dateTime(b.actual_check_in_at)}</Row>
+                <Row label="Returned">{dateTime(b.actual_check_out_at)}</Row>
+            </dl>
+            {b.special_requests && <p className="mt-3 rounded-md bg-beige px-3 py-2 text-sm"><strong>Requests:</strong> {b.special_requests}</p>}
+            {b.internal_notes && <p className="mt-2 text-sm text-muted"><strong>Internal:</strong> {b.internal_notes}</p>}
+        </Card>
+    );
+}
+
 /** Changing a stay uses the same room picker as a new booking. The booking's own dates never count against it. */
-function ChangeStay({ booking: b, rooms, url }: { booking: any; rooms: any[]; url: string }) {
+function ChangeStay({ booking: b, rooms, url, today, standardCheckIn }: { booking: any; rooms: any[]; url: string; today: string; standardCheckIn: string }) {
     const [open, setOpen] = useState(false);
     const form = useForm<any>({ check_in: b.check_in, check_out: b.check_out, room_ids: b.rooms.map((r: any) => r.id), adults: b.adults, children: b.children, approved_early_time: b.approved_early_time ?? '', reason: '' });
     const e = form.errors as any;
     const availability = useRoomAvailability(open ? form.data.check_in : '', open ? form.data.check_out : '', b.id);
-    const picker = rooms.map((r: any) => ({ id: r.id, label: `${r.name} (${r.unit_code})`, max: r.max_guests ?? 99 }));
+    const picker = rooms.map((r: any) => ({ id: r.id, label: `${r.name} (${r.unit_code})`, max: r.max_guests ?? 0 }));
+    const capacity = picker.filter((r: any) => form.data.room_ids.includes(r.id)).reduce((sum: number, r: any) => sum + Number(r.max || 0), 0);
+    const party = Number(form.data.adults || 0) + Number(form.data.children || 0);
+    const capacityValid = capacity > 0 && party <= capacity;
+    const earlyTimeValid = !form.data.approved_early_time || form.data.approved_early_time < standardCheckIn.slice(0, 5);
+    const canSave = availability.state === 'ready' && form.data.room_ids.length > 0 && capacityValid && earlyTimeValid && String(form.data.reason).trim().length > 0 && !form.processing;
 
     return (
         <>
@@ -27,19 +80,21 @@ function ChangeStay({ booking: b, rooms, url }: { booking: any; rooms: any[]; ur
                         }}
                     >
                         <div className="grid gap-3 sm:grid-cols-2">
-                            <Field label="Check-in" error={e.check_in}><Input type="date" value={form.data.check_in} onChange={(ev) => { const value = ev.target.value; form.setData((d: any) => ({ ...d, check_in: value, check_out: value && d.check_out <= value ? nextDay(value) : d.check_out })); }} /></Field>
+                            <Field label="Check-in" error={e.check_in}><Input type="date" min={b.status === 'checked_in' ? undefined : today} value={form.data.check_in} onChange={(ev) => { const value = ev.target.value; form.setData((d: any) => ({ ...d, check_in: value, check_out: value && d.check_out <= value ? nextDay(value) : d.check_out })); }} /></Field>
                             <Field label="Check-out" error={e.check_out}><Input type="date" min={form.data.check_in ? nextDay(form.data.check_in) : undefined} value={form.data.check_out} onChange={(ev) => form.setData('check_out', ev.target.value)} /></Field>
                         </div>
                         <RoomPicker rooms={picker} availability={availability} value={form.data.room_ids} onChange={(ids) => form.setData('room_ids', ids)} error={e.room_ids} />
                         <div className="grid gap-3 sm:grid-cols-3">
-                            <Field label="Adults" error={e.adults}><Input type="number" min={1} value={form.data.adults} onChange={(ev) => form.setData('adults', ev.target.value)} /></Field>
-                            <Field label="Children" error={e.children}><Input type="number" min={0} value={form.data.children} onChange={(ev) => form.setData('children', ev.target.value)} /></Field>
-                            <Field label="Early check-in" error={e.approved_early_time}><Input type="time" value={form.data.approved_early_time} onChange={(ev) => form.setData('approved_early_time', ev.target.value)} /></Field>
+                            <Field label="Adults" error={e.adults}><Input type="number" min={1} max={30} step={1} value={form.data.adults} onChange={(ev) => form.setData('adults', ev.target.value)} /></Field>
+                            <Field label="Children" error={e.children}><Input type="number" min={0} max={30} step={1} value={form.data.children} onChange={(ev) => form.setData('children', ev.target.value)} /></Field>
+                            <Field label="Approved early check-in" error={e.approved_early_time} help={`Optional. Must be before the standard ${time12(standardCheckIn)} check-in.`}><Input type="time" max={minuteBefore(standardCheckIn)} value={form.data.approved_early_time} onChange={(ev) => form.setData('approved_early_time', ev.target.value)} /></Field>
                         </div>
+                        {!capacityValid && form.data.room_ids.length > 0 && <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">The selected room{form.data.room_ids.length === 1 ? '' : 's'} hold {capacity} guest{capacity === 1 ? '' : 's'}, but the party has {party}. Select another room or correct the guest count.</p>}
+                        {!earlyTimeValid && <p role="alert" className="text-sm font-medium text-red-800">Early check-in must be before {time12(standardCheckIn)}.</p>}
                         <Field label="Reason" required error={e.reason}><Input required value={form.data.reason} onChange={(ev) => form.setData('reason', ev.target.value)} /></Field>
                         <div className="flex justify-end gap-2 pt-1">
                             <Button onClick={() => setOpen(false)}>Cancel</Button>
-                            <Button type="submit" variant="primary" disabled={availability.state !== 'ready' || form.data.room_ids.length === 0 || form.processing}>Save changes</Button>
+                            <Button type="submit" variant="primary" disabled={!canSave}>Save changes</Button>
                         </div>
                     </form>
                 </Modal>
@@ -144,18 +199,19 @@ function RecordPayment({ booking: b, balance, downpaymentPercent, nowLocal, onCl
 }
 
 /** A guest can always leave. Leaving with money owed is allowed, but it is never silent: it needs a reason, which stays on the booking. */
-function CheckOut({ url, checkout, onRecordPayment }: { url: string; checkout: any; onRecordPayment?: () => void }) {
+function CheckOut({ url, checkout, onRecordPayment, camera }: { url: string; checkout: any; onRecordPayment?: () => void; camera?: boolean }) {
     const [open, setOpen] = useState(false);
+    const label = camera ? 'Mark returned' : 'Check out';
     const form = useForm({ unpaid_reason: '' });
     const e = form.errors as any;
 
     if (!checkout.unpaid) {
-        return <ActionButton small={false} action={{ label: 'Check out', url: `${url}/check-out`, variant: 'primary', confirm: 'Check out? This marks the room dirty and creates turnover work.' }} />;
+        return <ActionButton small={false} action={{ label, url: `${url}/check-out`, variant: 'primary', confirm: camera ? 'Mark this camera as returned? Check the camera and its accessories first.' : 'Check out? This marks the room dirty and creates turnover work.' }} />;
     }
 
     return (
         <>
-            <Button variant="primary" onClick={() => setOpen(true)}>Check out</Button>
+            <Button variant="primary" onClick={() => setOpen(true)}>{label}</Button>
             {open && (
                 <Modal open title="Check out with an unpaid balance?" onClose={() => setOpen(false)}>
                     <form className="space-y-3" onSubmit={(ev) => { ev.preventDefault(); form.post(`${url}/check-out`, { preserveScroll: true, onSuccess: () => setOpen(false) }); }}>
@@ -205,7 +261,7 @@ function ReceiptRow({ receipt: r, can }: { receipt: any; can: (p: string) => boo
     );
 }
 
-export default function BookingShow({ booking: b, charges, balance, receipts, checkout, nowLocal, downpaymentPercent, settlements, refunds, events, snapshots, parking, messages, rooms }: any) {
+export default function BookingShow({ booking: b, charges, balance, receipts, checkout, nowLocal, today, standardCheckIn, downpaymentPercent, settlements, refunds, events, snapshots, parking, messages, rooms }: any) {
     const [paying, setPaying] = useState(false);
     const perms: string[] = (usePage<any>().props as any).auth.user.permissions;
     const can = (p: string) => perms.includes(p);
@@ -214,7 +270,8 @@ export default function BookingShow({ booking: b, charges, balance, receipts, ch
     let amendable = false;
 
     const moneyFields: FieldDef[] = [
-        { name: 'parking', label: 'Parking (PHP)', type: 'money' },
+        // Cameras have no parking; a discount still applies.
+        ...(b.is_camera ? [] : [{ name: 'parking', label: 'Parking (PHP)', type: 'money' } as FieldDef]),
         ...(can('bookings.discount') ? ([
             { name: 'discount', label: 'Authorized discount (PHP)', type: 'money' },
             { name: 'discount_reason', label: 'Discount reason', type: 'text' },
@@ -234,7 +291,7 @@ export default function BookingShow({ booking: b, charges, balance, receipts, ch
                 { name: 'override', label: 'Override room readiness', type: 'checkbox' },
                 { name: 'override_note', label: 'Reason for override', type: 'text', help: 'Required when overriding.' },
             ] : [];
-            actions.push({ label: 'Check in', url: `${url}/check-in`, variant: 'primary', fields: fields.length ? fields : undefined });
+            actions.push({ label: b.is_camera ? 'Mark picked up' : 'Check in', url: `${url}/check-in`, variant: 'primary', fields: fields.length ? fields : undefined });
             actions.push({ label: 'No-show', url: `${url}/no-show`, variant: 'danger', confirm: 'Mark this booking as a no-show? The room dates will be released.' });
         }
         if (['inquiry', 'tentative', 'confirmed', 'checked_in'].includes(b.status)) {
@@ -251,16 +308,17 @@ export default function BookingShow({ booking: b, charges, balance, receipts, ch
                 <StatusChip value={b.status} />
                 {b.status === 'tentative' && b.hold_expires_at && <span className="text-sm text-muted">Hold until {dateTime(b.hold_expires_at)}</span>}
                 <div className="ml-auto flex flex-wrap gap-2">
-                    {amendable && <ChangeStay booking={b} rooms={rooms} url={url} />}
+                    {amendable && <ChangeStay booking={b} rooms={rooms} url={url} today={today} standardCheckIn={standardCheckIn} />}
                 {actions.map((a) => <ActionButton key={a.label} action={a} small={false} />)}
-                    {can('bookings.manage') && b.status === 'checked_in' && <CheckOut url={url} checkout={checkout} onRecordPayment={can('payments.record') && balance ? () => setPaying(true) : undefined} />}
+                    {can('bookings.manage') && b.status === 'checked_in' && <CheckOut camera={b.is_camera} url={url} checkout={checkout} onRecordPayment={can('payments.record') && balance ? () => setPaying(true) : undefined} />}
                     {can('quotes.manage') && <Link className={buttonClass('secondary')} href={`/admin/quotes/create?room_id=${b.rooms[0]?.id ?? ''}&check_in=${b.check_in}&check_out=${b.check_out}&guests=${b.guest_count}&booking_id=${b.id}`}>New quote</Link>}
                 </div>
             </div>
 
             <div className="grid gap-4 lg:grid-cols-3">
                 <div className="space-y-4 lg:col-span-2">
-                    <Card title="Stay">
+                    {b.is_camera ? <CameraRental booking={b} /> : null}
+                    <Card title="Stay" className={b.is_camera ? 'hidden' : undefined}>
                         <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
                             <Row label="Guest"><Link href={`/admin/guests/${b.guest.id}`} className="underline">{b.guest.full_name}</Link></Row>
                             <Row label="Contact">{[b.guest.phone, b.guest.email, b.guest.messenger_handle].filter(Boolean).join(' · ') || '—'}</Row>
