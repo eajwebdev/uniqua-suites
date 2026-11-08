@@ -8,9 +8,9 @@ use Tests\DomainTestCase;
 
 class PasswordPolicyTest extends DomainTestCase
 {
-    private function change(User $user, string $new, string $current = 'old-password-123')
+    private function change(User $user, string $new)
     {
-        return $this->actingAs($user)->post('/admin/account/password', ['current_password' => $current, 'password' => $new, 'password_confirmation' => $new]);
+        return $this->actingAs($user)->post('/admin/account/password', ['password' => $new, 'password_confirmation' => $new]);
     }
 
     private function user(): User
@@ -38,16 +38,25 @@ class PasswordPolicyTest extends DomainTestCase
         $this->assertTrue(password_verify('Mango-river-42', $user->fresh()->password));
     }
 
-    public function test_a_wrong_current_password_is_refused_and_repeated_tries_are_slowed(): void
+    public function test_no_current_password_is_needed_and_repeated_tries_are_slowed(): void
     {
         $user = $this->user();
+        $user->update(['password' => \Illuminate\Support\Str::random(40)]); // like a demo account: nobody knows it
 
-        $this->change($user, 'Mango-river-42', 'not-it')->assertSessionHasErrors('current_password');
+        $this->change($user, 'Mango-river-42')->assertSessionHasNoErrors();
+        $this->assertTrue(password_verify('Mango-river-42', $user->fresh()->password));
+
         for ($i = 0; $i < 5; $i++) {
-            $this->change($user, 'Mango-river-42', 'not-it');
+            $this->change($user, 'abc');
         }
-        $this->change($user, 'Mango-river-42')->assertStatus(429);
-        $this->assertTrue(password_verify('old-password-123', $user->fresh()->password));
+        $this->change($user, 'Kiwi-forest-77')->assertStatus(429);
+        $this->assertTrue(password_verify('Mango-river-42', $user->fresh()->password));
+    }
+
+    public function test_signed_out_visitors_cannot_change_a_password(): void
+    {
+        auth()->logout();
+        $this->post('/admin/account/password', ['password' => 'Mango-river-42', 'password_confirmation' => 'Mango-river-42'])->assertRedirect('/login');
     }
 
     public function test_a_reset_link_follows_the_same_rule(): void

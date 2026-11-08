@@ -142,17 +142,16 @@ function initials(name: string) {
 
 /** Signs out every other device on success; the server checks the same rules as the list below. */
 function PasswordCard({ user }: { user: any }) {
-    const form = useForm({ current_password: '', password: '', password_confirmation: '' });
+    const form = useForm({ password: '', password_confirmation: '' });
     const e = form.errors as any;
     const [open, setOpen] = useState(!!user.must_change_password);
-    const { ready } = passwordChecks(form.data.password, { current: form.data.current_password, confirm: form.data.password_confirmation });
+    const { ready } = passwordChecks(form.data.password, { confirm: form.data.password_confirmation });
 
     function submit(ev: FormEvent) {
         ev.preventDefault();
         form.post('/admin/account/password', {
             preserveScroll: true,
             onSuccess: () => { form.reset(); setOpen(false); },
-            onError: () => form.reset('current_password'),
         });
     }
 
@@ -181,18 +180,15 @@ function PasswordCard({ user }: { user: any }) {
 
                 {open && (
                     <form onSubmit={submit} className="space-y-3 border-t border-line/80 px-4 py-4">
-                        <Field label="Current password" error={e.current_password}>
-                            <PasswordInput autoComplete="current-password" required autoFocus value={form.data.current_password} onChange={(ev) => form.setData('current_password', ev.target.value)} />
-                        </Field>
                         <Field label="New password" error={e.password}>
-                            <PasswordInput autoComplete="new-password" required maxLength={72} value={form.data.password} onChange={(ev) => form.setData('password', ev.target.value)} />
+                            <PasswordInput autoComplete="new-password" required autoFocus maxLength={72} value={form.data.password} onChange={(ev) => form.setData('password', ev.target.value)} />
                         </Field>
                         <Field label="Confirm new password" error={e.password_confirmation}>
                             <PasswordInput autoComplete="new-password" required maxLength={72} value={form.data.password_confirmation} onChange={(ev) => form.setData('password_confirmation', ev.target.value)} />
                         </Field>
-                        <PasswordMeter password={form.data.password} current={form.data.current_password} confirm={form.data.password_confirmation} />
+                        <PasswordMeter password={form.data.password} confirm={form.data.password_confirmation} />
                         <div className="flex flex-wrap items-center gap-2 pt-1">
-                            <Button type="submit" variant="primary" disabled={form.processing || !ready || !form.data.current_password}>
+                            <Button type="submit" variant="primary" disabled={form.processing || !ready}>
                                 <ShieldCheck size={16} aria-hidden /> {form.processing ? 'Saving…' : 'Update password'}
                             </Button>
                             {!user.must_change_password && <Button variant="ghost" onClick={() => { form.reset(); form.clearErrors(); setOpen(false); }}>Cancel</Button>}

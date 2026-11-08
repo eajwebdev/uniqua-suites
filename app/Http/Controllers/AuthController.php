@@ -127,7 +127,12 @@ class AuthController extends Controller
 
     public function updatePassword(Request $request)
     {
-        $data = $request->validate(['current_password' => 'required|current_password', 'password' => ['required', 'confirmed', 'different:current_password', ...PasswordPolicy::rule()]], ['password.different' => 'Choose a new password, not the one you use now.']);
+        // Signed in is enough (owner decision): demo and invited accounts may not know the password they were given.
+        $data = $request->validate(['password' => ['required', 'confirmed', ...PasswordPolicy::rule(), function (string $attribute, mixed $value, \Closure $fail) use ($request) {
+            if (Hash::check((string) $value, $request->user()->password)) {
+                $fail('Choose a new password, not the one you use now.');
+            }
+        }]]);
         $request->user()->update(['password' => $data['password'], 'must_change_password' => false]);
         Auth::logoutOtherDevices($data['password']);
         Audit::log('auth.password_changed');
