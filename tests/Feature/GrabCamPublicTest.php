@@ -121,4 +121,21 @@ class GrabCamPublicTest extends DomainTestCase
         $seeder->run();
         $this->assertSame(1, $nano->images()->count());
     }
+
+    public function test_seeding_finishes_without_photos_when_the_server_cannot_read_the_rate_card(): void
+    {
+        // As on a shared host whose image library cannot open the file: the seeder must not stop a deploy.
+        \Illuminate\Support\Facades\Storage::fake('public');
+        file_put_contents($broken = sys_get_temp_dir().'/broken-rate-card-'.uniqid().'.png', 'not an image');
+        $seeder = new \Database\Seeders\GrabCamSeeder;
+        $seeder->withPhotos = true;
+        $seeder->source = $broken;
+
+        $seeder->run();
+        unlink($broken);
+
+        $this->assertSame(10, \App\Models\Room::cameras()->count());
+        $this->assertSame(0, $this->room('dji-nano')->images()->count());
+        $this->assertTrue((bool) collect($this->models()['dji-nano']['images'])->first()['default'], 'The default picture shows instead.');
+    }
 }

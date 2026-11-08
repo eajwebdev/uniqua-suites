@@ -7,6 +7,7 @@ use App\Models\Property;
 use App\Models\RentalRateTier;
 use App\Models\Room;
 use App\Models\RoomType;
+use App\Support\SeedImage;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -129,16 +130,18 @@ class GrabCamSeeder extends Seeder
     /** The camera's picture cut from the rate card and enlarged 2x. A unit that already has a photo keeps it. */
     private function seedPhoto(Room $room, array $crop): void
     {
-        if ($room->images()->exists() || ! is_file($this->source) || ! extension_loaded('gd')) {
+        if ($room->images()->exists()) {
             return;
         }
-        [$x, $y, $width, $height] = $crop;
-        $cut = imagecrop(imagecreatefrompng($this->source), ['x' => $x, 'y' => $y, 'width' => $width, 'height' => $height]);
-        $image = imagescale($cut, $width * 2, $height * 2, IMG_BICUBIC);
-        ob_start();
-        imagejpeg($image, null, 90);
+        // Any host: no image library or an unreadable file just leaves the default picture.
+        $jpeg = SeedImage::crop($this->source, $crop, 2.0);
+        if ($jpeg === null) {
+            $this->command?->warn("  {$room->name}: photo skipped (the rate card image could not be read on this server). Upload one under Cameras.");
+
+            return;
+        }
         $path = self::SEED_FOLDER."/{$room->slug}.jpg";
-        Storage::disk('public')->put($path, ob_get_clean());
+        Storage::disk('public')->put($path, $jpeg);
         $room->images()->create(['path' => $path, 'alt_text' => "{$room->name}, from the Grab Cam rate card", 'position' => 0]);
     }
 }

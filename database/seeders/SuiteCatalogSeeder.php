@@ -6,6 +6,7 @@ use App\Models\Amenity;
 use App\Models\OwnerDecision;
 use App\Models\RateRule;
 use App\Models\Room;
+use App\Support\SeedImage;
 use App\Support\Settings;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Storage;
@@ -145,15 +146,18 @@ class SuiteCatalogSeeder extends Seeder
     private function flyerPhoto(Room $room): array
     {
         [$file, [$x, $y, $width, $height], $label] = self::FLYER_PHOTOS[$room->slug] ?? [null, [0, 0, 0, 0], null];
-        if (! $file || ! is_file("{$this->source}/{$file}") || ! extension_loaded('gd')) {
+        if (! $file) {
+            return [];
+        }
+        // Any host: no image library or an unreadable flyer just leaves the room without this photo.
+        $jpeg = SeedImage::crop("{$this->source}/{$file}", [$x, $y, $width, $height], 1.0, 92);
+        if ($jpeg === null) {
+            $this->command?->warn("  {$room->name}: flyer photo skipped (the flyer image could not be read on this server).");
+
             return [];
         }
 
-        $crop = imagecrop(imagecreatefrompng("{$this->source}/{$file}"), ['x' => $x, 'y' => $y, 'width' => $width, 'height' => $height]);
-        ob_start();
-        imagejpeg($crop, null, 92);
-
-        return [['file' => 'flyer-'.Str::slug($label).'.jpg', 'label' => $label, 'bytes' => ob_get_clean()]];
+        return [['file' => 'flyer-'.Str::slug($label).'.jpg', 'label' => $label, 'bytes' => $jpeg]];
     }
 
     /** Keeps the register truthful. These stay pending: reading a flyer is not the owner's sign-off. */
