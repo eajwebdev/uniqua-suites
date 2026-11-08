@@ -127,7 +127,7 @@ class SuiteCatalogSeederTest extends DomainTestCase
         $this->assertSame(1, OwnerDecision::where('key', 'flyer_differences')->count());
     }
 
-    public function test_it_leaves_approved_rooms_and_staff_photos_alone_and_publishes_nothing(): void
+    public function test_it_leaves_approved_rooms_and_staff_photos_alone_and_publishes_only_new_suites(): void
     {
         $this->room('venice')->update(['catalog_status' => 'approved', 'max_guests' => 9]);
         $this->actingAs($this->owner)->post('/admin/rooms/'.$this->room('bali')->id.'/images', ['image' => UploadedFile::fake()->image('real.jpg'), 'alt_text' => 'Real photo'])->assertSessionHasNoErrors();
@@ -137,7 +137,14 @@ class SuiteCatalogSeederTest extends DomainTestCase
         $this->assertSame(9, $this->room('venice')->max_guests);
         $this->assertCount(1, $this->room('venice')->rateRules);
         $this->assertSame(['Real photo'], $this->room('bali')->images->pluck('alt_text')->all());
-        $this->assertSame(0, Room::where('is_published', true)->count());
+        // Venice was already approved (and hidden): left as it is. The eight new suites go live.
+        $this->assertFalse($this->room('venice')->is_published);
+        $this->assertSame(8, Room::where('is_published', true)->where('catalog_status', 'approved')->count());
+
+        // Hiding a suite later is never undone by running the seeder again.
+        $this->room('rio')->update(['is_published' => false]);
+        $this->seedSuites();
+        $this->assertFalse($this->room('rio')->fresh()->is_published);
     }
 
     public function test_an_approved_room_can_still_swap_its_flyer_photo_for_an_hd_pack(): void
@@ -157,9 +164,7 @@ class SuiteCatalogSeederTest extends DomainTestCase
         auth()->logout();
         $amenities = fn () => $this->get('/')->original->getData()['page']['props']['amenities'];
 
-        $this->assertSame([], $amenities());
-
-        Room::query()->update(['is_published' => true, 'catalog_status' => 'approved']);
+        // Seeding publishes every suite, so the shared amenities show at once.
         $this->assertContains('Netflix', $amenities());
         $this->assertNotContains('Gym', $amenities());
 

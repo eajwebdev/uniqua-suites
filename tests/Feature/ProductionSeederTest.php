@@ -36,7 +36,8 @@ class ProductionSeederTest extends TestCase
 
         // Suites wait for the owner's approval; the Grab Cam rate card was supplied by the owner and is live.
         $this->assertSame(9, Room::suites()->count());
-        $this->assertSame(0, Room::suites()->where('is_published', true)->count());
+        $this->assertSame(9, Room::suites()->where('is_published', true)->where('catalog_status', 'approved')->count(), 'Suites go live straight away, like the cameras.');
+        $this->assertCount(9, $this->get('/')->original->getData()['page']['props']['rooms'], 'All nine on the landing page.');
         $this->assertSame(10, Room::cameras()->where('is_published', true)->count());
         $this->assertSame(5, User::count());
         $this->assertTrue(User::where('email', 'owner@uniqasuites.com')->firstOrFail()->hasRole('Owner'));

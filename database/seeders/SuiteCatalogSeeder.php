@@ -16,7 +16,7 @@ use ZipArchive;
 /**
  * Photos, current rates, capacities and amenities from the suite flyers and HD photo packs in
  * database/seeders/suite. Safe to run again: details and rates only change on rooms still "proposed",
- * photos staff uploaded are kept, and no room is published. Contact details on the flyers are
+ * photos staff uploaded are kept, and each suite is published the first time it is filled in. Contact details on the flyers are
  * not imported.
  *   php artisan db:seed --class=SuiteCatalogSeeder
  */
@@ -70,6 +70,9 @@ class SuiteCatalogSeeder extends Seeder
         foreach ($rooms as $room) {
             if ($room->catalog_status === 'proposed') {
                 $this->seedDetails($room);
+                // By owner decision the suites go live straight away, like the cameras. Only a room seeded for
+                // the first time: one staff approved or hid later is never published again by a re-run.
+                $room->update(['catalog_status' => 'approved', 'is_published' => true]);
             }
 
             // Also for approved rooms: an HD pack must still be able to replace a flyer stand-in.
@@ -89,7 +92,7 @@ class SuiteCatalogSeeder extends Seeder
 
         $photos = \App\Models\RoomImage::whereIn('room_id', $rooms->pluck('id'))->count();
         $this->command?->info(sprintf('  Suites: %d filled in, %d photos in total (%d new).', $rooms->count(), $photos, $photos - $photosBefore)
-            .' They stay unpublished until approved under Rooms & Properties.');
+            .' New suites are published on the website straight away.');
     }
 
     private function seedDetails(Room $room): void
@@ -179,7 +182,7 @@ class SuiteCatalogSeeder extends Seeder
     /** Keeps the register truthful. These stay pending: reading a flyer is not the owner's sign-off. */
     private function updateDecisions(array $flyerOnly): void
     {
-        $photos = 'Photos from the HD packs are loaded. Check them before publishing each room.';
+        $photos = 'Photos from the HD packs are loaded. They show on the website straight away.';
         if ($flyerOnly) {
             $photos = 'Photos from the HD packs are loaded, except '.implode(' and ', $flyerOnly).', which only have one low-resolution photo cropped from the flyer. Add their HD packs to database/seeders/suite and run the suite seeder again.';
         }
@@ -190,7 +193,7 @@ class SuiteCatalogSeeder extends Seeder
             'capacity_history' => 'Current capacities now follow the suite flyers (Rio 2 to 4, Venice 3 to 4, Bali 4 to 5, Tokyo 3 to 5). Sales history still shows Tokyo up to 7 and Venice up to 5.',
             'room_photos' => $photos,
             'address_details' => 'Amenities now come from the icons on the suite flyers. Address and map links were not supplied, so only the building names are published.',
-            'source_room_catalog' => 'Names and units come from the room list. Current rates, capacities, floors and amenities come from the suite flyers. Approve each room under Rooms before publishing.',
+            'source_room_catalog' => 'Names and units come from the room list. Current rates, capacities, floors and amenities come from the suite flyers. Each suite is published as soon as it is seeded; hide one under Rooms if needed.',
         ];
         foreach ($details as $key => $detail) {
             OwnerDecision::where('key', $key)->where('status', 'pending')->update(['detail' => $detail]);

@@ -26,7 +26,7 @@ use Spatie\Permission\PermissionRegistrar;
 
 /**
  * Approved-structure seed only: no guest, staff, contact or Wi-Fi data from the workbooks.
- * Rooms are "proposed" and unpublished until the owner approves them.
+ * Suites are filled in from the flyers and published straight away by SuiteCatalogSeeder.
  */
 class DatabaseSeeder extends Seeder
 {
@@ -218,7 +218,7 @@ class DatabaseSeeder extends Seeder
             ['guest_policies', 'Cancellation policy and house rules', 'None were supplied. The public policies page shows them only after you write them under Settings.', 'default_needs_approval'],
             ['ical_future', 'Airbnb iCal import', 'Read-only blocked dates are available once private feed URLs are supplied. No two-way sync is offered.', 'future_optional'],
             ['public_no_prices', 'The public website shows taken dates and each suite’s nightly rate', 'Owner decisions, 4 and 8 November 2026. Guests browse suites, see which dates are taken (by date only) and each suite’s posted weekday and weekend rate. Book Now opens Facebook Messenger with free dates they chose. Staff send the quotation with the final amount, and a booking exists only when staff enter it.', 'source_fact'],
-            ['source_room_catalog', 'Nine rooms from ROOM DETAILS', 'Names, units, capacities and rates come directly from the room list. Approve each room under Rooms before publishing.', 'source_fact'],
+            ['source_room_catalog', 'Nine rooms from ROOM DETAILS', 'Names, units, capacities and rates come directly from the room list. Each suite is published as soon as it is seeded.', 'source_fact'],
         ];
         foreach ($rows as [$key, $title, $detail, $kind]) {
             OwnerDecision::firstOrCreate(['key' => $key], ['title' => $title, 'detail' => $detail, 'kind' => $kind]);
