@@ -18,7 +18,7 @@ class TwoFactorTest extends DomainTestCase
     {
         $this->secret = Totp::generateSecret();
         $user = User::factory()->create(['password' => self::PASSWORD]);
-        $user->assignRole($role);
+        \App\Support\Permissions::apply($user, $role);
         $user->forceFill([
             'two_factor_secret' => $this->secret,
             'two_factor_confirmed_at' => now(),
@@ -176,7 +176,7 @@ class TwoFactorTest extends DomainTestCase
         Settings::set('security.require_two_factor', true);
 
         $owner = User::factory()->create();
-        $owner->assignRole('Owner');
+        \App\Support\Permissions::apply($owner, 'Owner');
         $this->actingAs($owner)->get('/admin/calendar')->assertRedirect('/admin/account');
         $this->get('/admin/account')->assertOk();
 

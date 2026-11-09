@@ -121,6 +121,7 @@ class BookingController extends Controller
             'internal_notes' => 'nullable|string|max:2000',
             'idempotency_key' => 'nullable|string|max:60',
             'then' => 'nullable|in:hold,confirm',
+            'quote_id' => 'nullable|integer|exists:quotes,id',
         ]);
         abort_if(($data['then'] ?? null) === 'confirm' && ! $request->user()->can('bookings.confirm'), 403);
 
@@ -163,7 +164,13 @@ class BookingController extends Controller
                     $data['guest_id'] = Guest::create(['full_name' => $data['guest_name'], 'phone' => $data['guest_phone'] ?? null, 'email' => $data['guest_email'] ?? null, 'messenger_handle' => $data['guest_messenger_handle'] ?? null])->id;
                 }
 
-                return $this->bookings->createInquiry($data);
+                $booking = $this->bookings->createInquiry($data);
+                // A booking made from a quote is linked to it, so the quote no longer offers Create booking.
+                if (! empty($data['quote_id'])) {
+                    \App\Models\Quote::whereKey($data['quote_id'])->whereNull('booking_id')->update(['booking_id' => $booking->id, 'guest_id' => $booking->guest_id]);
+                }
+
+                return $booking;
             });
         } catch (RoomConflict $e) {
             throw ValidationException::withMessages(['room_ids' => $e->getMessage()]);
@@ -228,6 +235,7 @@ class BookingController extends Controller
             ],
             'charges' => $booking->charges()->orderByDesc('id')->get(['id', 'type', 'description', 'quantity', 'amount_cents', 'pricing_version', 'voided_at', 'void_reason']),
             'balance' => $canPay ? $this->finance->balance($booking) : null,
+            'estimate' => $this->bookings->estimate($booking),
             'receipts' => $canPay ? $this->receiptRows($booking) : [],
             'checkout' => $this->checkoutWarning($booking, $canPay),
             'nowLocal' => Local::now()->format('Y-m-d\TH:i'),

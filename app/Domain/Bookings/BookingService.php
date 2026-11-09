@@ -14,6 +14,7 @@ use App\Models\BookingNight;
 use App\Models\BookingRoom;
 use App\Models\BookingStatusEvent;
 use App\Models\PricingSnapshot;
+use App\Models\Quote;
 use App\Models\Room;
 use App\Models\TaxRule;
 use App\Support\Audit;
@@ -459,6 +460,54 @@ class BookingService
             'created_at' => now(),
         ]);
         $booking->update(['pricing_version' => $version, 'total_cents' => $total]);
+    }
+
+    /**
+     * What an unpriced booking (inquiry or hold) will cost, shown but never saved, so it is not counted as money owed.
+     * A booking made from a quote shows that quote while it still describes the stay; otherwise today's rates,
+     * worked out the same way Confirm will. Null once the booking is priced, or when it cannot be priced.
+     *
+     * @return array{source: string, quote?: string, lines: list<array{type: string, description: string, amount_cents: int}>, total_cents: int}|array{error: string}|null
+     */
+    public function estimate(Booking $booking): ?array
+    {
+        if ($booking->pricing_version > 0 || in_array($booking->status, ['cancelled', 'no_show'], true)) {
+            return null;
+        }
+        $rooms = $booking->activeRooms()->with('room')->orderBy('room_id')->get();
+        if ($rooms->isEmpty()) {
+            return null;
+        }
+
+        $quote = Quote::with('items')->where('booking_id', $booking->id)->orderByDesc('id')->first();
+        if ($quote && $rooms->count() === 1 && (int) $quote->room_id === (int) $rooms[0]->room_id
+            && $quote->check_in->toDateString() === $booking->check_in->toDateString() && $quote->check_out->toDateString() === $booking->check_out->toDateString()) {
+            return [
+                'source' => 'quote',
+                'quote' => "{$quote->reference} v{$quote->version}",
+                'lines' => $quote->items->map(fn ($i) => ['type' => $i->type, 'description' => $i->description, 'amount_cents' => (int) $i->amount_cents])->values()->all(),
+                'total_cents' => (int) $quote->total_cents,
+            ];
+        }
+
+        $opts = ['source_id' => $booking->booking_source_id];
+        if ($booking->approved_early_time) {
+            $opts['early_time'] = substr($booking->approved_early_time, 0, 5);
+        }
+        $lines = [];
+        try {
+            foreach ($rooms as $index => $br) {
+                $roomOpts = $index === 0 ? $opts : array_diff_key($opts, ['early_time' => true]);
+                $priced = $this->pricing->quote($br->room, $br->check_in->toDateString(), $br->check_out->toDateString(), max(1, $br->guest_count), $roomOpts);
+                foreach ($priced['lines'] as $line) {
+                    $lines[] = ['type' => $line['type'], 'description' => ($rooms->count() > 1 ? "{$br->room->name}: " : '').$line['description'], 'amount_cents' => (int) $line['amount_cents']];
+                }
+            }
+        } catch (RoomConflict $e) { // includes missing rates and pricing settings
+            return ['error' => 'An estimate cannot be worked out yet: '.$e->getMessage()];
+        }
+
+        return ['source' => 'rates', 'lines' => $lines, 'total_cents' => array_sum(array_column($lines, 'amount_cents'))];
     }
 
     /** Recalculates the stored total after a non-engine charge is added or voided. */

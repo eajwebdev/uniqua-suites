@@ -50,7 +50,8 @@ class PricingService
             ];
         }
 
-        $extra = max(0, $guests - $room->included_guests);
+        // Airbnb charges the guest its own fixed price for the whole party (up to the room maximum), so no extra-guest fee.
+        $extra = $this->isAirbnb($opts['source_id'] ?? null) ? 0 : max(0, $guests - $room->included_guests);
         if ($extra > 0) {
             $unit = Settings::get('pricing.extra_guest_unit');
             $fee = (int) Settings::get('pricing.extra_guest_cents');
@@ -219,6 +220,11 @@ class PricingService
             ->where(fn ($q) => $q->whereNull('effective_to')->orWhere('effective_to', '>=', $date))
             ->orderByDesc('effective_from')
             ->first();
+    }
+
+    private function isAirbnb(mixed $sourceId): bool
+    {
+        return $sourceId && \App\Models\BookingSource::whereKey($sourceId)->value('code') === 'airbnb';
     }
 
     /** A channel-specific override beats a general one. */

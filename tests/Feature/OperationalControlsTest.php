@@ -19,7 +19,7 @@ class OperationalControlsTest extends DomainTestCase
     private function secondOwner(): User
     {
         $user = User::factory()->create();
-        $user->assignRole('Owner');
+        \App\Support\Permissions::apply($user, 'Owner');
 
         return $user;
     }

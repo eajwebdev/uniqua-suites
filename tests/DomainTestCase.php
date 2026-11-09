@@ -56,7 +56,7 @@ abstract class DomainTestCase extends TestCase
         app(PermissionRegistrar::class)->forgetCachedPermissions();
         Settings::set('pricing.weekend_days', [6, 7]);
         $this->owner = User::factory()->create();
-        $this->owner->assignRole('Owner');
+        \App\Support\Permissions::apply($this->owner, 'Owner'); // an Owner's pages are ticked, starting with all of them
         $this->actingAs($this->owner);
         $this->bookings = app(BookingService::class);
     }

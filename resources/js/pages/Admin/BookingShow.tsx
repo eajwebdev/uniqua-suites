@@ -137,7 +137,7 @@ function RecordPayment({ booking: b, balance, downpaymentPercent, nowLocal, onCl
         <Modal open title="Record a payment" onClose={onClose}>
             <form className="space-y-4" onSubmit={(ev) => { ev.preventDefault(); form.post('/admin/receipts', { forceFormData: true, preserveScroll: true, onSuccess: onClose }); }}>
                 <dl className="grid grid-cols-3 gap-2 rounded-lg bg-ivory p-3 text-sm">
-                    <div><dt className="text-xs text-muted">Total charges</dt><dd className="font-semibold tabular-nums">{peso(balance.charges_cents)}</dd></div>
+                    <div><dt className="text-xs text-muted">{balance.estimated ? 'Estimated charges' : 'Total charges'}</dt><dd className="font-semibold tabular-nums">{peso(balance.charges_cents)}</dd></div>
                     <div><dt className="text-xs text-muted">Waiting to verify</dt><dd className="font-semibold tabular-nums">{peso(balance.pending_cents)}</dd></div>
                     <div><dt className="text-xs text-muted">Left to pay</dt><dd className="font-semibold tabular-nums">{peso(remaining)}</dd></div>
                 </dl>
@@ -154,6 +154,7 @@ function RecordPayment({ booking: b, balance, downpaymentPercent, nowLocal, onCl
                     )}
                     {priced && cents > 0 && !over && <p className="mt-1.5 text-xs text-muted">After this payment is verified, {cents === remaining ? 'nothing is left to pay' : `${peso(remaining - cents)} is left to pay`}.</p>}
                     {!priced && <p className="mt-1.5 text-xs text-muted">This booking is not priced yet, so there is no balance to compare with.</p>}
+                    {balance.estimated && <p className="mt-1.5 text-xs text-muted">Amounts are an estimate until the booking is confirmed.</p>}
                     {over && !e.amount && <p className="mt-1.5 text-xs font-medium text-amber-900">This is {peso(cents - remaining)} more than what is left to pay.</p>}
                 </div>
 
@@ -261,8 +262,37 @@ function ReceiptRow({ receipt: r, can }: { receipt: any; can: (p: string) => boo
     );
 }
 
-export default function BookingShow({ booking: b, charges, balance, receipts, checkout, nowLocal, today, standardCheckIn, downpaymentPercent, settlements, refunds, events, snapshots, parking, messages, rooms }: any) {
+/** Until the booking is priced, its estimate stands in for the charges, marked as an estimate. */
+function withEstimate(balance: any, estimate: any) {
+    if (!balance || balance.charges_cents > 0 || !estimate?.total_cents) return balance;
+    return { ...balance, estimated: true, charges_cents: estimate.total_cents, balance_cents: balance.balance_cents + estimate.total_cents, status: 'Estimate' };
+}
+
+function EstimateTable({ estimate }: { estimate: any }) {
+    return (
+        <>
+            <table className="w-full text-sm">
+                <tbody>
+                    {estimate.lines.map((l: any, i: number) => (
+                        <tr key={i} className="border-b border-line last:border-0">
+                            <td className="py-1.5 pr-3">{l.description}</td>
+                            <td className="py-1.5 pr-3 text-xs text-muted">{humanize(l.type)}</td>
+                            <td className="py-1.5 text-right tabular-nums">{peso(l.amount_cents)}</td>
+                        </tr>
+                    ))}
+                    <tr className="border-t border-line font-semibold"><td className="py-2" colSpan={2}>Estimated total</td><td className="py-2 text-right tabular-nums">{peso(estimate.total_cents)}</td></tr>
+                </tbody>
+            </table>
+            <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-950">
+                {estimate.source === 'quote' ? `As quoted to the guest (${estimate.quote}).` : "Worked out at today's rates."} Nothing is owed yet: the price is locked when the booking is confirmed.
+            </p>
+        </>
+    );
+}
+
+export default function BookingShow({ booking: b, charges, balance: savedBalance, estimate, receipts, checkout, nowLocal, today, standardCheckIn, downpaymentPercent, settlements, refunds, events, snapshots, parking, messages, rooms }: any) {
     const [paying, setPaying] = useState(false);
+    const balance = withEstimate(savedBalance, estimate);
     const perms: string[] = (usePage<any>().props as any).auth.user.permissions;
     const can = (p: string) => perms.includes(p);
     const url = `/admin/bookings/${b.id}`;
@@ -338,7 +368,7 @@ export default function BookingShow({ booking: b, charges, balance, receipts, ch
                     </Card>
 
                     <Card
-                        title={`Charges (price version ${b.pricing_version || 'not set'})`}
+                        title={b.pricing_version ? `Charges (price version ${b.pricing_version})` : 'Charges (estimate)'}
                         action={can('bookings.manage') ? (
                             <ActionButton action={{
                                 label: 'Add charge', url: `${url}/charges`, confirm: 'This changes what the guest owes. Continue?', fields: [
@@ -352,7 +382,9 @@ export default function BookingShow({ booking: b, charges, balance, receipts, ch
                             }} />
                         ) : undefined}
                     >
-                        {charges.length === 0 ? <Empty>Priced when the booking is confirmed. Use New quote for an estimate.</Empty> : (
+                        {charges.length === 0 && estimate?.lines ? <EstimateTable estimate={estimate} /> : charges.length === 0 ? (
+                            <Empty>{estimate?.error ?? 'Priced when the booking is confirmed. Use New quote for an estimate.'}</Empty>
+                        ) : (
                             <div className="overflow-x-auto">
                                 <table className="w-full text-sm">
                                     <tbody>
@@ -408,11 +440,12 @@ export default function BookingShow({ booking: b, charges, balance, receipts, ch
                     {balance ? (
                         <Card title="Balance" action={<StatusChip value={balance.status === 'Paid' ? 'paid' : 'pending'} label={balance.status} />}>
                             <dl className="space-y-1 text-sm">
-                                <Line label="Charges" value={balance.charges_cents} />
+                                <Line label={balance.estimated ? 'Charges (estimate)' : 'Charges'} value={balance.charges_cents} />
                                 <Line label="Verified receipts" value={-balance.verified_cents} />
                                 {balance.settled_gross_cents > 0 && <Line label="Settled via channel (gross)" value={-balance.settled_gross_cents} />}
                                 {balance.refunded_cents > 0 && <Line label="Refunds paid out" value={balance.refunded_cents} />}
-                                <div className="flex justify-between border-t border-line pt-1 font-semibold"><dt>Balance due</dt><dd className="tabular-nums">{peso(balance.balance_cents)}</dd></div>
+                                <div className="flex justify-between border-t border-line pt-1 font-semibold"><dt>{balance.estimated ? 'Balance due (estimate)' : 'Balance due'}</dt><dd className="tabular-nums">{peso(balance.balance_cents)}</dd></div>
+                                {balance.estimated && downpaymentPercent && balance.verified_cents === 0 && <Line label={`${downpaymentPercent}% downpayment`} value={Math.round((balance.charges_cents * downpaymentPercent) / 100)} />}
                                 {balance.pending_cents > 0 && <p className="text-xs text-amber-900">{peso(balance.pending_cents)} awaiting verification is not counted yet.</p>}
                             </dl>
                         </Card>

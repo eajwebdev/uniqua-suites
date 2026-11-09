@@ -18,7 +18,7 @@ function parking(q: any) {
 function updateLink(q: any): string {
     const amount = (type: string) => q.items.filter((i: any) => i.type === type).reduce((sum: number, i: any) => sum + Number(i.amount_cents), 0);
     const params = Object.entries({
-        reference: q.reference, room_id: q.room_id, check_in: q.check_in, check_out: q.check_out, guests: q.guest_count, guest_name: q.guest_name,
+        reference: q.reference, room_id: q.room_id, check_in: q.check_in, check_out: q.check_out, guests: q.guest_count, guest_name: q.guest_name, guest_id: q.guest_id,
         source_id: q.source_id, early_time: q.early_time, ...parking(q), discount: pesos(amount('discount')),
     }).filter(([, v]) => v !== null && v !== undefined && v !== '');
 
@@ -34,7 +34,7 @@ export default function QuoteShow({ quote: q, history, copyText }: any) {
                     <CopyButton text={copyText} label="Copy for Messenger" small={false} />
                     <Link href={updateLink(q)} className={buttonClass('secondary')}><Pencil size={15} aria-hidden /> Update quote</Link>
                     <Button onClick={() => window.print()}><Printer size={15} /> Print</Button>
-                    {!q.booking_id && <button type="button" onClick={() => openNewBooking({ room_id: q.room_id, check_in: q.check_in, check_out: q.check_out })} className={buttonClass('secondary')}>Create booking</button>}
+                    {!q.booking_id && <button type="button" onClick={() => openNewBooking({ room_id: q.room_id, check_in: q.check_in, check_out: q.check_out, guest: q.guest, guest_name: q.guest_name, adults: q.guest_count, source_id: q.source_id, early_time: q.early_time, quote_id: q.id, note: `From quote ${q.reference} v${q.version}, ${peso(q.total_cents)}.` })} className={buttonClass('secondary')}>Create booking</button>}
                     <a href={`/admin/quotes/${q.id}/pdf`} className={buttonClass('primary')}><Download size={15} /> PDF</a>
                 </>
             }

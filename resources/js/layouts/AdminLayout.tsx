@@ -1,6 +1,6 @@
 import { Head, Link, router, usePage } from '@inertiajs/react';
 import {
-    Bell, BookOpen, Building2, CalendarDays, Car, ChevronsLeft, ChevronsRight, AlertTriangle, ClipboardList, Clock, Coins, CreditCard, HandCoins, LayoutDashboard, Lock, LogOut, Menu, MessageSquareText, Package, Plus,
+    Bell, BookOpen, Building2, CalendarDays, Car, ChevronsLeft, ChevronsRight, AlertTriangle, ClipboardList, Clock, Coins, CreditCard, HandCoins, LayoutDashboard, Lock, LogOut, Menu, MessageCircleQuestion, MessageSquareText, Package, Plus,
     ScrollText, Settings, Sparkles, Tags, TableProperties, Users, UsersRound, Wallet, Wrench, BarChart3, X,
 } from 'lucide-react';
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
@@ -39,6 +39,7 @@ const NAV_GROUPS: { label: string; items: { label: string; href: string; icon: a
             { label: 'Booking Calendar', href: '/admin/calendar', icon: CalendarDays, any: ['bookings.view'] },
             { label: 'Reservations', href: '/admin/bookings', icon: ClipboardList, any: ['bookings.view'] },
             { label: 'Quotes & Messages', href: '/admin/quotes', icon: MessageSquareText, any: ['quotes.manage'] },
+            { label: 'FAQ', href: '/admin/faqs', icon: MessageCircleQuestion, any: ['quotes.manage'] },
             { label: 'Guests', href: '/admin/guests', icon: Users, any: ['guests.view'] },
         ],
     },

@@ -14,13 +14,13 @@ const minuteBefore = (time: string) => {
     return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 };
 
-export default function QuoteForm({ rooms, sources, filters, preview, vacancy, bookingId, parkingRate, today, standardCheckIn }: any) {
+export default function QuoteForm({ rooms, sources, guests: guestList, filters, preview, vacancy, bookingId, parkingRate, today, standardCheckIn }: any) {
     const permissions: string[] = (usePage<any>().props as any).auth.user?.permissions ?? [];
     const canDiscount = permissions.includes('bookings.discount');
     const form = useForm<any>({
         room_id: filters.room_id ?? '', check_in: filters.check_in ?? '', check_out: filters.check_out ?? '', guests: filters.guests ?? 2,
         early_time: filters.early_time ?? '', source_id: filters.source_id ?? '', discount: filters.discount ?? '', parking_nights: filters.parking_nights ?? '', parking_rate: filters.parking_rate ?? parkingRate,
-        guest_name: filters.guest_name ?? '', booking_id: bookingId ?? '', reference: filters.reference ?? '',
+        guest_mode: filters.guest_id ? 'existing' : 'new', guest_id: filters.guest_id ?? '', guest_name: filters.guest_id ? '' : (filters.guest_name ?? ''), guest_phone: '', guest_email: '', guest_messenger_handle: '', booking_id: bookingId ?? '', reference: filters.reference ?? '',
     });
     const e = form.errors as any;
     const set = (k: string) => (ev: any) => form.setData(k, ev.target.value);
@@ -34,7 +34,8 @@ export default function QuoteForm({ rooms, sources, filters, preview, vacancy, b
     const pickedRoom = useRef(false);
 
     function search(data: any, onSuccess?: () => void) {
-        const { guest_name, ...query } = data;
+        const { guest_mode, guest_id, guest_name, guest_phone, guest_email, guest_messenger_handle, ...query } = data;
+        if (guest_mode === 'existing' && guest_id) query.guest_id = guest_id;
         router.get('/admin/quotes/create', query, { preserveState: true, preserveScroll: true, replace: true, onSuccess, onStart: () => setSearching(true), onFinish: () => setSearching(false) });
     }
 
@@ -81,14 +82,21 @@ export default function QuoteForm({ rooms, sources, filters, preview, vacancy, b
     const ready = preview && !preview.error && previewCurrent && !searching;
     const takenIds = (vacancy?.unavailable ?? []).map((u: any) => u.id);
 
+    const existingGuest = form.data.guest_mode === 'existing';
+    const chosenGuest = guestList.find((g: any) => String(g.id) === String(form.data.guest_id));
+    const guestName = (existingGuest ? chosenGuest?.full_name ?? '' : form.data.guest_name).trim();
+    const [guestSearch, setGuestSearch] = useState('');
+    const guestWords = guestSearch.trim().toLowerCase();
+    const guestMatches = guestList.filter((g: any) => String(g.id) === String(form.data.guest_id) || !guestWords || `${g.full_name} ${g.contact ?? ''}`.toLowerCase().includes(guestWords));
+
     // The guest's name can be typed after the price is worked out. Staff may still reword it before copying.
     const messageBox = useRef<HTMLTextAreaElement>(null);
     const [message, setMessage] = useState('');
     const [copy, setCopy] = useState<{ state: 'idle' | 'checking' | 'copied' | 'manual' | 'taken'; detail?: string }>({ state: 'idle' });
     useEffect(() => {
-        setMessage((preview?.copyText ?? '').replaceAll('{{guest}}', form.data.guest_name.trim() || 'there'));
+        setMessage((preview?.copyText ?? '').replaceAll('{{guest}}', guestName || 'there'));
         setCopy({ state: 'idle' });
-    }, [preview?.copyText, form.data.guest_name]);
+    }, [preview?.copyText, guestName]);
 
     async function copyMessage() {
         if (!ready) return;
@@ -195,8 +203,36 @@ export default function QuoteForm({ rooms, sources, filters, preview, vacancy, b
                                     </tbody>
                                 </table>
                                 {preview.warnings.map((w: string) => <p key={w} className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-950">{w}</p>)}
-                                <form onSubmit={(ev) => { ev.preventDefault(); form.post('/admin/quotes'); }} className="mt-4 space-y-3 border-t border-line pt-3">
-                                    <Field label="Guest name (optional)" error={e.guest_name}><Input value={form.data.guest_name} onChange={set('guest_name')} /></Field>
+                                <form onSubmit={(ev) => { ev.preventDefault(); form.transform((d: any) => (d.guest_mode === 'existing' ? { ...d, guest_name: '', guest_phone: '', guest_email: '', guest_messenger_handle: '' } : { ...d, guest_id: '' })); form.post('/admin/quotes'); }} className="mt-4 space-y-3 border-t border-line pt-3">
+                                    <fieldset className="space-y-3">
+                                        <legend className="mb-1.5 text-sm font-medium">Guest</legend>
+                                        <div role="radiogroup" aria-label="Guest" className="inline-grid grid-cols-2 gap-0.5 rounded-lg border border-line bg-ivory p-0.5">
+                                            {[['new', 'New guest'], ['existing', 'Existing guest']].map(([mode, label]) => (
+                                                <button key={mode} type="button" role="radio" aria-checked={form.data.guest_mode === mode} onClick={() => form.setData('guest_mode', mode)}
+                                                    className={cn('min-h-8 rounded-md px-3 text-xs font-medium transition-colors pointer-coarse:min-h-10', form.data.guest_mode === mode ? 'bg-chocolate text-ivory' : 'text-espresso hover:bg-white')}>
+                                                    {label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        {existingGuest ? (
+                                            <div className="grid gap-2 sm:grid-cols-2">
+                                                <Input type="search" aria-label="Search guests" placeholder="Search name, phone or Messenger" value={guestSearch} onChange={(ev) => setGuestSearch(ev.target.value)} />
+                                                <div>
+                                                    <Select aria-label="Choose a guest" placeholder={guestMatches.length ? `Choose a guest (${guestMatches.length})` : 'No guest matches'} options={guestMatches.map((g: any) => ({ value: g.id, label: g.contact ? `${g.full_name} (${g.contact})` : g.full_name }))} value={form.data.guest_id} onChange={set('guest_id')} />
+                                                    {e.guest_id && <span role="alert" className="mt-1 block text-xs text-red-800">{e.guest_id}</span>}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <>
+                                                <Field label="Full name" error={e.guest_name} help="Saved to Guests when you press Save quote version."><Input autoComplete="off" value={form.data.guest_name} onChange={set('guest_name')} /></Field>
+                                                <div className="grid gap-3 sm:grid-cols-3">
+                                                    <Field label="Messenger name" error={e.guest_messenger_handle}><Input value={form.data.guest_messenger_handle} onChange={set('guest_messenger_handle')} /></Field>
+                                                    <Field label="Phone" error={e.guest_phone}><Input type="tel" value={form.data.guest_phone} onChange={set('guest_phone')} /></Field>
+                                                    <Field label="Email" error={e.guest_email}><Input type="email" value={form.data.guest_email} onChange={set('guest_email')} /></Field>
+                                                </div>
+                                            </>
+                                        )}
+                                    </fieldset>
                                     <Field label="Message for Messenger" help="You can change the wording before copying.">
                                         <textarea ref={messageBox} rows={20} value={message} onChange={(ev) => setMessage(ev.target.value)} className="w-full rounded-lg border border-line bg-white px-3 py-2 text-sm shadow-xs focus:border-gold-dark focus:ring-2 focus:ring-gold/30 focus:outline-none pointer-coarse:text-base" />
                                     </Field>

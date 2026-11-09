@@ -25,7 +25,8 @@ class TeamController extends Controller
             'title' => 'Team & Permissions',
             'subtitle' => 'Click a name to choose the pages that person can open. '.(config('mail.default') === 'log' ? 'New staff get a temporary password to hand over, shown once.' : 'Invited staff set their own password through a reset link.').' Deactivating removes access on the next request.',
             'columns' => [['key' => 'name', 'label' => 'Name (click to edit access)', 'type' => 'link'], ['key' => 'email', 'label' => 'Email'], ['key' => 'role', 'label' => 'Role'], ['key' => 'access', 'label' => 'Access'], ['key' => 'state', 'label' => 'Status', 'type' => 'status'], ['key' => 'two_factor', 'label' => 'Two-factor']],
-            'rows' => User::with('roles')->orderBy('name')->get()->map(fn ($u) => [
+            // The Administrator (EAJ) is not one of the business's staff, so only another Administrator sees them.
+            'rows' => User::with('roles')->when(! $editor->hasRole('Administrator'), fn ($q) => $q->whereDoesntHave('roles', fn ($r) => $r->where('name', 'Administrator')))->orderBy('name')->get()->map(fn ($u) => [
                 'id' => $u->id,
                 'name' => ['label' => $u->name, 'href' => "/admin/team/{$u->id}/edit"],
                 'email' => $u->email,
@@ -145,6 +146,9 @@ class TeamController extends Controller
             return 'Everything';
         }
         $pages = collect(Permissions::pagesOf($user))->map(fn ($key) => Permissions::PAGES[$key][0]);
+        if ($pages->count() === count(Permissions::PAGES)) {
+            return 'Every page';
+        }
         if ($pages->isEmpty()) {
             return 'No access yet';
         }
@@ -157,7 +161,7 @@ class TeamController extends Controller
         return [
             'roles' => array_values(array_filter(Permissions::ROLES, fn ($role) => $this->mayGiveRole($editor, $role))),
             'fullAccess' => Permissions::FULL_ACCESS,
-            'presets' => Permissions::ROLE_PAGES + ['Administrator' => [], 'Owner' => []],
+            'presets' => Permissions::ROLE_PAGES + ['Administrator' => []],
             'pages' => collect(Permissions::PAGES)->map(fn ($page, $key) => ['key' => $key, 'label' => $page[0], 'group' => $page[1], 'help' => Permissions::HELP[$key] ?? null, 'requires' => Permissions::REQUIRES[$key] ?? null])->values(),
             'areas' => Permissions::AREAS,
             'allowed' => Permissions::pagesOf($editor),
@@ -169,7 +173,7 @@ class TeamController extends Controller
         // The Administrator (EAJ) controls the system subscription and its lock, so only an Administrator can make one.
         return match ($role) {
             'Administrator' => $editor->hasRole('Administrator'),
-            'Owner' => $editor->hasRole('Owner'),
+            'Owner' => $editor->hasAnyRole(['Owner', 'Administrator']),
             default => true,
         };
     }
@@ -179,7 +183,7 @@ class TeamController extends Controller
         abort_unless($this->mayGiveRole($editor, $role), 403, "You cannot give the {$role} role.");
     }
 
-    /** Only an Owner may change an Owner, and only an Administrator may change an Administrator. */
+    /** The Administrator may change anyone. An Owner may change an Owner. Only an Administrator may change an Administrator. */
     private function assertCanManage(User $editor, User $target): void
     {
         abort_unless($this->mayManage($editor, $target), 403, "You cannot change {$target->name}'s access.");
@@ -188,6 +192,7 @@ class TeamController extends Controller
     private function mayManage(User $editor, User $target): bool
     {
         return match (true) {
+            $editor->hasRole('Administrator') => true,
             $target->hasRole('Owner') => $editor->hasRole('Owner'),
             $target->hasRole('Administrator') => $editor->hasRole('Administrator'),
             default => true,

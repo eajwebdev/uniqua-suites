@@ -8,6 +8,7 @@ use App\Http\Controllers\Admin\CategoryController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\ExpenseController;
 use App\Http\Controllers\Admin\ClosureController;
+use App\Http\Controllers\Admin\FaqController;
 use App\Http\Controllers\Admin\FileController;
 use App\Http\Controllers\Admin\FinanceController;
 use App\Http\Controllers\Admin\GuestController;
@@ -99,6 +100,15 @@ Route::middleware(['auth', 'auth.session', 'active', 'subscription', 'password.c
     Route::get('/guests/{guest}', [GuestController::class, 'show'])->middleware('perm:guests.view');
     Route::post('/guests', [GuestController::class, 'store'])->middleware('perm:guests.manage');
     Route::post('/guests/{guest}', [GuestController::class, 'update'])->middleware('perm:guests.manage');
+
+    // FAQ: ready answers to paste in Messenger. The same people who send quotes and messages.
+    Route::middleware('perm:quotes.manage')->group(function () {
+        Route::get('/faqs', [FaqController::class, 'index']);
+        Route::post('/faqs', [FaqController::class, 'store']);
+        Route::post('/faqs/{faq}', [FaqController::class, 'update']);
+        Route::post('/faqs/{faq}/delete', [FaqController::class, 'destroy']);
+        Route::post('/faqs/{faq}/copied', [FaqController::class, 'copied']);
+    });
 
     Route::middleware('perm:quotes.manage')->group(function () {
         Route::get('/quotes', [QuoteController::class, 'index']);

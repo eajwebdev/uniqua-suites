@@ -6,7 +6,9 @@ import { nextDay, RoomPicker, useRoomAvailability } from '@/components/RoomPicke
 import { Button, confirmDialog, Field, Input, Modal, Select } from '@/components/ui';
 import { dateOnly, time12 } from '@/lib/format';
 
-type Prefill = { room_id?: number | string; check_in?: string; check_out?: string };
+type QuotedGuest = { id: number; full_name: string; phone: string | null; email: string | null; messenger_handle: string | null };
+/** A quote passes everything it knows: the guest, party size, source and early check-in. */
+type Prefill = { room_id?: number | string; check_in?: string; check_out?: string; guest?: QuotedGuest | null; guest_name?: string | null; adults?: number; source_id?: number | string | null; early_time?: string | null; quote_id?: number; note?: string };
 type Options = { rooms: any[]; sources: any[]; guests: any[]; today: string; standard_check_in: string };
 
 const OPEN_EVENT = 'uniqa:new-booking';
@@ -24,16 +26,20 @@ export function openNewBooking(prefill: Prefill = {}) {
 }
 
 function BookingFields({ options, prefill, onClose }: { options: Options; prefill: Prefill; onClose: () => void }) {
-    const { rooms, sources, guests, today, standard_check_in: standardCheckIn } = options;
+    const { rooms, sources, today, standard_check_in: standardCheckIn } = options;
+    // The quoted guest may be older than the recent list, so they are added to it.
+    const guests = prefill.guest && !options.guests.some((g: any) => g.id === prefill.guest!.id) ? [prefill.guest, ...options.guests] : options.guests;
+    const quotedSource = sources.some((s: any) => String(s.id) === String(prefill.source_id)) ? String(prefill.source_id) : '';
     const perms: string[] = (usePage<any>().props as any).auth.user?.permissions ?? [];
     const canConfirm = perms.includes('bookings.confirm');
-    const [existing, setExisting] = useState(false);
+    const [existing, setExisting] = useState(!!prefill.guest);
     const form = useForm<any>({
-        guest_id: '', guest_name: '', guest_phone: '', guest_email: '', guest_messenger_handle: '',
+        guest_id: prefill.guest?.id ?? '', guest_name: prefill.guest ? '' : (prefill.guest_name ?? ''), guest_phone: '', guest_email: '', guest_messenger_handle: '',
+        quote_id: prefill.quote_id ?? '',
         room_ids: prefill.room_id ? [Number(prefill.room_id)] : [],
-        booking_source_id: '', source_reference: '',
+        booking_source_id: quotedSource, source_reference: '',
         check_in: prefill.check_in ?? '', check_out: prefill.check_out ?? (prefill.check_in ? nextDay(prefill.check_in) : ''),
-        adults: 2, children: 0, approved_early_time: '', pickup_time: '', return_time: '', special_requests: '', internal_notes: '',
+        adults: prefill.adults ?? 2, children: 0, approved_early_time: prefill.early_time ?? '', pickup_time: '', return_time: '', special_requests: '', internal_notes: prefill.note ?? '',
         idempotency_key: useMemo(() => crypto.randomUUID?.() ?? String(Date.now()), []),
         then: '',
     });

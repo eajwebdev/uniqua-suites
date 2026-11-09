@@ -49,7 +49,7 @@ class PageAccessTest extends DomainTestCase
         $form = $this->get('/admin/team/create')->assertOk()->original->getData()['page']['props'];
         $this->assertSame(['Owner', 'Operations Manager', 'Booking / Reception', 'Staff'], $form['roles']);
         $admin = $this->person('Administrator');
-        $this->assertSame(['Administrator', 'Operations Manager', 'Booking / Reception', 'Staff'], $this->actingAs($admin)->get('/admin/team/create')->original->getData()['page']['props']['roles']);
+        $this->assertSame(['Administrator', 'Owner', 'Operations Manager', 'Booking / Reception', 'Staff'], $this->actingAs($admin)->get('/admin/team/create')->original->getData()['page']['props']['roles']);
         $this->actingAs($this->owner);
 
         auth()->logout();
@@ -125,15 +125,20 @@ class PageAccessTest extends DomainTestCase
         $this->assertEqualsCanonicalizing(Permissions::ROLE_PAGES['Booking / Reception'], Permissions::pagesOf($person->fresh()));
     }
 
-    public function test_full_access_roles_always_have_everything_whatever_is_ticked(): void
+    public function test_the_administrator_always_has_everything_whatever_is_ticked(): void
     {
-        foreach (['Administrator', 'Owner'] as $role) {
-            $person = $this->person($role, ['reports']);
-            $this->assertCount(count(Permissions::ALL), $person->getAllPermissions(), $role);
-            $this->assertCount(0, $person->getDirectPermissions(), $role);
-            $this->actingAs($person)->get('/admin/settings')->assertOk();
-            $this->actingAs($this->owner);
-        }
+        $person = $this->person('Administrator', ['reports']);
+        $this->assertCount(count(Permissions::ALL), $person->getAllPermissions());
+        $this->assertCount(0, $person->getDirectPermissions());
+        $this->actingAs($person)->get('/admin/settings')->assertOk();
+    }
+
+    public function test_an_owner_has_only_the_pages_ticked_for_them(): void
+    {
+        $person = $this->person('Owner', ['reports']);
+        $this->assertSame(['reports'], Permissions::pagesOf($person));
+        $this->actingAs($person)->get('/admin/settings')->assertForbidden();
+        $this->get('/admin/reports')->assertOk();
     }
 
     public function test_someone_with_the_team_page_cannot_give_more_than_they_have(): void
@@ -176,26 +181,30 @@ class PageAccessTest extends DomainTestCase
         $this->post("/admin/team/{$manager->id}", ['role' => 'Owner', 'is_active' => true])->assertForbidden();
     }
 
-    public function test_only_an_owner_can_change_an_owner_or_make_one(): void
+    public function test_the_administrator_controls_everyone_including_owners(): void
     {
         $admin = $this->person('Administrator');
         $second = $this->person('Owner');
         $person = $this->person('Staff', []);
         $this->actingAs($admin);
 
-        $this->post("/admin/team/{$second->id}", ['role' => 'Staff', 'is_active' => false])->assertForbidden();
-        $this->post("/admin/team/{$person->id}", ['role' => 'Owner', 'is_active' => true])->assertForbidden();
-        $this->get("/admin/team/{$second->id}/edit")->assertForbidden();
+        $this->get("/admin/team/{$second->id}/edit")->assertOk();
+        $this->post("/admin/team/{$second->id}", ['role' => 'Staff', 'is_active' => false])->assertSessionHasNoErrors();
+        $this->post("/admin/team/{$person->id}", ['role' => 'Owner', 'is_active' => true])->assertSessionHasNoErrors();
+        $this->assertTrue($person->fresh()->hasRole('Owner'));
+        $this->post("/admin/team/{$this->owner->id}/reset-two-factor")->assertSessionHasNoErrors();
 
         $this->post("/admin/team/{$person->id}", ['role' => 'Administrator', 'is_active' => true])->assertSessionHasNoErrors();
         $this->assertTrue($person->fresh()->hasRole('Administrator'));
     }
 
-    public function test_the_two_factor_of_an_owner_can_only_be_reset_by_an_owner(): void
+    public function test_an_owner_cannot_make_or_change_an_administrator(): void
     {
-        $this->actingAs($this->person('Administrator'));
+        $admin = $this->person('Administrator');
+        $person = $this->person('Staff', []);
 
-        $this->post("/admin/team/{$this->owner->id}/reset-two-factor")->assertForbidden();
+        $this->post("/admin/team/{$person->id}", ['role' => 'Administrator', 'is_active' => true])->assertForbidden();
+        $this->post("/admin/team/{$admin->id}/reset-two-factor")->assertForbidden();
     }
 
     public function test_changes_to_access_are_on_record(): void
@@ -287,7 +296,7 @@ class PageAccessTest extends DomainTestCase
 
         $access = collect($this->get('/admin/team')->assertOk()->original->getData()['page']['props']['rows'])->pluck('access');
 
-        $this->assertContains('Everything', $access);
+        $this->assertContains('Every page', $access);
         $this->assertContains('No access yet', $access);
         $this->assertContains('Quotes & Messages, Guests, Parking +1 more', $access);
     }

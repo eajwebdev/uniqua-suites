@@ -26,8 +26,11 @@ class Permissions
 
     public const ROLES = ['Administrator', 'Owner', 'Operations Manager', 'Booking / Reception', 'Staff'];
 
-    /** These always have everything. Every other role is only a starting point for the person's own ticks. */
-    public const FULL_ACCESS = ['Administrator', 'Owner'];
+    /**
+     * The Administrator always has everything. Every other role, the Owner included, is a starting point
+     * for the person's own ticks, so the Administrator can choose exactly what an Owner can open.
+     */
+    public const FULL_ACCESS = ['Administrator'];
 
     /** What can be ticked for a person. Every permission belongs to exactly one entry. */
     public const PAGES = [
@@ -135,6 +138,7 @@ class Permissions
 
     /** The ticks a new person starts with, before anyone adjusts them. */
     public const ROLE_PAGES = [
+        'Owner' => ['dashboard', 'bookings', 'quotes', 'guests', 'rooms', 'housekeeping_own', 'housekeeping', 'inspect', 'maintenance_own', 'maintenance', 'incidents', 'inventory', 'parking', 'payments', 'expenses', 'reports', 'advances', 'team', 'settings', 'audit', 'dashboard_money', 'confirm', 'discount', 'override', 'room_edit', 'wifi', 'verify', 'refunds', 'expense_approve', 'lock', 'damage_charge', 'reports_money'],
         'Operations Manager' => ['dashboard', 'bookings', 'quotes', 'guests', 'rooms', 'housekeeping_own', 'housekeeping', 'inspect', 'maintenance_own', 'maintenance', 'incidents', 'inventory', 'parking', 'reports', 'override', 'wifi'],
         'Booking / Reception' => ['dashboard', 'bookings', 'quotes', 'guests', 'rooms', 'inspect', 'incidents', 'parking', 'payments', 'confirm', 'wifi'],
         'Staff' => ['housekeeping_own', 'maintenance_own'],

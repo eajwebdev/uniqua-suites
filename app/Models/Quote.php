@@ -24,6 +24,11 @@ class Quote extends Model
         return $this->belongsTo(Room::class);
     }
 
+    public function guest()
+    {
+        return $this->belongsTo(Guest::class);
+    }
+
     public function booking()
     {
         return $this->belongsTo(Booking::class);

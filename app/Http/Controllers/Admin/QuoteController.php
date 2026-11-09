@@ -9,9 +9,11 @@ use App\Domain\Pricing\PricingService;
 use App\Http\Controllers\Controller;
 use App\Models\Booking;
 use App\Models\BookingSource;
+use App\Models\Guest;
 use App\Models\MessageTemplate;
 use App\Models\Quote;
 use App\Models\Room;
+use App\Support\AdminCategory;
 use App\Support\Audit;
 use App\Support\Local;
 use App\Support\Money;
@@ -33,7 +35,8 @@ class QuoteController extends Controller
 
     public function index()
     {
-        $rows = Quote::with('room:id,name')->orderByDesc('id')->paginate(15);
+        // Quotes are for suites only; the page is hidden while Cameras is selected.
+        $rows = Quote::with('room:id,name')->whereHas('room', fn ($r) => $r->suites())->orderByDesc('id')->paginate(15);
 
         return Inertia::render('Admin/Resource', [
             'title' => 'Quotes',
@@ -42,7 +45,7 @@ class QuoteController extends Controller
             'columns' => [
                 ['key' => 'ref', 'label' => 'Reference', 'type' => 'link'],
                 ['key' => 'version', 'label' => 'Ver.'],
-                ['key' => 'guest', 'label' => 'Guest'],
+                ['key' => 'guest', 'label' => 'Guest', 'type' => 'link'],
                 ['key' => 'room', 'label' => 'Room'],
                 ['key' => 'check_in', 'label' => 'Check-in', 'type' => 'date'],
                 ['key' => 'check_out', 'label' => 'Check-out', 'type' => 'date'],
@@ -52,7 +55,7 @@ class QuoteController extends Controller
                 'id' => $q->id,
                 'ref' => ['label' => $q->reference, 'href' => "/admin/quotes/{$q->id}"],
                 'version' => $q->version,
-                'guest' => $q->guest_name,
+                'guest' => ['label' => $q->guest_name, 'href' => $q->guest_id && $q->guest_name ? "/admin/guests/{$q->guest_id}" : null],
                 'room' => $q->room->name,
                 'check_in' => $q->check_in->toDateString(),
                 'check_out' => $q->check_out->toDateString(),
@@ -66,7 +69,8 @@ class QuoteController extends Controller
         $f = $request->validate([
             'reference' => 'nullable|string|exists:quotes,reference',
             'guest_name' => 'nullable|string|max:120',
-            'room_id' => 'nullable|integer|exists:rooms,id',
+            'guest_id' => 'nullable|integer|exists:guests,id',
+            'room_id' => ['nullable', 'integer', $this->suiteRule()],
             'check_in' => 'nullable|date_format:Y-m-d',
             'check_out' => 'nullable|date_format:Y-m-d',
             'guests' => 'nullable|integer|min:1|max:30',
@@ -79,6 +83,10 @@ class QuoteController extends Controller
         ]);
         if (! empty($f['discount']) && ! $request->user()->can('bookings.discount')) {
             throw ValidationException::withMessages(['discount' => 'You are not authorized to apply discounts.']);
+        }
+        // A quote started from a booking is for that booking's guest.
+        if (empty($f['guest_id']) && $request->integer('booking_id')) {
+            $f['guest_id'] = Booking::whereKey($request->integer('booking_id'))->value('guest_id');
         }
 
         $preview = null;
@@ -102,8 +110,9 @@ class QuoteController extends Controller
             : null;
 
         return Inertia::render('Admin/QuoteForm', [
-            'rooms' => Room::where('operational_status', '!=', 'retired')->orderBy('id')->get()->map(fn ($r) => ['id' => $r->id, 'label' => "{$r->name} ({$r->unit_code})", 'max' => $r->max_guests, 'included' => $r->included_guests]),
+            'rooms' => Room::suites()->where('operational_status', '!=', 'retired')->orderBy('id')->get()->map(fn ($r) => ['id' => $r->id, 'label' => "{$r->name} ({$r->unit_code})", 'max' => $r->max_guests, 'included' => $r->included_guests]),
             'sources' => BookingSource::where('is_active', true)->orderBy('id')->get(['id', 'name']),
+            'guests' => $this->guestOptions($f['guest_id'] ?? null),
             'filters' => $f,
             'preview' => $preview,
             'vacancy' => $vacancy,
@@ -117,11 +126,15 @@ class QuoteController extends Controller
     public function store(Request $request)
     {
         $data = $request->validate([
-            'room_id' => 'required|exists:rooms,id',
+            'room_id' => ['required', 'integer', $this->suiteRule()],
             'check_in' => 'required|date_format:Y-m-d',
             'check_out' => 'required|date_format:Y-m-d|after:check_in',
             'guests' => 'required|integer|min:1|max:30',
+            'guest_id' => 'nullable|integer|exists:guests,id',
             'guest_name' => 'nullable|string|max:120',
+            'guest_phone' => 'nullable|string|max:40',
+            'guest_email' => 'nullable|email|max:120',
+            'guest_messenger_handle' => 'nullable|string|max:120',
             'early_time' => 'nullable|date_format:H:i',
             'source_id' => 'nullable|exists:booking_sources,id',
             'discount' => ['nullable', Money::RULE],
@@ -143,15 +156,17 @@ class QuoteController extends Controller
         $calc = $this->calculate($room, $data, (int) $data['guests']);
 
         $quote = DB::transaction(function () use ($data, $calc, $request) {
+            $guest = $this->guestFor($data);
             $reference = $data['reference'] ?? 'Q-'.Local::now()->format('ym').'-'.Str::upper(Str::random(5));
             $version = (int) Quote::where('reference', $reference)->lockForUpdate()->max('version') + 1;
             $quote = Quote::create([
                 'reference' => $reference,
                 'version' => $version,
                 'booking_id' => $data['booking_id'] ?? null,
+                'guest_id' => $guest?->id,
                 'room_id' => $data['room_id'],
                 'booking_source_id' => $data['source_id'] ?? null,
-                'guest_name' => $data['guest_name'] ?? null,
+                'guest_name' => $guest?->full_name ?? (trim((string) ($data['guest_name'] ?? '')) ?: null),
                 'check_in' => $data['check_in'],
                 'check_out' => $data['check_out'],
                 'guest_count' => $data['guests'],
@@ -175,10 +190,56 @@ class QuoteController extends Controller
     /** Read just before copying, because the screen may have been open while someone else took the dates. */
     public function check(Request $request)
     {
-        $data = $request->validate(['room_id' => 'required|exists:rooms,id', 'check_in' => 'required|date_format:Y-m-d', 'check_out' => 'required|date_format:Y-m-d|after:check_in', 'guests' => 'required|integer|min:1|max:30', 'booking_id' => 'nullable|exists:bookings,id']);
+        $data = $request->validate(['room_id' => ['required', 'integer', $this->suiteRule()], 'check_in' => 'required|date_format:Y-m-d', 'check_out' => 'required|date_format:Y-m-d|after:check_in', 'guests' => 'required|integer|min:1|max:30', 'booking_id' => 'nullable|exists:bookings,id']);
         $problem = $this->cannotQuote(Room::findOrFail($data['room_id']), $data['check_in'], $data['check_out'], (int) $data['guests'], $data['booking_id'] ?? null);
 
         return response()->json(['available' => $problem === null, 'message' => $problem])->header('Cache-Control', 'no-store');
+    }
+
+    /** Quotes are for suites. Camera rentals are booked from New Booking. */
+    private function suiteRule(): \Closure
+    {
+        return fn (string $attribute, mixed $value, \Closure $fail) => Room::suites()->whereKey($value)->exists() ? null : $fail('Choose a suite. Cameras are booked from New Booking.');
+    }
+
+    /** Suite guests (and anyone with no booking yet), plus the one already chosen. */
+    private function guestOptions(mixed $selected): array
+    {
+        return Guest::where(fn ($w) => $w->whereHas('bookings', fn ($b) => AdminCategory::bookings($b))->orWhereDoesntHave('bookings'))
+            ->when($selected, fn ($q) => $q->orWhere('id', $selected))
+            ->orderBy('full_name')->limit(500)->get(['id', 'full_name', 'phone', 'messenger_handle'])
+            ->map(fn (Guest $g) => ['id' => $g->id, 'full_name' => $g->full_name, 'contact' => $g->phone ?: $g->messenger_handle])->all();
+    }
+
+    /**
+     * The chosen guest, or a new one from the name typed on the quote. Someone with the same name and
+     * the same phone, email or Messenger name is the same person, so they are not added twice.
+     */
+    private function guestFor(array $data): ?Guest
+    {
+        if (! empty($data['guest_id'])) {
+            return Guest::find($data['guest_id']);
+        }
+        $name = trim(preg_replace('/\s+/', ' ', (string) ($data['guest_name'] ?? '')));
+        if ($name === '') {
+            return null;
+        }
+        $contact = array_filter([
+            'phone' => trim((string) ($data['guest_phone'] ?? '')),
+            'email' => trim((string) ($data['guest_email'] ?? '')),
+            'messenger_handle' => trim((string) ($data['guest_messenger_handle'] ?? '')),
+        ]);
+        if ($contact) {
+            $same = Guest::whereRaw('LOWER(full_name) = ?', [mb_strtolower($name)])
+                ->where(fn ($q) => collect($contact)->each(fn ($value, $column) => $q->orWhere($column, $value)))->first();
+            if ($same) {
+                return $same;
+            }
+        }
+        $guest = Guest::create(['full_name' => $name] + $contact);
+        Audit::log('guest.created', $guest, ['from' => 'quote']);
+
+        return $guest;
     }
 
     /** A guest must never be quoted dates they cannot have. */
@@ -197,7 +258,7 @@ class QuoteController extends Controller
 
     public function show(Quote $quote)
     {
-        $quote->load(['items', 'room.property']);
+        $quote->load(['items', 'room.property', 'guest']);
         $history = Quote::where('reference', $quote->reference)->orderByDesc('version')->get(['id', 'version', 'total_cents', 'created_at']);
 
         return Inertia::render('Admin/QuoteShow', [
@@ -207,6 +268,9 @@ class QuoteController extends Controller
                 'reference' => $quote->reference,
                 'version' => $quote->version,
                 'guest_name' => $quote->guest_name,
+                'guest_id' => $quote->guest_id,
+                // So Create booking can fill in the guest as they were quoted.
+                'guest' => $quote->guest?->only(['id', 'full_name', 'phone', 'email', 'messenger_handle']),
                 'room' => $quote->room->name,
                 'room_id' => $quote->room_id,
                 'property' => $quote->room->property->location_label,
