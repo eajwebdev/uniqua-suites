@@ -2,10 +2,10 @@
 
 namespace App\Domain\Tasks;
 
+use App\Domain\Inventory\Warehouse;
 use App\Domain\Availability\RoomConflict;
 use App\Models\Booking;
 use App\Models\HousekeepingTask;
-use App\Models\InventoryMovement;
 use App\Models\LaundryJob;
 use App\Models\Property;
 use App\Models\Room;
@@ -259,22 +259,10 @@ class TurnoverService
         return $count;
     }
 
-    /** Stock only falls because use was recorded here. Runs with the completion, so a retry cannot count it twice. */
+    /** Supplies a cleaner records are taken from the warehouse for that suite. Runs with the completion, so a retry cannot count it twice. */
     public function recordSupplies(HousekeepingTask $task, array $supplies, int $userId): void
     {
-        foreach ($supplies as $line) {
-            $movement = InventoryMovement::create([
-                'inventory_item_id' => $line['inventory_item_id'],
-                'property_id' => $task->room->property_id,
-                'room_id' => $task->room_id,
-                'housekeeping_task_id' => $task->id,
-                'type' => 'issue',
-                'quantity' => -abs((int) $line['quantity']),
-                'note' => 'Used on task #'.$task->id,
-                'user_id' => $userId,
-            ]);
-            Audit::log('inventory.moved', $movement, ['quantity' => $movement->quantity, 'task' => $task->id]);
-        }
+        app(Warehouse::class)->stockOut($task->room, $supplies, null, $userId, $task->id);
     }
 
     /** Completing a clean queues inspection; it never makes the room ready. */

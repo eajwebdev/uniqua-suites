@@ -288,8 +288,9 @@ class AccessAndFlowTest extends DomainTestCase
         $this->bookings->checkOut($booking);
         $this->assertSame(0, InventoryMovement::count(), 'turnover alone consumes nothing');
 
-        $this->post('/admin/inventory/movements', ['inventory_item_id' => InventoryItem::first()->id, 'property_id' => $this->room('venice')->property_id, 'type' => 'issue', 'quantity' => 2])->assertRedirect();
-        $this->assertSame(-2, (int) InventoryMovement::sum('quantity'));
+        $this->post('/admin/inventory/purchases', ['lines' => [['item_id' => InventoryItem::first()->id, 'quantity' => 5]]])->assertRedirect();
+        $this->post('/admin/inventory/stock-out', ['room_id' => $this->room('venice')->id, 'lines' => [['inventory_item_id' => InventoryItem::first()->id, 'quantity' => 2]]])->assertRedirect();
+        $this->assertSame(3, (int) InventoryMovement::sum('quantity'));
     }
 
     public function test_damage_report_creates_no_charge_until_approved_and_can_be_reversed(): void

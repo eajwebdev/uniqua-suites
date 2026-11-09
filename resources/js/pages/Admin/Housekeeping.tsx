@@ -172,17 +172,18 @@ function CompleteModal({ task, items, onClose }: any) {
                 {items.length > 0 && (
                     <fieldset>
                         <legend className="mb-1 text-sm font-medium">Supplies used</legend>
-                        <p className="mb-2 text-xs text-muted">Stock goes down only for what you record here.</p>
+                        <p className="mb-2 text-xs text-muted">What you record here is taken from the warehouse for this suite.</p>
                         <div className="space-y-2">
                             {form.data.supplies.map((s: any, i: number) => (
                                 <div key={i} className="flex items-center gap-2">
-                                    <Select aria-label="Supply" required className="min-w-0 flex-1" placeholder="Select…" options={items.map((it: any) => ({ value: it.id, label: `${it.name} (${it.unit})` }))} value={s.inventory_item_id} onChange={(e) => setSupply(i, 'inventory_item_id', e.target.value)} />
+                                    <Select aria-label="Supply" required className="min-w-0 flex-1" placeholder="Select…" options={items.map((it: any) => ({ value: it.id, label: `${it.name} (${it.on_hand} ${it.unit} in warehouse)`, disabled: it.on_hand <= 0 }))} value={s.inventory_item_id} onChange={(e) => setSupply(i, 'inventory_item_id', e.target.value)} />
                                     <Input aria-label="Quantity" required type="number" min={1} className="w-20" value={s.quantity} onChange={(e) => setSupply(i, 'quantity', e.target.value)} />
                                     <Button small aria-label="Remove supply" onClick={() => form.setData('supplies', form.data.supplies.filter((_: any, n: number) => n !== i))}>Remove</Button>
                                 </div>
                             ))}
                             <Button small onClick={() => form.setData('supplies', [...form.data.supplies, { inventory_item_id: '', quantity: '1' }])}>Add supply</Button>
                         </div>
+                        {(errors as any).supplies && <p role="alert" className="mt-1.5 text-xs text-red-800">{(errors as any).supplies}</p>}
                     </fieldset>
                 )}
                 <Field label="Notes" error={errors.notes}>

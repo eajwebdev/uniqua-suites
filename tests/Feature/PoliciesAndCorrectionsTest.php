@@ -283,6 +283,7 @@ class PoliciesAndCorrectionsTest extends DomainTestCase
         $this->bookings->checkOut($booking);
         $task = HousekeepingTask::sole();
         $item = InventoryItem::first();
+        app(\App\Domain\Inventory\Warehouse::class)->purchase([['item_id' => $item->id, 'quantity' => 10]], null, null);
         $cleaner = $this->staff('Housekeeping / Laundry');
         $body = ['checklist' => [['label' => 'Floors', 'done' => '1']], 'supplies' => [['inventory_item_id' => $item->id, 'quantity' => 2]]];
 
@@ -290,7 +291,7 @@ class PoliciesAndCorrectionsTest extends DomainTestCase
         $this->post("/admin/tasks/{$task->id}/complete", $body)->assertSessionMissing('error');
         $this->post("/admin/tasks/{$task->id}/complete", $body)->assertSessionHas('error');
 
-        $movement = InventoryMovement::sole();
+        $movement = InventoryMovement::where('type', 'stock_out')->sole();
         $this->assertSame(-2, (int) $movement->quantity);
         $this->assertSame($task->id, (int) $movement->housekeeping_task_id);
         $this->assertSame($this->room('venice')->property_id, (int) $movement->property_id);

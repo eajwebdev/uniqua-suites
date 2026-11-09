@@ -183,9 +183,13 @@ Route::middleware(['auth', 'auth.session', 'active', 'subscription', 'password.c
     Route::post('/incidents/{incident}/status', [MaintenanceController::class, 'updateIncident'])->middleware('perm:incidents.manage');
     Route::post('/incidents/{incident}/decide', [MaintenanceController::class, 'decideIncident'])->middleware('perm:incidents.approve');
 
-    Route::get('/inventory', [InventoryController::class, 'index'])->middleware('perm:inventory.view');
+    // One warehouse: purchases in, stock-outs to suites (cleaners recording supplies count as stock-outs too).
+    Route::get('/inventory', [InventoryController::class, 'index'])->middleware('perm:inventory.view|inventory.consume');
+    Route::post('/inventory/purchases', [InventoryController::class, 'purchase'])->middleware('perm:inventory.manage');
+    Route::post('/inventory/stock-out', [InventoryController::class, 'stockOut'])->middleware('perm:inventory.manage|inventory.consume');
     Route::post('/inventory/items', [InventoryController::class, 'storeItem'])->middleware('perm:inventory.manage');
-    Route::post('/inventory/movements', [InventoryController::class, 'storeMovement'])->middleware('perm:inventory.manage|inventory.consume');
+    Route::post('/inventory/items/{item}', [InventoryController::class, 'updateItem'])->middleware('perm:inventory.manage');
+    Route::post('/inventory/items/{item}/count', [InventoryController::class, 'count'])->middleware('perm:inventory.manage');
 
     Route::get('/parking', [ParkingController::class, 'index'])->middleware('perm:parking.view');
     Route::get('/parking/calendar', [ParkingController::class, 'calendar'])->middleware('perm:parking.view');

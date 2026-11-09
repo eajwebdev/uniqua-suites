@@ -16,6 +16,7 @@ class SystemNotice extends Notification
         'incidents' => 'New incidents',
         'calendar' => 'Calendar feed problems and clashes',
         'month_end' => 'Month-end review',
+        'stock' => 'Low warehouse stock',
     ];
 
     public function __construct(public string $title, public ?string $url = null)

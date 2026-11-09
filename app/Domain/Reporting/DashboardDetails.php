@@ -136,11 +136,11 @@ class DashboardDetails
                     ->get(['w.id', 'w.title', 'w.severity', 'w.status', 'r.name as room'])->map(fn ($w) => (array) $w)->all()
                 : null,
             'low_stock' => $user->can('inventory.view')
-                ? DB::table('inventory_items as i')->join('inventory_movements as m', 'm.inventory_item_id', '=', 'i.id')->join('properties as p', 'p.id', '=', 'm.property_id')
-                    ->where('i.reorder_level', '>', 0)->groupBy('i.id', 'i.name', 'i.unit', 'i.reorder_level', 'p.name')
-                    ->havingRaw('SUM(m.quantity) <= i.reorder_level')->orderByRaw('SUM(m.quantity) - i.reorder_level')->limit(6)
-                    ->selectRaw('i.id, i.name, i.unit, i.reorder_level, p.name as property, SUM(m.quantity) as on_hand')->get()
-                    ->map(fn ($s) => ['id' => $s->id, 'name' => $s->name, 'unit' => $s->unit, 'property' => $s->property, 'reorder_level' => (float) $s->reorder_level, 'on_hand' => (float) $s->on_hand])->all()
+                ? DB::table('inventory_items as i')->leftJoin('inventory_movements as m', 'm.inventory_item_id', '=', 'i.id')
+                    ->where('i.reorder_level', '>', 0)->groupBy('i.id', 'i.name', 'i.unit', 'i.reorder_level')
+                    ->havingRaw('COALESCE(SUM(m.quantity), 0) <= i.reorder_level')->orderByRaw('COALESCE(SUM(m.quantity), 0) - i.reorder_level')->limit(6)
+                    ->selectRaw('i.id, i.name, i.unit, i.reorder_level, COALESCE(SUM(m.quantity), 0) as on_hand')->get()
+                    ->map(fn ($s) => ['id' => $s->id, 'name' => $s->name, 'unit' => $s->unit, 'property' => 'Warehouse', 'reorder_level' => (float) $s->reorder_level, 'on_hand' => (float) $s->on_hand])->all()
                 : null,
         ];
     }

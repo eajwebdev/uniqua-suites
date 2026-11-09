@@ -50,7 +50,7 @@ const NAV_GROUPS: { label: string; items: { label: string; href: string; icon: a
             { label: 'Cleaning', href: '/admin/housekeeping', icon: Sparkles, any: ['housekeeping.own', 'housekeeping.manage', 'housekeeping.inspect'] },
             { label: 'Maintenance & Damage', href: '/admin/work-orders', icon: Wrench, any: ['maintenance.own', 'maintenance.manage'] },
             { label: 'Damage Claims', href: '/admin/incidents', icon: BookOpen, any: ['__incidents_only'] },
-            { label: 'Inventory', href: '/admin/inventory', icon: Package, any: ['inventory.view'] },
+            { label: 'Inventory', href: '/admin/inventory', icon: Package, any: ['inventory.view', 'inventory.consume'] },
             { label: 'Parking', href: '/admin/parking', icon: Car, any: ['parking.view'] },
         ],
     },

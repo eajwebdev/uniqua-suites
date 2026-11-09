@@ -146,7 +146,7 @@ class HousekeepingController extends Controller
             'window' => ['check_out' => $checkOut, 'check_in' => $checkIn],
             // `cleaner` separates the people who do the work from managers who could step in, as auto-assign does.
             'staff' => $manager ? User::permission('housekeeping.own')->where('is_active', true)->orderBy('name')->get()->map(fn ($u) => ['id' => $u->id, 'name' => $u->name, 'cleaner' => ! $u->can('housekeeping.manage')])->values() : [],
-            'items' => $user->can('inventory.consume') ? InventoryItem::orderBy('name')->get(['id', 'name', 'unit']) : [],
+            'items' => $user->can('inventory.consume') ? $this->supplies() : [],
             'rooms' => $manager ? Room::suites()->where('operational_status', '!=', 'retired')->orderBy('name')->get(['id', 'name'])->map(fn ($r) => ['value' => $r->id, 'label' => $r->name])->values() : [],
             'taskTypes' => collect(HousekeepingTask::TYPES)->map(fn ($label, $value) => ['value' => $value, 'label' => $label])->values(),
             'can' => ['manage' => $manager, 'work' => $manager || $user->can('housekeeping.own'), 'inspect' => $user->can('housekeeping.inspect'), 'invite' => $user->can('team.manage')],
@@ -472,5 +472,13 @@ class HousekeepingController extends Controller
     {
         $user = $request->user();
         abort_unless($user->can('housekeeping.manage') || $task->assigned_to === null || $task->assigned_to === $user->id, 403);
+    }
+
+    /** Items with what the warehouse holds, so a cleaner sees before finishing whether the supply is there. */
+    private function supplies(): array
+    {
+        $onHand = app(\App\Domain\Inventory\Warehouse::class)->onHand();
+
+        return InventoryItem::orderBy('name')->get(['id', 'name', 'unit'])->map(fn ($i) => ['id' => $i->id, 'name' => $i->name, 'unit' => $i->unit, 'on_hand' => (int) ($onHand[$i->id] ?? 0)])->all();
     }
 }

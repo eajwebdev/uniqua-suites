@@ -280,10 +280,10 @@ class DashboardController extends Controller
 
     private function lowStockCount(): int
     {
-        return DB::table('inventory_items as i')->join('inventory_movements as m', 'm.inventory_item_id', '=', 'i.id')
+        return DB::table('inventory_items as i')->leftJoin('inventory_movements as m', 'm.inventory_item_id', '=', 'i.id')
             ->where('i.reorder_level', '>', 0)
-            ->groupBy('i.id', 'i.reorder_level', 'm.property_id')
-            ->havingRaw('SUM(m.quantity) <= i.reorder_level')
+            ->groupBy('i.id', 'i.reorder_level')
+            ->havingRaw('COALESCE(SUM(m.quantity), 0) <= i.reorder_level')
             ->selectRaw('i.id')->get()->count();
     }
 }

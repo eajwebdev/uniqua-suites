@@ -45,22 +45,15 @@ Artisan::command('uniqa:daily-alerts', function () {
         SystemNotice::toPermission('housekeeping.manage', "{$overdue} housekeeping task(s) are overdue.", '/admin/housekeeping', 'housekeeping');
     }
 
-    // Raises a task per low item and property; never buys anything.
-    $stock = DB::table('inventory_movements')->selectRaw('inventory_item_id, property_id, SUM(quantity) as qty')->groupBy('inventory_item_id', 'property_id')->get();
-    foreach ($stock as $row) {
-        $item = InventoryItem::find($row->inventory_item_id);
-        if ($item && $item->reorder_level > 0 && $row->qty <= $item->reorder_level) {
-            $room = Room::where('property_id', $row->property_id)->orderBy('id')->first();
-            if ($room) {
-                HousekeepingTask::firstOrCreate(
-                    ['idempotency_key' => 'restock:'.$item->id.':'.$row->property_id.':'.Local::now()->format('Y-W')],
-                    ['type' => 'restock', 'room_id' => $room->id, 'instructions' => "Restock {$item->name} at ".Property::find($row->property_id)?->name." (on hand: {$row->qty})."],
-                );
-            }
-        }
+    // One reminder a day listing what the warehouse is low on; it never buys anything.
+    $onHand = app(\App\Domain\Inventory\Warehouse::class)->onHand();
+    $low = InventoryItem::where('reorder_level', '>', 0)->orderBy('name')->get()->filter(fn ($i) => ($onHand[$i->id] ?? 0) <= $i->reorder_level);
+    if ($low->isNotEmpty()) {
+        $list = $low->take(5)->map(fn ($i) => "{$i->name} (".($onHand[$i->id] ?? 0).')')->implode(', ').($low->count() > 5 ? ' and '.($low->count() - 5).' more' : '');
+        SystemNotice::toPermission('inventory.manage', "Warehouse is low on {$list}. Time to buy more.", '/admin/inventory', 'stock');
     }
     $this->info('Daily alerts done.');
-})->purpose('Prepare arrival, overdue-task and restock alerts');
+})->purpose('Prepare arrival, overdue-task and low warehouse stock alerts');
 
 // Prepares the owner's review only. It never locks a period: that stays a person's decision.
 Artisan::command('uniqa:month-end {--period= : Month to prepare as YYYY-MM; defaults to last month}', function (FinanceService $finance) {
