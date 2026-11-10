@@ -300,4 +300,47 @@ class PageAccessTest extends DomainTestCase
         $this->assertContains('No access yet', $access);
         $this->assertContains('Quotes & Messages, Guests, Parking +1 more', $access);
     }
+
+    public function test_a_manager_starts_with_the_same_access_as_the_owner_including_confirm(): void
+    {
+        $this->assertEqualsCanonicalizing(Permissions::ROLE_PAGES['Owner'], Permissions::ROLE_PAGES['Operations Manager']);
+
+        $manager = $this->person('Operations Manager');
+        $this->assertTrue($manager->can('bookings.confirm'));
+        $this->assertEqualsCanonicalizing(Permissions::pagesOf($this->person('Owner')), Permissions::pagesOf($manager));
+
+        $booking = $this->inquiry();
+        $this->actingAs($manager)->post("/admin/bookings/{$booking->id}/confirm")->assertSessionHasNoErrors();
+        $this->assertSame('confirmed', $booking->fresh()->status);
+        $this->get('/admin/subscription')->assertOk();
+    }
+
+    public function test_a_manager_never_sees_or_changes_owner_or_administrator_accounts(): void
+    {
+        $manager = $this->person('Operations Manager');
+        $owner = User::role('Owner')->firstOrFail();
+        $admin = User::role('Administrator')->firstOrFail();
+        $reception = $this->person('Booking / Reception');
+
+        $emails = fn () => collect($this->get('/admin/team')->assertOk()->original->getData()['page']['props']['rows'])->pluck('email')->all();
+
+        $this->actingAs($manager);
+        $listed = $emails();
+        $this->assertContains($reception->email, $listed);
+        $this->assertContains($manager->email, $listed);
+        $this->assertNotContains($owner->email, $listed);
+        $this->assertNotContains($admin->email, $listed);
+
+        $this->get("/admin/team/{$owner->id}/edit")->assertForbidden();
+        $this->get("/admin/team/{$admin->id}/edit")->assertForbidden();
+        $this->post("/admin/team/{$owner->id}/temporary-password")->assertForbidden();
+        $this->post("/admin/team/{$reception->id}", ['role' => 'Owner', 'is_active' => true])->assertForbidden();
+        $this->assertNotContains('Owner', $this->get('/admin/team/create')->original->getData()['page']['props']['roles']);
+
+        // The Owner still sees managers and other Owners, but not the Administrator.
+        $this->actingAs($owner);
+        $this->assertContains($manager->email, $emails());
+        $this->assertNotContains($admin->email, $emails());
+    }
 }
+

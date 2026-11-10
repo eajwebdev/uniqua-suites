@@ -56,7 +56,7 @@ Route::middleware(['auth', 'auth.session', 'active', 'subscription', 'password.c
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/locked', [\App\Http\Controllers\Admin\SubscriptionController::class, 'locked']);
     // Owner and Administrator see it; only the Administrator changes it (checked in the controller's routes below).
-    Route::get('/subscription', [\App\Http\Controllers\Admin\SubscriptionController::class, 'index'])->middleware('role:Owner|Administrator');
+    Route::get('/subscription', [\App\Http\Controllers\Admin\SubscriptionController::class, 'index'])->middleware('role:Owner|Operations Manager|Administrator');
     Route::post('/subscription', [\App\Http\Controllers\Admin\SubscriptionController::class, 'update'])->middleware('role:Administrator');
     Route::post('/subscription/bills/{bill}/pay', [\App\Http\Controllers\Admin\SubscriptionController::class, 'pay'])->middleware('role:Administrator');
     Route::get('/account', [AuthController::class, 'account']);
