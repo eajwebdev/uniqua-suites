@@ -122,7 +122,7 @@ class GrabCamSeeder extends Seeder
 
         // Copy-ready messages for camera rentals, shown on a camera booking instead of the suite ones.
         foreach (self::TEMPLATES as $key => [$name, $body]) {
-            MessageTemplate::firstOrCreate(['key' => $key], ['name' => $name, 'body' => $body]);
+            MessageTemplate::withTrashed()->firstOrCreate(['key' => $key], ['name' => $name, 'body' => $body]); // a deleted one stays deleted
         }
         foreach (self::RETIRED as $key => $old) {
             $template = MessageTemplate::where('key', $key)->first();

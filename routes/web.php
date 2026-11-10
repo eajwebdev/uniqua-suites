@@ -90,6 +90,7 @@ Route::middleware(['auth', 'auth.session', 'active', 'subscription', 'password.c
         Route::post('/bookings/{booking}/check-in', [BookingController::class, 'checkIn']);
         Route::post('/bookings/{booking}/check-out', [BookingController::class, 'checkOut']);
         Route::post('/bookings/{booking}/amend', [BookingController::class, 'amend']);
+        Route::post('/bookings/{booking}/details', [BookingController::class, 'details']);
         Route::post('/bookings/{booking}/charges', [BookingController::class, 'addCharge']);
         Route::post('/bookings/{booking}/rental-security', [BookingController::class, 'rentalSecurity']);
         Route::post('/charges/{charge}/void', [BookingController::class, 'voidCharge']);
@@ -235,7 +236,9 @@ Route::middleware(['auth', 'auth.session', 'active', 'subscription', 'password.c
         Route::post('/imports/rows/{row}/review', [ImportController::class, 'reviewRow']);
         Route::get('/settings', [SettingsController::class, 'index']);
         Route::post('/settings', [SettingsController::class, 'update']);
+        Route::post('/settings/templates', [SettingsController::class, 'storeTemplate']);
         Route::post('/settings/templates/{template}', [SettingsController::class, 'updateTemplate']);
+        Route::post('/settings/templates/{template}/delete', [SettingsController::class, 'destroyTemplate']);
         Route::post('/settings/taxes', [SettingsController::class, 'storeTax']);
         Route::post('/settings/taxes/{rule}/end', [SettingsController::class, 'endTax']);
     });

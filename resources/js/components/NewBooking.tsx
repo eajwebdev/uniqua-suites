@@ -37,7 +37,7 @@ function BookingFields({ options, prefill, onClose }: { options: Options; prefil
         guest_id: prefill.guest?.id ?? '', guest_name: prefill.guest ? '' : (prefill.guest_name ?? ''), guest_phone: '', guest_email: '', guest_messenger_handle: '',
         quote_id: prefill.quote_id ?? '',
         room_ids: prefill.room_id ? [Number(prefill.room_id)] : [],
-        booking_source_id: quotedSource, source_reference: '',
+        booking_source_id: quotedSource, source_reference: '', channel_total: '',
         check_in: prefill.check_in ?? '', check_out: prefill.check_out ?? (prefill.check_in ? nextDay(prefill.check_in) : ''),
         adults: prefill.adults ?? 2, children: 0, approved_early_time: prefill.early_time ?? '', pickup_time: '', return_time: '', special_requests: '', internal_notes: prefill.note ?? '',
         idempotency_key: useMemo(() => crypto.randomUUID?.() ?? String(Date.now()), []),
@@ -61,11 +61,14 @@ function BookingFields({ options, prefill, onClose }: { options: Options; prefil
     const withinCapacity = selected.length > 0 && party <= capacity;
     const source = sources.find((s: any) => String(s.id) === String(form.data.booking_source_id));
     const nights = nightsBetween(form.data.check_in, form.data.check_out);
+    // Airbnb sets its own price, so staff type the total from Airbnb instead of using the nightly rates.
+    const airbnb = source?.code === 'airbnb' && !camera;
+    const channelTotalReady = !airbnb || Number(form.data.channel_total) > 0;
     const hasContact = !!(form.data.guest_phone.trim() || form.data.guest_email.trim() || form.data.guest_messenger_handle.trim());
     const guestReady = existing ? !!form.data.guest_id : !!form.data.guest_name.trim() && hasContact;
     const sourceReady = !!form.data.booking_source_id;
     const earlyTimeValid = camera || !form.data.approved_early_time || form.data.approved_early_time < standardCheckIn;
-    const canSave = availability.state === 'ready' && withinCapacity && guestReady && sourceReady && earlyTimeValid && !form.processing;
+    const canSave = availability.state === 'ready' && withinCapacity && guestReady && sourceReady && earlyTimeValid && channelTotalReady && !form.processing;
 
     const chooseCheckIn = (value: string) => form.setData((d: any) => ({ ...d, check_in: value, check_out: value && (!d.check_out || d.check_out <= value) ? nextDay(value) : d.check_out }));
     const toggleExisting = (checked: boolean) => {
@@ -85,8 +88,8 @@ function BookingFields({ options, prefill, onClose }: { options: Options; prefil
             if (!(await confirmDialog({ title: `${action}?`, message, confirmLabel: action }))) return;
         }
         form.transform((d: any) => camera
-            ? { ...d, then, adults: 1, children: 0, approved_early_time: '' }
-            : { ...d, then, pickup_time: '', return_time: '' });
+            ? { ...d, then, adults: 1, children: 0, approved_early_time: '', channel_total: '' }
+            : { ...d, then, pickup_time: '', return_time: '', channel_total: airbnb ? d.channel_total : '' });
         form.post('/admin/bookings', { preserveScroll: true, onSuccess: onClose });
     }
 
@@ -120,6 +123,11 @@ function BookingFields({ options, prefill, onClose }: { options: Options; prefil
                     <Field label="Booking source" required error={e.booking_source_id} help="Where the guest came from.">
                         <Select placeholder="Select…" options={sources.map((s: any) => ({ value: s.id, label: s.name }))} value={form.data.booking_source_id} onChange={(ev) => form.setData('booking_source_id', ev.target.value)} />
                     </Field>
+                    {airbnb && (
+                        <Field label="Total to pay on Airbnb (₱)" required error={e.channel_total} help="Copy the guest's total from the Airbnb reservation. The nightly rates here are not used for Airbnb bookings.">
+                            <Input type="number" inputMode="decimal" min={0.01} step={0.01} value={form.data.channel_total} onChange={(ev) => form.setData('channel_total', ev.target.value)} />
+                        </Field>
+                    )}
                     <Field label="Reservation or message reference" error={e.source_reference} help="Optional for every booking source."><Input value={form.data.source_reference} onChange={(ev) => form.setData('source_reference', ev.target.value)} /></Field>
                 </fieldset>
 
@@ -154,6 +162,7 @@ function BookingFields({ options, prefill, onClose }: { options: Options; prefil
                         <div><dt className="inline text-muted">Stay: </dt><dd className="inline font-medium">{dateOnly(form.data.check_in)} to {dateOnly(form.data.check_out)} · {nights} night{nights === 1 ? '' : 's'}</dd></div>
                         <div><dt className="inline text-muted">Guests: </dt><dd className="inline font-medium">{party} total · maximum {capacity}</dd></div>
                         <div><dt className="inline text-muted">Source: </dt><dd className="inline font-medium">{source?.name ?? 'Not selected'}</dd></div>
+                        {airbnb && <div><dt className="inline text-muted">Airbnb total: </dt><dd className="inline font-medium">{Number(form.data.channel_total) > 0 ? `₱${Number(form.data.channel_total).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'Not entered'}</dd></div>}
                         <div><dt className="inline text-muted">Status after saving: </dt><dd className="inline font-medium">Choose Inquiry, Hold, or Confirm below</dd></div>
                         {form.data.approved_early_time && <div><dt className="inline text-muted">Early check-in: </dt><dd className="inline font-medium">{time12(form.data.approved_early_time)}</dd></div>}
                     </dl>

@@ -46,4 +46,42 @@ class FaqTest extends DomainTestCase
         $this->post("/admin/faqs/{$faq->id}/delete")->assertForbidden();
         $this->assertSame(1, Faq::count());
     }
+
+    private function publicFaqs(string $url): array
+    {
+        auth()->logout();
+        $this->withoutVite();
+
+        return $this->get($url)->assertOk()->original->getData()['page']['props']['faqs'];
+    }
+
+    public function test_answers_show_on_the_website_unless_switched_off(): void
+    {
+        $this->actingAs($this->owner)->post('/admin/faqs', ['topic' => 'Stay', 'question' => 'Is there Wi-Fi?', 'answer' => 'Yes, in every suite.'])->assertSessionHasNoErrors();
+        $this->post('/admin/faqs', ['question' => 'Staff discount code?', 'answer' => 'Messenger only.', 'show_on_website' => false])->assertSessionHasNoErrors();
+        $this->assertTrue(Faq::where('question', 'Is there Wi-Fi?')->value('show_on_website'));
+        Faq::create(['category' => 'cameras', 'question' => 'Do you need an ID?', 'answer' => 'Yes, one valid ID.']);
+
+        $expected = [['question' => 'Is there Wi-Fi?', 'answer' => 'Yes, in every suite.']];
+        $this->assertSame($expected, $this->publicFaqs('/'), 'Only shown answers, only the question and answer, only this business.');
+        $this->assertSame($expected, $this->publicFaqs('/policies'));
+    }
+
+    public function test_camera_answers_show_on_the_grab_cam_page(): void
+    {
+        $this->seed(\Database\Seeders\GrabCamSeeder::class);
+        Faq::create(['category' => 'cameras', 'question' => 'Do you need an ID?', 'answer' => 'Yes, one valid ID.']);
+        Faq::create(['category' => 'cameras', 'question' => 'Hidden?', 'answer' => 'No.', 'show_on_website' => false]);
+        Faq::create(['category' => 'suites', 'question' => 'Is there Wi-Fi?', 'answer' => 'Yes.']);
+
+        $this->assertSame([['question' => 'Do you need an ID?', 'answer' => 'Yes, one valid ID.']], $this->publicFaqs('/grabcam'));
+    }
+
+    public function test_switching_an_answer_off_removes_it_from_the_website(): void
+    {
+        $faq = Faq::create(['category' => 'suites', 'question' => 'Pets?', 'answer' => 'Sorry, no pets.']);
+        $this->actingAs($this->owner)->post("/admin/faqs/{$faq->id}", ['question' => 'Pets?', 'answer' => 'Sorry, no pets.', 'show_on_website' => false])->assertSessionHasNoErrors();
+
+        $this->assertSame([], $this->publicFaqs('/'));
+    }
 }

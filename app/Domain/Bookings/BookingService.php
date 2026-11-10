@@ -78,6 +78,7 @@ class BookingService
                 'guest_count' => $guestCount,
                 'special_requests' => $data['special_requests'] ?? null,
                 'internal_notes' => $data['internal_notes'] ?? null,
+                'channel_total_cents' => $data['channel_total_cents'] ?? null,
                 'created_by' => auth()->id(),
             ]);
 
@@ -189,6 +190,8 @@ class BookingService
                 'guest_count' => $adults + $children,
                 'property_id' => $rooms->first()->property_id,
                 'approved_early_time' => array_key_exists('approved_early_time', $data) ? $data['approved_early_time'] : $fresh->approved_early_time,
+                'channel_total_cents' => array_key_exists('channel_total_cents', $data) ? $data['channel_total_cents'] : $fresh->channel_total_cents,
+                'booking_source_id' => $data['booking_source_id'] ?? $fresh->booking_source_id,
             ]);
             $fresh->activeRooms()->update(['released_at' => now()]);
             $this->writeRooms($fresh, $rooms, $checkIn, $checkOut, $adults + $children);
@@ -411,8 +414,13 @@ class BookingService
 
         $all = [];
         $earlyApplied = false;
-        foreach ($booking->activeRooms()->with('room')->orderBy('room_id')->get() as $br) {
+        $activeRooms = $booking->activeRooms()->with('room')->orderBy('room_id')->get();
+        $channelShares = $this->channelShares($booking, $activeRooms->count());
+        foreach ($activeRooms as $index => $br) {
             $roomOpts = $opts;
+            if ($channelShares) {
+                $roomOpts['channel_total_cents'] = $channelShares[$index];
+            }
             if ($earlyApplied) {
                 unset($roomOpts['early_time']);
             }
@@ -449,6 +457,7 @@ class BookingService
             'version' => $version,
             'snapshot' => ['rooms' => $all, 'settings' => [
                 'weekend_days' => Settings::get('pricing.weekend_days'),
+                'channel_total_cents' => $booking->channel_total_cents !== null ? (int) $booking->channel_total_cents : null,
                 'extra_guest_unit' => Settings::get('pricing.extra_guest_unit'),
                 'extra_guest_cents' => Settings::get('pricing.extra_guest_cents'),
                 'early_fee_cents_per_hour' => Settings::get('pricing.early_fee_cents_per_hour'),
@@ -479,7 +488,7 @@ class BookingService
             return null;
         }
 
-        $quote = Quote::with('items')->where('booking_id', $booking->id)->orderByDesc('id')->first();
+        $quote = $booking->channel_total_cents !== null ? null : Quote::with('items')->where('booking_id', $booking->id)->orderByDesc('id')->first();
         if ($quote && $rooms->count() === 1 && (int) $quote->room_id === (int) $rooms[0]->room_id
             && $quote->check_in->toDateString() === $booking->check_in->toDateString() && $quote->check_out->toDateString() === $booking->check_out->toDateString()) {
             return [
@@ -495,9 +504,13 @@ class BookingService
             $opts['early_time'] = substr($booking->approved_early_time, 0, 5);
         }
         $lines = [];
+        $channelShares = $this->channelShares($booking, $rooms->count());
         try {
             foreach ($rooms as $index => $br) {
                 $roomOpts = $index === 0 ? $opts : array_diff_key($opts, ['early_time' => true]);
+                if ($channelShares) {
+                    $roomOpts['channel_total_cents'] = $channelShares[$index];
+                }
                 $priced = $this->pricing->quote($br->room, $br->check_in->toDateString(), $br->check_out->toDateString(), max(1, $br->guest_count), $roomOpts);
                 foreach ($priced['lines'] as $line) {
                     $lines[] = ['type' => $line['type'], 'description' => ($rooms->count() > 1 ? "{$br->room->name}: " : '').$line['description'], 'amount_cents' => (int) $line['amount_cents']];
@@ -507,7 +520,25 @@ class BookingService
             return ['error' => 'An estimate cannot be worked out yet: '.$e->getMessage()];
         }
 
-        return ['source' => 'rates', 'lines' => $lines, 'total_cents' => array_sum(array_column($lines, 'amount_cents'))];
+        return ['source' => $channelShares ? 'channel' : 'rates', 'lines' => $lines, 'total_cents' => array_sum(array_column($lines, 'amount_cents'))];
+    }
+
+    /**
+     * The Airbnb total shared between the booking's rooms, leftover centavos on the first rooms.
+     * Null when the booking is priced from the nightly rates.
+     *
+     * @return list<int>|null
+     */
+    private function channelShares(Booking $booking, int $roomCount): ?array
+    {
+        if ($booking->channel_total_cents === null || $roomCount === 0) {
+            return null;
+        }
+        $total = (int) $booking->channel_total_cents;
+        $each = intdiv($total, $roomCount);
+        $left = $total - $each * $roomCount;
+
+        return array_map(fn ($i) => $each + ($i < $left ? 1 : 0), range(0, $roomCount - 1));
     }
 
     /** Recalculates the stored total after a non-engine charge is added or voided. */

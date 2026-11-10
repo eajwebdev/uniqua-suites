@@ -167,6 +167,7 @@ class AccessAndFlowTest extends DomainTestCase
             'check_in' => '2031-03-03',
             'check_out' => '2031-03-05',
             'adults' => 2,
+            'channel_total' => '4500',
         ])->assertSessionHasNoErrors()->assertSessionHas('success');
 
         $this->assertNull(Booking::sole()->source_reference);

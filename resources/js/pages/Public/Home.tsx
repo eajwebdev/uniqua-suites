@@ -1,5 +1,5 @@
 import { Link } from '@inertiajs/react';
-import { CalendarCheck, CalendarX, ChevronLeft, ChevronRight } from 'lucide-react';
+import { CalendarCheck, CalendarX, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { AmenityIcon, BookNow, DateFilter, datesAreFree, Eyebrow, MessageButton, monthLabel, MonthGrid, PAGE_WIDTH, RoomCard, roomMatches, shiftMonth, SuiteFilterPanel, SuitePhoto, SWIPE_CARD, SWIPE_ROW, SwipeHint, todayInManila, useStayDates, useSuiteFilters } from '@/components/public';
 import { cn } from '@/components/ui';
@@ -78,7 +78,31 @@ function Availability({ rooms, stay }: { rooms: any[]; stay: ReturnType<typeof u
     );
 }
 
-export default function Home({ rooms, amenities, properties, types }: any) {
+/** Answers staff keep in Admin > FAQ, marked to show on the website. */
+function Questions({ faqs }: { faqs: { question: string; answer: string }[] }) {
+    return (
+        <section id="faq" className="scroll-mt-16 bg-beige py-12 sm:py-24">
+            <div className={cn(PAGE_WIDTH, 'max-w-4xl')}>
+                <Eyebrow className="mb-3">Questions</Eyebrow>
+                <h2 className="mb-8 font-serif text-4xl font-light sm:mb-12 sm:text-6xl">Frequently asked</h2>
+                <div className="divide-y divide-chocolate/15 border-y border-chocolate/15">
+                    {faqs.map((f) => (
+                        <details key={f.question} className="group py-1">
+                            <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 py-3 font-serif text-xl font-normal sm:text-2xl [&::-webkit-details-marker]:hidden">
+                                {f.question}
+                                <ChevronDown size={20} strokeWidth={1.5} className="shrink-0 text-bronze transition-transform group-open:rotate-180" aria-hidden />
+                            </summary>
+                            <p className="pb-5 leading-relaxed whitespace-pre-line text-muted">{f.answer}</p>
+                        </details>
+                    ))}
+                </div>
+                <p className="mt-6 text-sm text-muted">More in <Link href="/policies" className="font-medium text-bronze hover:underline">Policies &amp; FAQ</Link>, or ask us in Messenger.</p>
+            </div>
+        </section>
+    );
+}
+
+export default function Home({ rooms, amenities, properties, types, faqs = [] }: any) {
     const stay = useStayDates();
     const { filters, setFilter, clearFilters, active } = useSuiteFilters();
     // Largest first, so the list opens on the flagship suites.
@@ -209,6 +233,8 @@ export default function Home({ rooms, amenities, properties, types }: any) {
                     <p className="mt-10 text-sm text-muted">No booking or payment happens on this website.</p>
                 </div>
             </section>
+
+            {faqs.length > 0 && <Questions faqs={faqs} />}
 
             <section className="relative isolate overflow-hidden bg-chocolate text-ivory">
                 {closing && <img src={closing.url} alt="" loading="lazy" className="absolute inset-0 -z-10 size-full scale-105 object-cover" />}

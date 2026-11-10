@@ -33,7 +33,7 @@ class CalendarController extends Controller
             ->whereNull('br.released_at')->whereIn('br.room_id', $rooms->pluck('id'))
             ->where('br.check_in', '<', $end->toDateString())->where('br.check_out', '>', $start->toDateString())
             ->whereIn('b.status', [Booking::INQUIRY, Booking::TENTATIVE, Booking::CONFIRMED, Booking::CHECKED_IN, Booking::CHECKED_OUT])
-            ->get(['b.id', 'b.reference', 'b.status', 'br.room_id', 'br.check_in', 'br.check_out', 's.name as source', 'g.full_name as guest']);
+            ->get(['b.id', 'b.reference', 'b.status', 'br.room_id', 'br.check_in', 'br.check_out', 's.name as source', 's.code as source_code', 'g.full_name as guest']);
 
         $blocks = DB::table('room_blocks')->whereNull('released_at')->whereIn('room_id', $rooms->pluck('id'))
             ->where('start_date', '<', $end->toDateString())->where('end_date', '>', $start->toDateString())

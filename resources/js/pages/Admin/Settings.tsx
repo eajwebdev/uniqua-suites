@@ -1,6 +1,7 @@
-import { useForm } from '@inertiajs/react';
-import { useRef } from 'react';
-import { ActionButton, Button, Card, Field, Input, Select, StatusChip } from '@/components/ui';
+import { router, useForm } from '@inertiajs/react';
+import { Plus, Trash2 } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { ActionButton, Button, Card, confirmDialog, Field, Input, Select, StatusChip } from '@/components/ui';
 import { dateOnly, humanize } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
 
@@ -24,11 +25,38 @@ function PlaceholderList({ placeholders }: { placeholders: any[] }) {
     );
 }
 
-function TemplateRow({ template, placeholders }: any) {
-    const form = useForm({ body: template.body });
+/** Made-up details, so the preview shows how the message will read once it is copied. */
+const SAMPLE: Record<string, string> = {
+    guest: 'Maria Santos', room: 'Venice', check_in: 'Dec 20, 2026', check_out: 'Dec 22, 2026', guests: '2', total: '₱5,600.00',
+    reference: 'UQ-2612-ABCDE', property: 'The Loop, Limketkai', balance: '₱2,800.00', check_in_time: '2:00 PM', nights: '2',
+    breakdown: 'Weekday (1 × ₱2,600): ₱2,600\nWeekend (1 × ₱3,000): ₱3,000', payment: '50% Downpayment: ₱2,800\nBalance upon check-in: ₱2,800',
+    pickup_time: '10:00 AM', return_time: '6:00 PM', days: '3',
+};
+const fillSample = (body: string) => body.replace(/\{\{(\w+)\}\}/g, (match, key) => SAMPLE[key] ?? match);
+
+type Template = { id: number; key: string; name: string; body: string; property_id: number | null; business: 'suites' | 'cameras'; system: boolean };
+
+/** Where a template shows: on which property's bookings. Only suites have more than one property. */
+function usedFor(template: { business: string; property_id: number | null }, properties: any[]) {
+    if (template.business === 'cameras') return 'Grab Cam rentals';
+    const one = properties.find((p: any) => p.id === template.property_id);
+
+    return one ? `${one.name} only` : properties.length > 1 ? `All suites (${properties.map((p: any) => p.name).join(' and ')})` : 'All suites';
+}
+
+/** Title, where it is used, the message itself with click-to-add placeholders, and a live preview. */
+function TemplateEditor({ template, placeholders, properties, onDone }: { template?: Template; placeholders: any[]; properties: any[]; onDone?: () => void }) {
+    const form = useForm<any>({
+        business: template?.business ?? 'suites',
+        name: template?.name ?? '',
+        body: template?.body ?? '',
+        property_id: template?.property_id ? String(template.property_id) : '',
+    });
+    const e = form.errors as any;
     const box = useRef<HTMLTextAreaElement>(null);
-    const scope = template.key === 'quote' ? 'quote' : 'booking';
+    const scope = template?.key === 'quote' ? 'quote' : 'booking';
     const usable = placeholders.filter((p: any) => p.where === 'all' || p.where === scope);
+    const suites = form.data.business === 'suites' && !template?.system;
 
     const insert = (key: string) => {
         const el = box.current;
@@ -42,26 +70,110 @@ function TemplateRow({ template, placeholders }: any) {
         });
     };
 
+    const submit = (ev: React.FormEvent) => {
+        ev.preventDefault();
+        form.transform((d: any) => ({ ...d, property_id: suites ? d.property_id || null : null }));
+        form.post(template ? `/admin/settings/templates/${template.id}` : '/admin/settings/templates', {
+            preserveScroll: true,
+            onSuccess: () => { if (!template) form.reset(); onDone?.(); },
+        });
+    };
+
+    async function remove() {
+        if (!template) return;
+        if (await confirmDialog({ title: 'Delete this template?', message: `"${template.name}" will no longer appear under Copy-ready messages on bookings.`, confirmLabel: 'Delete', danger: true })) {
+            router.post(`/admin/settings/templates/${template.id}/delete`, {}, { preserveScroll: true });
+        }
+    }
+
+    return (
+        <form onSubmit={submit} className="mt-2 space-y-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Title" required error={e.name} help="What staff see on the booking, e.g. Arrival instructions.">
+                    <Input required maxLength={120} value={form.data.name} onChange={(ev) => form.setData('name', ev.target.value)} />
+                </Field>
+                {!template && (
+                    <Field label="Business" required error={e.business}>
+                        <Select options={[{ value: 'suites', label: 'Suites' }, { value: 'cameras', label: 'Grab Cam rentals' }]} value={form.data.business} onChange={(ev) => form.setData('business', ev.target.value)} />
+                    </Field>
+                )}
+                {suites && (
+                    <Field label="Used for" error={e.property_id} help="Shows only on bookings at this property.">
+                        <Select options={[{ value: '', label: properties.length > 1 ? `Both (${properties.map((p: any) => p.name).join(' and ')})` : 'All suites' }, ...properties.map((p: any) => ({ value: String(p.id), label: `${p.name} only` }))]} value={form.data.property_id} onChange={(ev) => form.setData('property_id', ev.target.value)} />
+                    </Field>
+                )}
+                {template?.system && <p className="self-end pb-2 text-xs text-muted">Used for every quotation, at both properties.</p>}
+            </div>
+            <Field label="Message" required error={e.body} help="Line breaks and emoji are kept when the message is copied.">
+                <textarea ref={box} required maxLength={4000} rows={template?.key === 'quote' ? 14 : 6} className="w-full rounded-md border border-line px-3 py-2 font-mono text-[13px] pointer-coarse:text-base" value={form.data.body} onChange={(ev) => form.setData('body', ev.target.value)} />
+            </Field>
+            <div>
+                <p className="mb-1 text-xs text-muted">Click to add it where your cursor is:</p>
+                <div className="flex flex-wrap gap-1">
+                    {usable.map((p: any) => (
+                        <button key={p.key} type="button" title={p.description} onClick={() => insert(p.key)} className="rounded border border-line bg-white px-1.5 py-0.5 font-mono text-[11px] text-chocolate transition-colors hover:border-gold hover:bg-ivory pointer-coarse:min-h-9 pointer-coarse:px-2">{tag(p.key)}</button>
+                    ))}
+                </div>
+            </div>
+            {form.data.body.trim() && (
+                <div>
+                    <p className="mb-1 text-xs font-medium text-muted">Preview, with sample details</p>
+                    <p className="rounded-md border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-sm whitespace-pre-wrap text-espresso">{fillSample(form.data.body)}</p>
+                </div>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+                <Button small type="submit" variant="primary" disabled={form.processing || !form.data.name.trim() || !form.data.body.trim()}>{template ? 'Save' : 'Add template'}</Button>
+                {onDone && !template && <Button small onClick={onDone}>Cancel</Button>}
+                {template && !template.system && <Button small variant="danger" className="ml-auto" onClick={remove}><Trash2 size={13} aria-hidden /> Delete</Button>}
+                {template?.system && <span className="ml-auto text-xs text-muted">Cannot be deleted: quotes need it.</span>}
+            </div>
+        </form>
+    );
+}
+
+function TemplateRow({ template, placeholders, properties }: { template: Template; placeholders: any[]; properties: any[] }) {
     return (
         <details className="rounded-md border border-line px-3 py-2 text-sm">
-            <summary className="cursor-pointer font-medium">{template.name}</summary>
-            <form onSubmit={(e) => { e.preventDefault(); form.post(`/admin/settings/templates/${template.id}`, { preserveScroll: true }); }} className="mt-2 space-y-2">
-                <textarea ref={box} aria-label={`${template.name} body`} rows={template.key === 'quote' ? 14 : 4} className="w-full rounded-md border border-line px-3 py-2 text-sm pointer-coarse:text-base" value={form.data.body} onChange={(e) => form.setData('body', e.target.value)} />
-                <div>
-                    <p className="mb-1 text-xs text-muted">Click to add it where your cursor is:</p>
-                    <div className="flex flex-wrap gap-1">
-                        {usable.map((p: any) => (
-                            <button key={p.key} type="button" title={p.description} onClick={() => insert(p.key)} className="rounded border border-line bg-white px-1.5 py-0.5 font-mono text-[11px] text-chocolate transition-colors hover:border-gold hover:bg-ivory pointer-coarse:min-h-9 pointer-coarse:px-2">{tag(p.key)}</button>
-                        ))}
-                    </div>
-                </div>
-                <Button small type="submit" disabled={form.processing}>Save</Button>
-            </form>
+            <summary className="flex cursor-pointer flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="font-medium">{template.name}</span>
+                <span className={`rounded-full px-2 py-0.5 text-[11px] ${template.property_id ? 'bg-sky-50 text-sky-900' : 'bg-beige text-espresso'}`}>{usedFor(template, properties)}</span>
+            </summary>
+            <TemplateEditor template={template} placeholders={placeholders} properties={properties} />
         </details>
     );
 }
 
-export default function Settings({ settings: s, decisions, templates, placeholders, contact, taxes }: any) {
+function MessageTemplates({ templates, placeholders, properties }: { templates: Template[]; placeholders: any[]; properties: any[] }) {
+    const [adding, setAdding] = useState(false);
+    const groups = [['suites', 'Suites'], ['cameras', 'Grab Cam rentals']] as const;
+
+    return (
+        <Card title="Message templates" action={!adding ? <Button small onClick={() => setAdding(true)}><Plus size={13} aria-hidden /> New template</Button> : undefined}>
+            <p className="mb-2 text-xs text-muted">These appear under Copy-ready messages on each booking. Placeholders such as {tag('guest')} are replaced with the real details when a message is copied.</p>
+            <PlaceholderList placeholders={placeholders} />
+            {adding && (
+                <div className="mb-3 rounded-md border border-gold/60 bg-ivory/60 px-3 py-2">
+                    <p className="text-sm font-semibold">New template</p>
+                    <TemplateEditor placeholders={placeholders} properties={properties} onDone={() => setAdding(false)} />
+                </div>
+            )}
+            {groups.map(([business, label]) => {
+                const mine = templates.filter((t) => t.business === business);
+                if (mine.length === 0) return null;
+
+                return (
+                    <section key={business} className="mt-3 first-of-type:mt-0">
+                        <h3 className="mb-1.5 text-xs font-semibold tracking-wide text-muted uppercase">{label} ({mine.length})</h3>
+                        <div className="space-y-2">{mine.map((t) => <TemplateRow key={`${t.id}-${t.name}-${t.property_id}`} template={t} placeholders={placeholders} properties={properties} />)}</div>
+                    </section>
+                );
+            })}
+            {templates.length === 0 && !adding && <p className="py-4 text-center text-sm text-muted">No templates. Use New template to add one.</p>}
+        </Card>
+    );
+}
+
+export default function Settings({ settings: s, decisions, templates, placeholders, contact, taxes, templateProperties = [] }: any) {
     const form = useForm<any>({
         weekend_days: s.weekend_days ?? [],
         extra_guest: s.extra_guest ?? '200.00',
@@ -156,11 +268,7 @@ export default function Settings({ settings: s, decisions, templates, placeholde
             </Card>
 
             <div className="grid gap-4 lg:grid-cols-2">
-                <Card title="Message templates">
-                    <p className="mb-2 text-xs text-muted">Placeholders such as {tag('guest')} are replaced with the real details when a message is copied. Type them exactly as shown.</p>
-                    <PlaceholderList placeholders={placeholders} />
-                    <div className="space-y-2">{templates.map((t: any) => <TemplateRow key={t.id} template={t} placeholders={placeholders} />)}</div>
-                </Card>
+                <MessageTemplates templates={templates} placeholders={placeholders} properties={templateProperties} />
                 <div className="space-y-4">
                     <Card title="Public contact channels">
                         <ul className="space-y-1 text-sm">

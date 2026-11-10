@@ -36,7 +36,11 @@ class PricingService
         }
 
         $warnings = [];
-        $nights = $this->nightly($room, $checkIn, $checkOut, $opts['source_id'] ?? null);
+        // An Airbnb stay costs what Airbnb charged, whatever the dates, so the nightly rates are not used.
+        $channelTotal = isset($opts['channel_total_cents']) ? (int) $opts['channel_total_cents'] : null;
+        $nights = $channelTotal !== null
+            ? $this->spread($room, $checkIn, $checkOut, $channelTotal)
+            : $this->nightly($room, $checkIn, $checkOut, $opts['source_id'] ?? null);
         $lines = [];
 
         foreach ($nights as $n) {
@@ -51,7 +55,7 @@ class PricingService
         }
 
         // Airbnb charges the guest its own fixed price for the whole party (up to the room maximum), so no extra-guest fee.
-        $extra = $this->isAirbnb($opts['source_id'] ?? null) ? 0 : max(0, $guests - $room->included_guests);
+        $extra = $channelTotal !== null || $this->isAirbnb($opts['source_id'] ?? null) ? 0 : max(0, $guests - $room->included_guests);
         if ($extra > 0) {
             $unit = Settings::get('pricing.extra_guest_unit');
             $fee = (int) Settings::get('pricing.extra_guest_cents');
@@ -129,7 +133,9 @@ class PricingService
             ];
         }
 
-        foreach (TaxRule::inForceOn($checkIn)->orderBy('id')->get() as $rule) {
+        // The Airbnb total is what the guest paid, so no tax is added on top of it.
+        $taxRules = $channelTotal !== null ? [] : TaxRule::inForceOn($checkIn)->orderBy('id')->get();
+        foreach ($taxRules as $rule) {
             $lines[] = [
                 'type' => 'tax',
                 'description' => $rule->name.' ('.rtrim(rtrim(number_format($rule->rate_basis_points / 100, 2, '.', ''), '0'), '.').'%)',
@@ -190,6 +196,32 @@ class PricingService
         }
 
         return $nights;
+    }
+
+    /**
+     * A fixed stay total shared across its nights, so night-by-night reports still add up.
+     * Leftover centavos go on the first nights; the nights always add up to the total.
+     */
+    public function spread(Room $room, string $checkIn, string $checkOut, int $totalCents): array
+    {
+        if ($totalCents < 0) {
+            throw new PricingInputInvalid('The Airbnb total cannot be negative.');
+        }
+        $dates = [];
+        for ($day = CarbonImmutable::parse($checkIn), $end = CarbonImmutable::parse($checkOut); $day->lt($end); $day = $day->addDay()) {
+            $dates[] = $day->toDateString();
+        }
+        $count = count($dates);
+        $each = intdiv($totalCents, $count);
+        $left = $totalCents - $each * $count;
+
+        return array_map(fn ($date, $i) => [
+            'date' => $date,
+            'room_id' => $room->id,
+            'cents' => $each + ($i < $left ? 1 : 0),
+            'label' => 'Airbnb price',
+            'source' => 'channel_total',
+        ], $dates, array_keys($dates));
     }
 
     /** ₱ per started hour before the standard check-in time. */

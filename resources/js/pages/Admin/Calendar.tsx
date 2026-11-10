@@ -9,14 +9,26 @@ import AdminLayout from '@/layouts/AdminLayout';
 const STATUS: Record<string, { style: string; swatch: string; icon: any; label: string }> = {
     inquiry: { style: 'bg-white border border-dashed border-muted text-chocolate', swatch: 'bg-white border border-dashed border-muted', icon: HelpCircle, label: 'Inquiry' },
     tentative: { style: 'bg-amber-100 border border-amber-400 text-amber-950', swatch: 'bg-amber-100 border border-amber-400', icon: Clock, label: 'On hold' },
-    confirmed: { style: 'bg-espresso text-ivory', swatch: 'bg-espresso', icon: CheckCircle2, label: 'Confirmed' },
-    checked_in: { style: 'bg-teal-800 text-white', swatch: 'bg-teal-800', icon: BedDouble, label: 'Checked in' },
-    checked_out: { style: 'bg-beige text-espresso border border-line', swatch: 'bg-beige border border-line', icon: LogOut, label: 'Checked out' },
+    confirmed: { style: 'bg-espresso text-ivory', swatch: 'bg-gradient-to-r from-pink-200 to-sky-200 border border-line', icon: CheckCircle2, label: 'Confirmed' },
+    checked_in: { style: 'bg-teal-800 text-white', swatch: 'bg-gradient-to-r from-pink-200 to-sky-200 border border-line border-l-4 border-l-espresso', icon: BedDouble, label: 'Checked in' },
+    checked_out: { style: 'bg-beige text-espresso border border-line', swatch: 'bg-gradient-to-r from-pink-50 to-sky-50 border border-line', icon: LogOut, label: 'Checked out' },
     block: { style: 'bg-red-100 border border-red-300 text-red-950', swatch: 'bg-red-100 border border-red-300', icon: Ban, label: 'Blocked' },
 };
 
 // Stays that are already committed. Active holds also block inventory, but remain visually distinct.
 const BOOKED = ['confirmed', 'checked_in', 'checked_out'];
+
+/**
+ * Booked stays are coloured by where they came from: pink for Airbnb, blue for every other source.
+ * The status still shows in the icon and the bar style: a solid bar is confirmed, a dark left edge is
+ * a guest in the room, a faded bar has checked out. Inquiries keep a dashed outline in the source colour.
+ */
+const CHANNEL = {
+    airbnb: { label: 'Airbnb', swatch: 'bg-pink-200 border border-pink-300', confirmed: 'bg-pink-200 border border-pink-300 text-pink-950', checked_in: 'bg-pink-200 border border-pink-300 border-l-4 border-l-pink-600 text-pink-950', checked_out: 'bg-pink-50 border border-pink-200 text-pink-900/70', inquiry: 'bg-white border border-dashed border-pink-400 text-chocolate' },
+    other: { label: 'Other sources', swatch: 'bg-sky-200 border border-sky-300', confirmed: 'bg-sky-200 border border-sky-300 text-sky-950', checked_in: 'bg-sky-200 border border-sky-300 border-l-4 border-l-sky-700 text-sky-950', checked_out: 'bg-sky-50 border border-sky-200 text-sky-900/70', inquiry: 'bg-white border border-dashed border-sky-400 text-chocolate' },
+} as const;
+const channelOf = (e: any) => (e.source_code === 'airbnb' ? CHANNEL.airbnb : CHANNEL.other);
+const barStyle = (e: any) => (e.kind === 'block' || e.kind === 'tentative' ? STATUS[e.kind].style : (channelOf(e) as any)[e.kind] ?? STATUS[e.kind].style);
 
 const HOUSEKEEPING_DOT: Record<string, string> = { ready: 'bg-emerald-600', dirty: 'bg-red-700', cleaning: 'bg-amber-500', assigned: 'bg-amber-500', for_inspection: 'bg-sky-600', under_maintenance: 'bg-red-700' };
 
@@ -188,6 +200,10 @@ export default function Calendar({ month, label, prev, next, days, today, weeken
                         </button>
                     );
                 })}
+                <span className="ml-auto inline-flex flex-wrap items-center gap-3 px-1 text-xs text-muted" aria-label="Colour by booking source">
+                    {Object.values(CHANNEL).map((c) => <span key={c.label} className="inline-flex items-center gap-1.5"><span className={cn('size-3 rounded-sm', c.swatch)} aria-hidden /> {c.label}</span>)}
+                    <span className="inline-flex items-center gap-1.5"><span className="size-3 rounded-sm border border-emerald-300 bg-emerald-100" aria-hidden /> Today</span>
+                </span>
             </div>
 
             {/* Desktop resource timeline with sticky room labels */}
@@ -197,9 +213,9 @@ export default function Calendar({ month, label, prev, next, days, today, weeken
                         <div className="sticky left-0 z-20 flex w-44 shrink-0 items-center border-r border-line bg-ivory px-3 py-2 font-medium">Room</div>
                         <div className="grid flex-1" style={columns}>
                             {dates.map((d) => (
-                                <div key={d.date} className={cn('flex flex-col items-center gap-0.5 py-1.5', d.weekend && 'bg-beige/60')}>
+                                <div key={d.date} className={cn('flex flex-col items-center gap-0.5 py-1.5', d.weekend && 'bg-beige/60', d.date === today && 'bg-emerald-50')}>
                                     <span className="text-[10px] text-muted">{d.weekday}</span>
-                                    <span className={cn('flex size-6 items-center justify-center rounded-full', d.date === today ? 'bg-chocolate font-semibold text-gold' : '')}>{d.day}</span>
+                                    <span className={cn('flex size-6 items-center justify-center rounded-full', d.date === today ? 'bg-emerald-200 font-semibold text-emerald-950 ring-1 ring-emerald-400' : '')}>{d.day}</span>
                                 </div>
                             ))}
                         </div>
@@ -216,7 +232,7 @@ export default function Calendar({ month, label, prev, next, days, today, weeken
                             <div className="relative flex-1">
                                 <div className="absolute inset-0 grid" style={columns}>
                                     {dates.map((d) => {
-                                        const cell = cn('border-l border-line/40', d.weekend && 'bg-beige/40', d.date === today && 'bg-gold/15');
+                                        const cell = cn('border-l border-line/40', d.weekend && 'bg-beige/40', d.date === today && 'bg-emerald-50 border-x border-emerald-200');
                                         return canCreate && d.date >= today ? (
                                             <button type="button" key={d.date} onClick={() => openNewBooking({ room_id: room.id, check_in: d.date })} aria-label={`New booking, ${room.name}, ${dateOnly(d.date)}`} title={`New booking, ${room.name}, ${dateOnly(d.date)}`} className={cn('group/cell flex items-center justify-center transition-colors hover:bg-gold/25', cell)}>
                                                 <Plus size={13} className="text-espresso opacity-0 group-hover/cell:opacity-100" aria-hidden />
@@ -229,7 +245,7 @@ export default function Calendar({ month, label, prev, next, days, today, weeken
                                         const s = STATUS[e.kind];
                                         const content = e.kind === 'block' ? `${e.block_kind === 'closure' ? 'Closed' : 'Blocked'}: ${e.reason}` : e.guest;
                                         const title = e.kind === 'block' ? content : `${e.reference}: ${e.guest}. ${s.label}, ${e.source}. ${dateOnly(e.start)} to ${dateOnly(e.end)}`;
-                                        const cls = cn('pointer-events-auto mx-0.5 flex min-h-7 items-center gap-1 overflow-hidden rounded-md px-1.5 text-xs leading-tight shadow-xs', s.style);
+                                        const cls = cn('pointer-events-auto mx-0.5 flex min-h-7 items-center gap-1 overflow-hidden rounded-md px-1.5 text-xs leading-tight shadow-xs', barStyle(e));
                                         // A one-night stay is too narrow for an icon as well as the name. The colour and tooltip still say what it is.
                                         const oneNight = Number(span(e.start, e.end).gridColumn.split(' / ')[1]) - Number(span(e.start, e.end).gridColumn.split(' / ')[0]) === 1;
                                         const body = <>{!oneNight && <s.icon size={12} className="shrink-0" aria-hidden />}<span className="truncate">{content}</span></>;
@@ -244,7 +260,7 @@ export default function Calendar({ month, label, prev, next, days, today, weeken
                                         return e.kind === 'block' ? (
                                             <div key={`b${e.id}`} title={title} className={cls} style={span(e.start, e.end)}>{body}</div>
                                         ) : (
-                                            <Link key={`${e.id}-${room.id}`} href={`/admin/bookings/${e.id}`} title={title} aria-label={title} className={cn(cls, 'transition-[filter] hover:brightness-110')} style={span(e.start, e.end)}>{body}</Link>
+                                            <Link key={`${e.id}-${room.id}`} href={`/admin/bookings/${e.id}`} title={title} aria-label={title} className={cn(cls, 'transition-[filter] hover:brightness-95')} style={span(e.start, e.end)}>{body}</Link>
                                         );
                                     })}
                                 </div>
@@ -280,7 +296,7 @@ export default function Calendar({ month, label, prev, next, days, today, weeken
                                     {stays.map((e: any) => (
                                         <li key={`${e.kind}-${e.id}`} className="flex items-center justify-between gap-2 py-1.5">
                                             <span className="min-w-0">
-                                                {e.kind === 'block' ? <>{e.block_kind === 'closure' ? 'Closed' : 'Blocked'}: {e.reason}</> : <Link href={`/admin/bookings/${e.id}`} className="inline-block font-medium hover:underline pointer-coarse:py-3">{e.guest}</Link>}
+                                                {e.kind === 'block' ? <>{e.block_kind === 'closure' ? 'Closed' : 'Blocked'}: {e.reason}</> : <><span className={cn('mr-1.5 inline-block size-2.5 rounded-full align-middle', channelOf(e).swatch)} title={e.source} aria-hidden /><Link href={`/admin/bookings/${e.id}`} className="inline-block font-medium hover:underline pointer-coarse:py-3">{e.guest}</Link></>}
                                                 <span className="block text-xs text-muted">{dateOnly(e.start)} to {dateOnly(e.end)}{e.source ? ` · ${e.source}` : ''}</span>
                                             </span>
                                             {e.kind !== 'block' && <StatusChip value={e.status} label={STATUS[e.status]?.label} />}
