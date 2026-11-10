@@ -3,7 +3,7 @@ import axios from 'axios';
 import { Loader2 } from 'lucide-react';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { nextDay, RoomPicker, useRoomAvailability } from '@/components/RoomPicker';
-import { Button, confirmDialog, Field, Input, Modal, Select } from '@/components/ui';
+import { Button, confirmDialog, Field, Input, Modal, SearchSelect, Select } from '@/components/ui';
 import { dateOnly, time12 } from '@/lib/format';
 
 type QuotedGuest = { id: number; full_name: string; phone: string | null; email: string | null; messenger_handle: string | null };
@@ -107,7 +107,8 @@ function BookingFields({ options, prefill, onClose }: { options: Options; prefil
                     <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={existing} onChange={(ev) => toggleExisting(ev.target.checked)} /> Existing guest</label>
                     {existing ? (
                         <Field label="Guest" required error={e.guest_id}>
-                            <Select placeholder="Select…" options={guests.map((g: any) => ({ value: g.id, label: `${g.full_name}${g.phone ? ` (${g.phone})` : ''}` }))} value={form.data.guest_id} onChange={(ev) => form.setData('guest_id', ev.target.value)} />
+                            <SearchSelect aria-label="Guest" placeholder={`Select a guest (${guests.length})`} searchPlaceholder="Search name or phone" empty="No guest matches. Untick Existing guest to add a new one."
+                                options={guests.map((g: any) => ({ value: g.id, label: g.full_name, hint: g.phone ?? undefined }))} value={form.data.guest_id} onChange={(v) => form.setData('guest_id', v)} />
                         </Field>
                     ) : (
                         <>

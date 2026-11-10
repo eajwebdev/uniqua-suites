@@ -1,6 +1,6 @@
 import { Link, router, useForm, usePage } from '@inertiajs/react';
-import { AlertTriangle, Check, ChevronLeft, ChevronRight, CircleHelp, Copy, Eye, EyeOff, Inbox, X } from 'lucide-react';
-import { ButtonHTMLAttributes, FormEvent, ReactNode, useEffect, useRef, useState } from 'react';
+import { AlertTriangle, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Copy, Eye, EyeOff, Inbox, Search, X } from 'lucide-react';
+import { ButtonHTMLAttributes, FormEvent, ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { humanize } from '@/lib/format';
 
@@ -109,6 +109,94 @@ export function Select({ options, placeholder, ...props }: React.SelectHTMLAttri
                 </option>
             ))}
         </select>
+    );
+}
+
+export type SearchOption = { value: string | number; label: string; hint?: string; keywords?: string };
+
+/**
+ * A dropdown with its own search box: type part of a name, phone or Messenger name, then pick with the
+ * mouse, or the arrow keys and Enter. Esc or a click outside closes it. Use it for long lists such as guests.
+ */
+export function SearchSelect({ options, value, onChange, placeholder = 'Select…', searchPlaceholder = 'Type to search', empty = 'Nothing matches', disabled, className, 'aria-label': ariaLabel }: {
+    options: SearchOption[]; value: string | number | null | undefined; onChange: (value: string) => void; placeholder?: string; searchPlaceholder?: string; empty?: string; disabled?: boolean; className?: string; 'aria-label'?: string;
+}) {
+    const [open, setOpen] = useState(false);
+    const [query, setQuery] = useState('');
+    const [active, setActive] = useState(0);
+    const root = useRef<HTMLDivElement>(null);
+    const search = useRef<HTMLInputElement>(null);
+    const list = useRef<HTMLUListElement>(null);
+    const listId = useId();
+    const selected = options.find((o) => String(o.value) === String(value ?? ''));
+    const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const shown = options.filter((o) => {
+        const text = `${o.label} ${o.hint ?? ''} ${o.keywords ?? ''}`.toLowerCase();
+        return words.every((w) => text.includes(w));
+    });
+
+    useEffect(() => {
+        if (!open) return;
+        setActive(Math.max(0, shown.findIndex((o) => String(o.value) === String(value ?? ''))));
+        requestAnimationFrame(() => search.current?.focus());
+        const outside = (e: MouseEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false); };
+        document.addEventListener('mousedown', outside);
+        return () => document.removeEventListener('mousedown', outside);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open]);
+
+    useEffect(() => { setActive(0); }, [query]);
+    useEffect(() => { list.current?.querySelector<HTMLElement>(`[data-index="${active}"]`)?.scrollIntoView({ block: 'nearest' }); }, [active, open]);
+
+    const choose = (o: SearchOption) => {
+        onChange(String(o.value));
+        setOpen(false);
+        setQuery('');
+    };
+
+    const keys = (e: React.KeyboardEvent) => {
+        if (e.key === 'ArrowDown') { e.preventDefault(); setActive((i) => Math.min(shown.length - 1, i + 1)); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((i) => Math.max(0, i - 1)); }
+        else if (e.key === 'Enter') { e.preventDefault(); if (shown[active]) choose(shown[active]); }
+        else if (e.key === 'Escape') { e.preventDefault(); setOpen(false); }
+        else if (e.key === 'Tab') setOpen(false);
+    };
+
+    return (
+        <div ref={root} className={cn('relative', className)}>
+            <button type="button" disabled={disabled} aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(!open)}
+                onKeyDown={(e) => { if (!open && (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setOpen(true); } }}
+                className={cn(inputClass, 'flex items-center justify-between gap-2 text-left disabled:cursor-not-allowed disabled:opacity-60')}>
+                <span className={cn('min-w-0 truncate', !selected && 'text-muted')}>
+                    {selected ? <>{selected.label}{selected.hint && <span className="text-muted"> ({selected.hint})</span>}</> : placeholder}
+                </span>
+                <ChevronDown size={16} className={cn('shrink-0 text-muted transition-transform', open && 'rotate-180')} aria-hidden />
+            </button>
+            {open && (
+                // Stops the click reaching a surrounding <label>, which would otherwise reopen or close the list.
+                <div onClick={(e) => e.preventDefault()} className="absolute inset-x-0 top-full z-50 mt-1 overflow-hidden rounded-lg border border-line bg-white shadow-lg">
+                    <div className="relative border-b border-line/70 p-2">
+                        <Search size={15} className="pointer-events-none absolute top-1/2 left-4.5 -translate-y-1/2 text-muted" aria-hidden />
+                        <input ref={search} type="search" role="combobox" aria-expanded aria-controls={listId} aria-activedescendant={shown[active] ? `${listId}-${active}` : undefined} aria-autocomplete="list"
+                            placeholder={searchPlaceholder} value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={keys}
+                            className="w-full rounded-md border border-line bg-ivory/40 py-1.5 pr-2 pl-8 text-sm focus:border-gold-dark focus:ring-2 focus:ring-gold/30 focus:outline-none pointer-coarse:text-base" />
+                    </div>
+                    <ul ref={list} id={listId} role="listbox" className="max-h-64 overflow-y-auto py-1 text-sm">
+                        {shown.length === 0 ? <li className="px-3 py-2 text-muted">{empty}</li> : shown.map((o, i) => {
+                            const isSelected = String(o.value) === String(value ?? '');
+                            return (
+                                <li key={o.value} id={`${listId}-${i}`} data-index={i} role="option" aria-selected={isSelected} onMouseEnter={() => setActive(i)} onMouseDown={(e) => e.preventDefault()} onClick={() => choose(o)}
+                                    className={cn('flex cursor-pointer items-center gap-2 px-3 py-2 pointer-coarse:py-3', i === active && 'bg-ivory', isSelected && 'font-medium')}>
+                                    <Check size={14} className={cn('shrink-0 text-gold-dark', !isSelected && 'invisible')} aria-hidden />
+                                    <span className="min-w-0 truncate">{o.label}{o.hint && <span className="text-muted"> ({o.hint})</span>}</span>
+                                </li>
+                            );
+                        })}
+                    </ul>
+                    <p className="border-t border-line/70 px-3 py-1.5 text-[11px] text-muted">{shown.length} of {options.length}{words.length ? ' match' : ''}</p>
+                </div>
+            )}
+        </div>
     );
 }
 
