@@ -21,7 +21,7 @@ class QuoteCalculatorTest extends DomainTestCase
     /** Thursday to Monday: two weekday nights and two weekend nights, like the calculator's Nov 5 to 9. */
     private function query(array $extra = []): array
     {
-        return $extra + ['room_id' => $this->room('milan')->id, 'check_in' => '2031-03-06', 'check_out' => '2031-03-10', 'guests' => 6, 'parking_nights' => 3, 'parking_rate' => '300'];
+        return $extra + ['room_id' => $this->room('milan')->id, 'check_in' => '2031-03-06', 'check_out' => '2031-03-10', 'guests' => 6, 'parking_nights' => 3, 'parking_rate' => '300', 'guest_name' => 'Test Guest'];
     }
 
     private function preview(array $extra = []): array

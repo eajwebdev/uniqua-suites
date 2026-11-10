@@ -34,6 +34,13 @@ class QuoteGuestAndCategoryTest extends DomainTestCase
         $this->assertSame(1, Guest::count());
     }
 
+    public function test_a_quote_needs_a_guest(): void
+    {
+        $this->actingAs($this->owner)->post('/admin/quotes', $this->stay())
+            ->assertSessionHasErrors(['guest_name' => 'Choose an existing guest or enter the name of a new guest.']);
+        $this->assertSame(0, Quote::count());
+    }
+
     public function test_a_new_guest_typed_on_the_quote_is_added_to_guests(): void
     {
         $this->actingAs($this->owner)->post('/admin/quotes', $this->stay(['guest_name' => ' Juan Cruz ', 'guest_messenger_handle' => 'juan.cruz']))->assertRedirect()->assertSessionHasNoErrors();
@@ -63,6 +70,20 @@ class QuoteGuestAndCategoryTest extends DomainTestCase
 
         $this->assertNotNull($quote->fresh()->booking_id, 'The quote now points at its booking, so it is not booked twice.');
         $this->assertSame($guest->id, (int) $quote->fresh()->booking->guest_id);
+    }
+
+    public function test_an_older_quote_with_only_a_typed_name_still_fills_in_the_booking(): void
+    {
+        $guest = Guest::create(['full_name' => 'Patricia Mae', 'phone' => '09614058217']);
+        $quote = Quote::create(['reference' => 'Q-OLD', 'version' => 1, 'room_id' => $this->room('venice')->id, 'guest_name' => 'patricia mae', 'check_in' => '2031-03-03', 'check_out' => '2031-03-05', 'guest_count' => 2, 'total_cents' => 340000]);
+
+        $props = $this->actingAs($this->owner)->get("/admin/quotes/{$quote->id}")->original->getData()['page']['props']['quote'];
+        $this->assertSame($guest->id, $props['guest']['id'], 'The typed name matches one guest, so that guest is used.');
+        $this->assertSame($this->source('facebook_messenger'), $props['booking_source_id'], 'Quotes are sent on Messenger, so that is the source unless the quote says otherwise.');
+
+        // Two guests with that name: nobody is guessed, the name is typed in instead.
+        Guest::create(['full_name' => 'Patricia Mae']);
+        $this->assertNull($this->get("/admin/quotes/{$quote->id}")->original->getData()['page']['props']['quote']['guest']);
     }
 
     public function test_the_form_offers_guests_and_only_suites(): void

@@ -233,7 +233,7 @@ class PublicSiteAndVacancyTest extends DomainTestCase
         $this->assertArrayNotHasKey('copyText', $preview);
 
         $before = \App\Models\Quote::count();
-        $this->post('/admin/quotes', ['room_id' => $venice->id, 'check_in' => '2031-03-04', 'check_out' => '2031-03-06', 'guests' => 2])->assertSessionHasErrors('room_id');
+        $this->post('/admin/quotes', ['room_id' => $venice->id, 'check_in' => '2031-03-04', 'check_out' => '2031-03-06', 'guests' => 2, 'guest_name' => 'Test Guest'])->assertSessionHasErrors('room_id');
         $this->assertSame($before, \App\Models\Quote::count());
 
         $check = fn (string $in, string $out) => $this->getJson("/admin/quotes/check?room_id={$venice->id}&check_in={$in}&check_out={$out}&guests=2")->assertOk()->json('available');
@@ -244,7 +244,7 @@ class PublicSiteAndVacancyTest extends DomainTestCase
     public function test_holds_and_blocks_also_stop_a_quote_and_releasing_allows_it(): void
     {
         $venice = $this->room('venice');
-        $data = ['room_id' => $venice->id, 'check_in' => '2031-03-03', 'check_out' => '2031-03-04', 'guests' => 2];
+        $data = ['room_id' => $venice->id, 'check_in' => '2031-03-03', 'check_out' => '2031-03-04', 'guests' => 2, 'guest_name' => 'Test Guest'];
         $block = RoomBlock::create(['room_id' => $venice->id, 'start_date' => '2031-03-03', 'end_date' => '2031-03-04', 'kind' => 'workbook', 'reason' => 'Synthetic']);
         $this->post('/admin/quotes', $data)->assertSessionHasErrors('room_id');
 
@@ -258,7 +258,7 @@ class PublicSiteAndVacancyTest extends DomainTestCase
 
     public function test_past_dates_cannot_be_quoted(): void
     {
-        $this->post('/admin/quotes', ['room_id' => $this->room('venice')->id, 'check_in' => '2020-01-01', 'check_out' => '2020-01-02', 'guests' => 2])->assertSessionHasErrors('room_id');
+        $this->post('/admin/quotes', ['room_id' => $this->room('venice')->id, 'check_in' => '2020-01-01', 'check_out' => '2020-01-02', 'guests' => 2, 'guest_name' => 'Test Guest'])->assertSessionHasErrors('room_id');
     }
 
     public function test_the_ready_to_paste_message_has_the_guest_slot_dates_and_plain_charges(): void

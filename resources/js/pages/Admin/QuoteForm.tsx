@@ -87,6 +87,8 @@ export default function QuoteForm({ rooms, sources, guests: guestList, filters, 
     const guestName = (existingGuest ? chosenGuest?.full_name ?? '' : form.data.guest_name).trim();
     const [guestSearch, setGuestSearch] = useState('');
     const guestWords = guestSearch.trim().toLowerCase();
+    const guestReady = existingGuest ? !!form.data.guest_id : !!form.data.guest_name.trim();
+    const chooseExisting = (checked: boolean) => form.setData((d: any) => ({ ...d, guest_mode: checked ? 'existing' : 'new', ...(checked ? { guest_name: '', guest_phone: '', guest_email: '', guest_messenger_handle: '' } : { guest_id: '' }) }));
     const guestMatches = guestList.filter((g: any) => String(g.id) === String(form.data.guest_id) || !guestWords || `${g.full_name} ${g.contact ?? ''}`.toLowerCase().includes(guestWords));
 
     // The guest's name can be typed after the price is worked out. Staff may still reword it before copying.
@@ -123,6 +125,29 @@ export default function QuoteForm({ rooms, sources, guests: guestList, filters, 
         <AdminLayout title={filters.reference ? `Update quote ${filters.reference}` : 'Quotation calculator'} subtitle={filters.reference ? 'Change anything below. Saving makes a new version with the same reference, and the earlier versions are kept.' : undefined}>
             <div className="grid gap-4 lg:grid-cols-2">
                 <div className="space-y-4">
+                    <Card title="Guest">
+                        <div className="space-y-3">
+                            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={existingGuest} onChange={(ev) => chooseExisting(ev.target.checked)} /> Existing guest</label>
+                            {existingGuest ? (
+                                <>
+                                    <Input type="search" aria-label="Search guests" placeholder="Search name, phone or Messenger" value={guestSearch} onChange={(ev) => setGuestSearch(ev.target.value)} />
+                                    <Field label="Guest" required error={e.guest_id}>
+                                        <Select placeholder={guestMatches.length ? `Select… (${guestMatches.length})` : 'No guest matches'} options={guestMatches.map((g: any) => ({ value: g.id, label: g.contact ? `${g.full_name} (${g.contact})` : g.full_name }))} value={form.data.guest_id} onChange={set('guest_id')} />
+                                    </Field>
+                                </>
+                            ) : (
+                                <>
+                                    <Field label="Full name" required error={e.guest_name}><Input autoComplete="off" value={form.data.guest_name} onChange={set('guest_name')} /></Field>
+                                    <div className="grid gap-3 sm:grid-cols-2">
+                                        <Field label="Phone" error={e.guest_phone}><Input type="tel" value={form.data.guest_phone} onChange={set('guest_phone')} /></Field>
+                                        <Field label="Email" error={e.guest_email}><Input type="email" value={form.data.guest_email} onChange={set('guest_email')} /></Field>
+                                    </div>
+                                    <Field label="Messenger name or profile" error={e.guest_messenger_handle} help="Saved to Guests with the quote, so a booking made from it is already filled in."><Input value={form.data.guest_messenger_handle} onChange={set('guest_messenger_handle')} /></Field>
+                                </>
+                            )}
+                        </div>
+                    </Card>
+
                     <Card title="Stay details">
                         <form onSubmit={calculate} className="space-y-3">
                             <div className="grid gap-3 sm:grid-cols-2">
@@ -204,35 +229,6 @@ export default function QuoteForm({ rooms, sources, guests: guestList, filters, 
                                 </table>
                                 {preview.warnings.map((w: string) => <p key={w} className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-950">{w}</p>)}
                                 <form onSubmit={(ev) => { ev.preventDefault(); form.transform((d: any) => (d.guest_mode === 'existing' ? { ...d, guest_name: '', guest_phone: '', guest_email: '', guest_messenger_handle: '' } : { ...d, guest_id: '' })); form.post('/admin/quotes'); }} className="mt-4 space-y-3 border-t border-line pt-3">
-                                    <fieldset className="space-y-3">
-                                        <legend className="mb-1.5 text-sm font-medium">Guest</legend>
-                                        <div role="radiogroup" aria-label="Guest" className="inline-grid grid-cols-2 gap-0.5 rounded-lg border border-line bg-ivory p-0.5">
-                                            {[['new', 'New guest'], ['existing', 'Existing guest']].map(([mode, label]) => (
-                                                <button key={mode} type="button" role="radio" aria-checked={form.data.guest_mode === mode} onClick={() => form.setData('guest_mode', mode)}
-                                                    className={cn('min-h-8 rounded-md px-3 text-xs font-medium transition-colors pointer-coarse:min-h-10', form.data.guest_mode === mode ? 'bg-chocolate text-ivory' : 'text-espresso hover:bg-white')}>
-                                                    {label}
-                                                </button>
-                                            ))}
-                                        </div>
-                                        {existingGuest ? (
-                                            <div className="grid gap-2 sm:grid-cols-2">
-                                                <Input type="search" aria-label="Search guests" placeholder="Search name, phone or Messenger" value={guestSearch} onChange={(ev) => setGuestSearch(ev.target.value)} />
-                                                <div>
-                                                    <Select aria-label="Choose a guest" placeholder={guestMatches.length ? `Choose a guest (${guestMatches.length})` : 'No guest matches'} options={guestMatches.map((g: any) => ({ value: g.id, label: g.contact ? `${g.full_name} (${g.contact})` : g.full_name }))} value={form.data.guest_id} onChange={set('guest_id')} />
-                                                    {e.guest_id && <span role="alert" className="mt-1 block text-xs text-red-800">{e.guest_id}</span>}
-                                                </div>
-                                            </div>
-                                        ) : (
-                                            <>
-                                                <Field label="Full name" error={e.guest_name} help="Saved to Guests when you press Save quote version."><Input autoComplete="off" value={form.data.guest_name} onChange={set('guest_name')} /></Field>
-                                                <div className="grid gap-3 sm:grid-cols-3">
-                                                    <Field label="Messenger name" error={e.guest_messenger_handle}><Input value={form.data.guest_messenger_handle} onChange={set('guest_messenger_handle')} /></Field>
-                                                    <Field label="Phone" error={e.guest_phone}><Input type="tel" value={form.data.guest_phone} onChange={set('guest_phone')} /></Field>
-                                                    <Field label="Email" error={e.guest_email}><Input type="email" value={form.data.guest_email} onChange={set('guest_email')} /></Field>
-                                                </div>
-                                            </>
-                                        )}
-                                    </fieldset>
                                     <Field label="Message for Messenger" help="You can change the wording before copying.">
                                         <textarea ref={messageBox} rows={20} value={message} onChange={(ev) => setMessage(ev.target.value)} className="w-full rounded-lg border border-line bg-white px-3 py-2 text-sm shadow-xs focus:border-gold-dark focus:ring-2 focus:ring-gold/30 focus:outline-none pointer-coarse:text-base" />
                                     </Field>
@@ -241,8 +237,9 @@ export default function QuoteForm({ rooms, sources, guests: guestList, filters, 
                                             {copy.state === 'checking' ? <Loader2 size={15} className="animate-spin" aria-hidden /> : copy.state === 'copied' ? <Check size={15} aria-hidden /> : <Copy size={15} aria-hidden />}
                                             {copy.state === 'checking' ? 'Checking dates…' : copy.state === 'copied' ? 'Copied' : 'Copy for Messenger'}
                                         </Button>
-                                        <Button type="submit" disabled={!ready || form.processing}>Save quote version</Button>
+                                        <Button type="submit" disabled={!ready || !guestReady || form.processing}>Save quote version</Button>
                                     </div>
+                                    {!guestReady && <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-950">{existingGuest ? 'Select the guest' : "Enter the guest's name"} above to save this quote.</p>}
                                     <div role="status">
                                         {copy.state === 'copied' && <p className="rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-950">Copied. Paste it into Messenger with Ctrl+V. Press Save quote version to keep a record of it.</p>}
                                         {copy.state === 'manual' && <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-950">Your browser blocked copying. The message is selected above: press Ctrl+C.</p>}

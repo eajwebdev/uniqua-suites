@@ -131,7 +131,7 @@ class QuoteController extends Controller
             'check_out' => 'required|date_format:Y-m-d|after:check_in',
             'guests' => 'required|integer|min:1|max:30',
             'guest_id' => 'nullable|integer|exists:guests,id',
-            'guest_name' => 'nullable|string|max:120',
+            'guest_name' => 'required_without:guest_id|nullable|string|max:120',
             'guest_phone' => 'nullable|string|max:40',
             'guest_email' => 'nullable|email|max:120',
             'guest_messenger_handle' => 'nullable|string|max:120',
@@ -143,7 +143,7 @@ class QuoteController extends Controller
             'parking_rate' => ['nullable', Money::RULE],
             'booking_id' => 'nullable|exists:bookings,id',
             'reference' => 'nullable|string|exists:quotes,reference',
-        ]);
+        ], ['guest_name.required_without' => 'Choose an existing guest or enter the name of a new guest.']);
         if (! empty($data['discount']) && ! $request->user()->can('bookings.discount')) {
             abort(403, 'You are not authorized to apply discounts.');
         }
@@ -194,6 +194,17 @@ class QuoteController extends Controller
         $problem = $this->cannotQuote(Room::findOrFail($data['room_id']), $data['check_in'], $data['check_out'], (int) $data['guests'], $data['booking_id'] ?? null);
 
         return response()->json(['available' => $problem === null, 'message' => $problem])->header('Cache-Control', 'no-store');
+    }
+
+    /** The quote's guest; for an older quote with only a typed name, the one guest with exactly that name. Never a guess between two. */
+    private function bookingGuest(Quote $quote): ?Guest
+    {
+        if ($quote->guest || ! filled($quote->guest_name)) {
+            return $quote->guest;
+        }
+        $matches = Guest::whereRaw('LOWER(full_name) = ?', [mb_strtolower(trim($quote->guest_name))])->limit(2)->get();
+
+        return $matches->count() === 1 ? $matches->first() : null;
     }
 
     /** Quotes are for suites. Camera rentals are booked from New Booking. */
@@ -270,7 +281,9 @@ class QuoteController extends Controller
                 'guest_name' => $quote->guest_name,
                 'guest_id' => $quote->guest_id,
                 // So Create booking can fill in the guest as they were quoted.
-                'guest' => $quote->guest?->only(['id', 'full_name', 'phone', 'email', 'messenger_handle']),
+                'guest' => $this->bookingGuest($quote)?->only(['id', 'full_name', 'phone', 'email', 'messenger_handle']),
+                // Quotes are sent on Messenger, so that is where the guest came from unless the quote says otherwise.
+                'booking_source_id' => $quote->booking_source_id ?? BookingSource::where('code', 'facebook_messenger')->where('is_active', true)->value('id'),
                 'room' => $quote->room->name,
                 'room_id' => $quote->room_id,
                 'property' => $quote->room->property->location_label,

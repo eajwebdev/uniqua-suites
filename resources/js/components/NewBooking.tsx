@@ -8,7 +8,7 @@ import { dateOnly, time12 } from '@/lib/format';
 
 type QuotedGuest = { id: number; full_name: string; phone: string | null; email: string | null; messenger_handle: string | null };
 /** A quote passes everything it knows: the guest, party size, source and early check-in. */
-type Prefill = { room_id?: number | string; check_in?: string; check_out?: string; guest?: QuotedGuest | null; guest_name?: string | null; adults?: number; source_id?: number | string | null; early_time?: string | null; quote_id?: number; note?: string };
+type Prefill = { room_id?: number | string; check_in?: string; check_out?: string; guest?: QuotedGuest | null; guest_name?: string | null; adults?: number; source_id?: number | string | null; early_time?: string | null; quote_id?: number; note?: string; from?: string };
 type Options = { rooms: any[]; sources: any[]; guests: any[]; today: string; standard_check_in: string };
 
 const OPEN_EVENT = 'uniqa:new-booking';
@@ -92,6 +92,12 @@ function BookingFields({ options, prefill, onClose }: { options: Options; prefil
 
     return (
         <form onSubmit={(ev) => submit(ev, canConfirm ? 'confirm' : '')} className="space-y-5">
+            {prefill.from && (
+                <p role="status" className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-950">
+                    Filled in from quote {prefill.from}.{' '}
+                    {prefill.guest ? 'Check the details, then save.' : prefill.guest_name ? 'This quote has the guest name only: add a phone, email or Messenger name.' : 'This quote has no guest saved: enter the guest below.'}
+                </p>
+            )}
             <div className="grid gap-5 md:grid-cols-2">
                 <fieldset className="space-y-3">
                     <legend className="mb-1 text-sm font-semibold">Guest</legend>

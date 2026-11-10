@@ -239,7 +239,7 @@ class AccessAndFlowTest extends DomainTestCase
 
     public function test_full_journey_inquiry_to_report(): void
     {
-        $this->post('/admin/quotes', ['room_id' => $this->room('venice')->id, 'check_in' => '2031-03-03', 'check_out' => '2031-03-05', 'guests' => 2])->assertRedirect();
+        $this->post('/admin/quotes', ['room_id' => $this->room('venice')->id, 'check_in' => '2031-03-03', 'check_out' => '2031-03-05', 'guests' => 2, 'guest_name' => 'Test Guest'])->assertRedirect();
         $this->assertSame(0, DB::table('booking_rooms')->count(), 'a quote reserves nothing');
 
         $this->post('/admin/bookings', ['guest_name' => 'Synthetic Journey', 'guest_phone' => '09170000003', 'room_ids' => [$this->room('venice')->id], 'booking_source_id' => $this->source(), 'check_in' => '2031-03-03', 'check_out' => '2031-03-05', 'adults' => 2, 'then' => 'hold'])->assertRedirect();
