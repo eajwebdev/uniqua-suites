@@ -33,35 +33,154 @@ class BookingController extends Controller
 
     public function index(Request $request)
     {
-        $f = $request->validate(['status' => 'nullable|string|max:30', 'source' => 'nullable|integer', 'q' => 'nullable|string|max:80', 'arrivals' => 'nullable|string|max:10', 'room' => 'nullable|integer']);
+        $f = $request->validate([
+            'status' => 'nullable|string|max:30',
+            'source' => 'nullable|integer',
+            'q' => 'nullable|string|max:80',
+            'arrivals' => 'nullable|string|max:10',
+            'room' => 'nullable|integer',
+            'view' => 'nullable|in:all,open,arriving,in_house,unpaid,past',
+            'payment' => 'nullable|in:unpaid,review,paid,overpaid',
+            'from' => 'nullable|date_format:Y-m-d',
+            'to' => 'nullable|date_format:Y-m-d',
+            'sort' => 'nullable|in:newest,check_in,check_in_desc,balance',
+        ]);
+        $canPay = $request->user()->can('payments.view');
+        // Money filters and sorting only for people who may see payments.
+        if (! $canPay) {
+            unset($f['payment']);
+            if (($f['view'] ?? null) === 'unpaid') {
+                unset($f['view']);
+            }
+            if (($f['sort'] ?? null) === 'balance') {
+                unset($f['sort']);
+            }
+        }
 
-        $rows = AdminCategory::bookings(Booking::with(['guest:id,full_name', 'source:id,name', 'activeRooms.room:id,name']))
-            ->when($f['status'] ?? null, fn ($q, $v) => $q->where('status', $v))
-            ->when($f['source'] ?? null, fn ($q, $v) => $q->where('booking_source_id', $v))
-            ->when($f['room'] ?? null, fn ($q, $v) => $q->whereHas('activeRooms', fn ($r) => $r->where('room_id', $v)))
-            ->when(($f['arrivals'] ?? null) === 'today', fn ($q) => $q->where('check_in', Local::today())->where('status', Booking::CONFIRMED))
-            ->when($f['q'] ?? null, fn ($q, $v) => $q->where(fn ($w) => $w->where('reference', 'like', "%{$v}%")->orWhereHas('guest', fn ($g) => $g->where('full_name', 'like', "%{$v}%"))))
-            ->orderByDesc('id')->paginate(15)->withQueryString();
+        $today = Local::today();
+        $base = fn () => $this->withMoney(AdminCategory::bookings(Booking::query()));
+        $filtered = $this->applyListFilters($base(), $f, $today);
+
+        $sorted = match ($f['sort'] ?? null) {
+            'check_in' => $filtered->orderBy('check_in')->orderBy('id'),
+            'check_in_desc' => $filtered->orderByDesc('check_in')->orderByDesc('id'),
+            'balance' => $filtered->orderByDesc('balance_cents')->orderBy('check_in'),
+            default => $filtered->orderByDesc('id'),
+        };
+
+        $rows = $sorted->with(['guest:id,full_name,phone', 'source:id,name', 'activeRooms.room:id,name'])->paginate(20)->withQueryString();
 
         $rows->getCollection()->transform(fn ($b) => [
             'id' => $b->id,
             'reference' => $b->reference,
             'guest' => $b->guest->full_name,
+            'phone' => $b->guest->phone,
             'rooms' => $b->activeRooms->pluck('room.name')->join(', '),
             'source' => $b->source->name,
             'status' => $b->status,
             'check_in' => $b->check_in->toDateString(),
             'check_out' => $b->check_out->toDateString(),
+            'nights' => (int) $b->check_in->diffInDays($b->check_out),
             'total_cents' => (int) $b->total_cents,
             'hold_expires_at' => $b->hold_expires_at,
+            'charges_cents' => $canPay ? (int) $b->charges_cents : null,
+            'paid_cents' => $canPay ? (int) $b->paid_cents : null,
+            'pending_cents' => $canPay ? (int) $b->pending_cents : null,
+            'balance_cents' => $canPay ? (int) $b->balance_cents : null,
         ]);
+
+        // Counts for the quick views, so staff can see at a glance where work is waiting.
+        $views = ['all', 'open', 'arriving', 'in_house', 'past'];
+        if ($canPay) {
+            $views[] = 'unpaid';
+        }
+        $counts = [];
+        foreach ($views as $v) {
+            $counts[$v] = $this->applyListFilters($base(), ['view' => $v], $today)->count();
+        }
+
+        $summary = null;
+        if ($canPay) {
+            $owed = $this->applyListFilters($base(), ['view' => 'unpaid'], $today);
+            $summary = [
+                'unpaid_count' => $counts['unpaid'],
+                'unpaid_cents' => (int) DB::query()->fromSub($owed, 'b')->sum('balance_cents'),
+                'pending_cents' => (int) DB::query()->fromSub($this->applyListFilters($base(), ['view' => 'unpaid'], $today), 'b')->sum('pending_cents'),
+                'filtered_balance_cents' => (int) DB::query()->fromSub($this->applyListFilters($base(), $f, $today), 'b')->where('balance_cents', '>', 0)->whereNotIn('status', self::UNPRICED)->sum('balance_cents'),
+            ];
+        }
 
         return Inertia::render('Admin/BookingList', [
             'bookings' => $rows,
             'filters' => $f,
+            'counts' => $counts,
+            'summary' => $summary,
+            'canPay' => $canPay,
             'sources' => BookingSource::orderBy('name')->get(['id', 'name']),
             'statuses' => [Booking::INQUIRY, Booking::TENTATIVE, Booking::CONFIRMED, Booking::CHECKED_IN, Booking::CHECKED_OUT, Booking::CANCELLED, Booking::NO_SHOW, Booking::EXPIRED],
         ]);
+    }
+
+    /** Not priced yet, so there is nothing to collect. */
+    private const UNPRICED = [Booking::INQUIRY, Booking::TENTATIVE, Booking::EXPIRED];
+
+    /**
+     * Adds charges, paid, pending and balance as columns, using the same rules as FinanceService::balance(),
+     * so the list can be filtered and sorted by money owed without loading every booking.
+     */
+    private function money(): array
+    {
+        $charges = '(select coalesce(sum(c.amount_cents), 0) from booking_charges c where c.booking_id = bookings.id and c.voided_at is null)';
+        $verified = "(select coalesce(sum(r.amount_cents), 0) from receipts r where r.booking_id = bookings.id and r.verification_status = 'verified')";
+        $pending = "(select coalesce(sum(r.amount_cents), 0) from receipts r where r.booking_id = bookings.id and r.verification_status = 'pending')";
+        $refunded = "(select coalesce(sum(f.amount_cents), 0) from refunds f where f.booking_id = bookings.id and f.status = 'executed')";
+        $settled = '(select coalesce(sum(s.gross_cents), 0) from external_settlements s where s.booking_id = bookings.id and s.actual_payout_cents is not null)';
+        $paid = "({$verified} + {$settled} - {$refunded})";
+
+        return ['charges' => $charges, 'paid' => $paid, 'pending' => $pending, 'balance' => "({$charges} - {$paid})"];
+    }
+
+    private function withMoney($query)
+    {
+        $m = $this->money();
+
+        return $query->select('bookings.*')
+            ->selectRaw("{$m['charges']} as charges_cents")
+            ->selectRaw("{$m['paid']} as paid_cents")
+            ->selectRaw("{$m['pending']} as pending_cents")
+            ->selectRaw("{$m['balance']} as balance_cents");
+    }
+
+    private function applyListFilters($query, array $f, string $today)
+    {
+        $m = $this->money();
+        $live = [Booking::INQUIRY, Booking::TENTATIVE, Booking::CONFIRMED, Booking::CHECKED_IN];
+        $owing = fn ($q) => $q->whereNotIn('status', self::UNPRICED)->whereRaw("{$m['balance']} > 0");
+
+        $query = match ($f['view'] ?? null) {
+            // Still needs action: inquiries, holds and confirmed stays that have not ended.
+            'open' => $query->whereIn('status', [Booking::INQUIRY, Booking::TENTATIVE, Booking::CONFIRMED])->where('check_out', '>=', $today),
+            'arriving' => $query->where('status', Booking::CONFIRMED)->whereBetween('check_in', [$today, Local::now()->addDays(7)->toDateString()]),
+            'in_house' => $query->where('status', Booking::CHECKED_IN),
+            'past' => $query->where(fn ($w) => $w->whereNotIn('status', $live)->orWhere(fn ($o) => $o->whereIn('status', $live)->where('check_out', '<', $today))),
+            'unpaid' => $owing($query),
+            default => $query,
+        };
+
+        $payment = $f['payment'] ?? null;
+
+        return $query
+            ->when($f['status'] ?? null, fn ($q, $v) => $q->where('status', $v))
+            ->when($f['source'] ?? null, fn ($q, $v) => $q->where('booking_source_id', $v))
+            ->when($f['room'] ?? null, fn ($q, $v) => $q->whereHas('activeRooms', fn ($r) => $r->where('room_id', $v)))
+            ->when(($f['arrivals'] ?? null) === 'today', fn ($q) => $q->where('check_in', $today)->where('status', Booking::CONFIRMED))
+            ->when($f['from'] ?? null, fn ($q, $v) => $q->where('check_out', '>=', $v))
+            ->when($f['to'] ?? null, fn ($q, $v) => $q->where('check_in', '<=', $v))
+            ->when($f['q'] ?? null, fn ($q, $v) => $q->where(fn ($w) => $w->where('reference', 'like', "%{$v}%")->orWhereHas('guest', fn ($g) => $g->where('full_name', 'like', "%{$v}%")->orWhere('phone', 'like', "%{$v}%")->orWhere('email', 'like', "%{$v}%"))))
+            ->when($payment === 'unpaid', $owing)
+            ->when($payment === 'review', fn ($q) => $q->whereRaw("{$m['pending']} > 0"))
+            ->when($payment === 'paid', fn ($q) => $q->whereRaw("{$m['charges']} > 0")->whereRaw("{$m['balance']} = 0"))
+            ->when($payment === 'overpaid', fn ($q) => $q->whereRaw("{$m['balance']} < 0"));
     }
 
     /** The form is a modal now. Old links and bookmarks open it on Reservations. */
