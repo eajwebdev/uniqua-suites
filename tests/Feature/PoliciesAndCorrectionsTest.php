@@ -365,14 +365,14 @@ class PoliciesAndCorrectionsTest extends DomainTestCase
     public function test_parking_calendar_shows_active_holders_for_the_month_only(): void
     {
         $space = ParkingSpace::firstOrFail();
-        ParkingAssignment::create(['parking_space_id' => $space->id, 'holder_name' => 'Synthetic In', 'start_date' => '2031-02-27', 'end_date' => '2031-03-02', 'status' => 'active']);
+        ParkingAssignment::create(['parking_space_id' => $space->id, 'holder_name' => 'Synthetic In', 'start_date' => '2031-02-27', 'end_date' => '2031-03-02', 'status' => 'assigned']);
         ParkingAssignment::create(['parking_space_id' => $space->id, 'holder_name' => 'Synthetic Cancelled', 'start_date' => '2031-03-05', 'end_date' => '2031-03-06', 'status' => 'cancelled']);
-        ParkingAssignment::create(['parking_space_id' => $space->id, 'holder_name' => 'Synthetic Out', 'start_date' => '2031-04-01', 'end_date' => '2031-04-02', 'status' => 'active']);
+        ParkingAssignment::create(['parking_space_id' => $space->id, 'holder_name' => 'Synthetic Out', 'start_date' => '2031-04-01', 'end_date' => '2031-04-02', 'status' => 'assigned']);
 
-        $this->get('/admin/parking/calendar?month=2031-03')->assertOk()->assertInertia(fn ($p) => $p->component('Admin/ParkingCalendar')->where('days', 31)->has('assignments', 1)->where('assignments.0.holder', 'Synthetic In'));
-        $this->get('/admin/parking/calendar?month=2031-13')->assertSessionHasErrors('month');
+        $this->get('/admin/parking?month=2031-03')->assertOk()->assertInertia(fn ($p) => $p->component('Admin/ParkingCalendar')->where('days', 31)->has('assignments', 1)->where('assignments.0.holder', 'Synthetic In'));
+        $this->get('/admin/parking?month=2031-13')->assertSessionHasErrors('month');
 
-        $this->actingAs($this->staff('Housekeeping / Laundry'))->get('/admin/parking/calendar')->assertForbidden();
+        $this->actingAs($this->staff('Housekeeping / Laundry'))->get('/admin/parking')->assertForbidden();
     }
 
     // Notifications

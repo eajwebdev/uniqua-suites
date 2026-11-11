@@ -315,7 +315,7 @@ export default function AdminLayout({ title, heading, subtitle, showSection = tr
         ...g,
         items: g.items.filter((n) => {
             if ((business === 'cameras' ? SUITES_ONLY : CAMERAS_ONLY).includes(n.href)) return false;
-            if (n.any[0] === '__owner_or_admin') return roles.includes('Owner') || roles.includes('Administrator');
+            if (n.any[0] === '__owner_or_admin') return ['Owner', 'Operations Manager', 'Administrator'].some((r) => roles.includes(r));
             if (n.any[0] === '__incidents_only') return can('incidents.view') && !can('maintenance.own') && !can('maintenance.manage');
             return n.any.some(can);
         }).map((n) => (business === 'cameras' && CAMERA_LABELS[n.href] ? { ...n, label: CAMERA_LABELS[n.href] } : n)),

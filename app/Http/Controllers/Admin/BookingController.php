@@ -6,6 +6,7 @@ use App\Domain\Availability\RoomConflict;
 use App\Domain\Bookings\BookingService;
 use App\Domain\Bookings\MessageService;
 use App\Domain\Finance\FinanceService;
+use App\Domain\Parking\ParkingService;
 use App\Http\Controllers\Controller;
 use App\Models\Booking;
 use App\Models\BookingCharge;
@@ -27,7 +28,7 @@ use Inertia\Inertia;
 
 class BookingController extends Controller
 {
-    public function __construct(private BookingService $bookings, private FinanceService $finance, private MessageService $messages)
+    public function __construct(private BookingService $bookings, private FinanceService $finance, private MessageService $messages, private ParkingService $parking)
     {
     }
 
@@ -198,6 +199,7 @@ class BookingController extends Controller
             'guests' => Guest::where(fn ($w) => $w->whereHas('bookings', fn ($b) => AdminCategory::bookings($b))->orWhereDoesntHave('bookings'))->orderByDesc('id')->limit(200)->get(['id', 'full_name', 'phone']),
             'today' => Local::today(),
             'standard_check_in' => (string) Settings::get('pricing.standard_check_in'),
+            'parking_rate' => Money::pesos((int) Settings::get('pricing.parking_night_cents')),
         ])->header('Cache-Control', 'no-store');
     }
 
@@ -241,7 +243,14 @@ class BookingController extends Controller
             'idempotency_key' => 'nullable|string|max:60',
             'then' => 'nullable|in:hold,confirm',
             'quote_id' => 'nullable|integer|exists:quotes,id',
-        ]);
+            'channel_total' => ['nullable', Money::RULE],
+            // Parking asked for with the reservation: recorded as a request (no stall yet) with its own fee.
+            'parking' => 'nullable|boolean',
+            'parking_start' => 'required_if:parking,true|nullable|date_format:Y-m-d',
+            'parking_end' => 'required_if:parking,true|nullable|date_format:Y-m-d|after:parking_start',
+            'parking_rate' => ['required_if:parking,true', 'nullable', Money::RULE],
+            'parking_vehicle' => 'nullable|string|max:80',
+        ], ['channel_total.regex' => 'Enter the Airbnb total as an amount, for example 4500 or 4500.50.', 'parking_end.after' => 'Parking ends after it starts.']);
         abort_if(($data['then'] ?? null) === 'confirm' && ! $request->user()->can('bookings.confirm'), 403);
 
         if (empty($data['guest_id']) && empty($data['guest_phone']) && empty($data['guest_email']) && empty($data['guest_messenger_handle'])) {
@@ -262,6 +271,14 @@ class BookingController extends Controller
         $rooms = Room::whereIn('id', $data['room_ids'])->orderBy('id')->get();
         if ($rooms->pluck('property_id')->unique()->count() > 1) {
             throw ValidationException::withMessages(['room_ids' => 'All rooms in one booking must be at the same property. Create a separate booking for another property.']);
+        }
+        // Airbnb sets its own price: the stay costs the total shown on Airbnb, not the nightly rates.
+        $data['channel_total_cents'] = null;
+        if ($this->isAirbnb((int) $data['booking_source_id']) && ! $rooms->first()?->isCamera()) {
+            $data['channel_total_cents'] = Money::cents($data['channel_total'] ?? null);
+            if ($data['channel_total_cents'] === null || $data['channel_total_cents'] <= 0) {
+                throw ValidationException::withMessages(['channel_total' => 'Enter the total the guest pays on Airbnb.']);
+            }
         }
         $party = (int) $data['adults'] + (int) ($data['children'] ?? 0);
         $capacity = (int) $rooms->sum('max_guests');
@@ -284,6 +301,13 @@ class BookingController extends Controller
                 }
 
                 $booking = $this->bookings->createInquiry($data);
+                if (! empty($data['parking'])) {
+                    $this->parking->save(null, [
+                        'booking_id' => $booking->id, 'holder_name' => $booking->guest->full_name, 'vehicle' => $data['parking_vehicle'] ?? null,
+                        'status' => \App\Models\ParkingAssignment::REQUESTED, 'start_date' => $data['parking_start'], 'end_date' => $data['parking_end'],
+                        'rate_cents' => Money::cents($data['parking_rate'] ?? null),
+                    ], auth()->id());
+                }
                 // A booking made from a quote is linked to it, so the quote no longer offers Create booking.
                 if (! empty($data['quote_id'])) {
                     \App\Models\Quote::whereKey($data['quote_id'])->whereNull('booking_id')->update(['booking_id' => $booking->id, 'guest_id' => $booking->guest_id]);
@@ -327,7 +351,10 @@ class BookingController extends Controller
                 'status' => $booking->status,
                 'guest' => $booking->guest->only(['id', 'full_name', 'phone', 'email', 'messenger_handle']),
                 'source' => $booking->source->name,
+                'source_code' => $booking->source->code,
+                'booking_source_id' => $booking->booking_source_id,
                 'source_reference' => $booking->source_reference,
+                'cancellation_reason' => $booking->cancellation_reason,
                 'property' => $booking->property->name,
                 'check_in' => $booking->check_in->toDateString(),
                 'check_out' => $booking->check_out->toDateString(),
@@ -342,6 +369,7 @@ class BookingController extends Controller
                 'internal_notes' => $booking->internal_notes,
                 'total_cents' => (int) $booking->total_cents,
                 'pricing_version' => $booking->pricing_version,
+                'channel_total_cents' => $booking->channel_total_cents !== null ? (int) $booking->channel_total_cents : null,
                 'is_camera' => $booking->property->category === Property::CAMERAS,
                 'pickup_time' => $booking->requested_arrival_time ? substr($booking->requested_arrival_time, 0, 5) : null,
                 'return_time' => $booking->return_time ? substr($booking->return_time, 0, 5) : null,
@@ -351,7 +379,10 @@ class BookingController extends Controller
                 'id_type' => $booking->id_type,
                 'id_status' => $booking->id_status,
                 'rooms' => $booking->activeRooms->map(fn ($r) => ['id' => $r->room_id, 'name' => $r->room->name, 'unit' => $r->room->unit_code, 'housekeeping' => $r->room->housekeeping_status]),
+                // A cancelled or no-show booking has released its rooms; show the ones it was for.
+                'released_rooms' => $booking->activeRooms->isEmpty() ? $this->lastRooms($booking) : [],
             ],
+            'sources' => BookingSource::where('is_active', true)->where('is_legacy_only', false)->orWhere('id', $booking->booking_source_id)->orderBy('id')->get(['id', 'code', 'name']),
             'charges' => $booking->charges()->orderByDesc('id')->get(['id', 'type', 'description', 'quantity', 'amount_cents', 'pricing_version', 'voided_at', 'void_reason']),
             'balance' => $canPay ? $this->finance->balance($booking) : null,
             'estimate' => $this->bookings->estimate($booking),
@@ -365,10 +396,73 @@ class BookingController extends Controller
             'refunds' => $canPay ? $booking->refunds()->orderByDesc('id')->get() : [],
             'events' => $booking->statusEvents->map(fn ($e) => ['from' => $e->from_status, 'to' => $e->to_status, 'note' => $e->note, 'by' => $e->user?->name, 'at' => $e->created_at]),
             'snapshots' => $booking->snapshots->map(fn ($s) => ['version' => $s->version, 'total_cents' => (int) $s->total_cents, 'reason' => $s->reason, 'at' => $s->created_at]),
-            'parking' => ParkingAssignment::where('booking_id', $booking->id)->with('space:id,code')->get()->map(fn ($p) => ['code' => $p->space->code, 'start' => $p->start_date->toDateString(), 'end' => $p->end_date->toDateString(), 'status' => $p->status]),
+            'parking' => $this->parkingRows($booking),
+            'parkingSplit' => $canPay && $booking->property->category !== Property::CAMERAS ? $this->parking->bookingSplit($booking, $this->finance->balance($booking)) : null,
+            'parkingForm' => $booking->property->category === Property::CAMERAS ? null : [
+                'reservation' => ParkingController::reservationOption($booking->loadMissing('activeRooms.room')),
+                'defaultRate' => Money::pesos((int) Settings::get('pricing.parking_night_cents')),
+                'methods' => [['value' => 'cash', 'label' => 'Cash'], ['value' => 'gcash', 'label' => 'GCash'], ['value' => 'bank_transfer', 'label' => 'Bank transfer'], ['value' => 'other', 'label' => 'Other']],
+            ],
             'messages' => $this->messages->renderAll($booking),
             'rooms' => Room::where('operational_status', '!=', 'retired')->whereHas('property', fn ($p) => $p->where('category', $booking->property->category))->orderBy('id')->get(['id', 'name', 'unit_code', 'max_guests']),
         ]);
+    }
+
+    /** The rooms a booking last held before they were released. */
+    private function lastRooms(Booking $booking): array
+    {
+        $last = $booking->bookingRooms()->max('released_at');
+
+        return $last === null ? [] : $booking->bookingRooms()->with('room:id,name,unit_code')->where('released_at', $last)->orderBy('room_id')->get()
+            ->map(fn ($r) => ['id' => $r->room_id, 'name' => $r->room->name, 'unit' => $r->room->unit_code])->all();
+    }
+
+    /**
+     * Everything about a booking that is not dates, rooms or party: where it came from, its reference and notes.
+     * Notes and the reference can be corrected at any time. A source change reprices a confirmed stay,
+     * because Airbnb stays are priced from the Airbnb total and the others from the rates.
+     */
+    public function details(Request $request, Booking $booking)
+    {
+        $data = $request->validate([
+            'booking_source_id' => 'required|exists:booking_sources,id',
+            'source_reference' => 'nullable|string|max:120',
+            'special_requests' => 'nullable|string|max:2000',
+            'internal_notes' => 'nullable|string|max:2000',
+            'channel_total' => ['nullable', Money::RULE],
+        ], ['channel_total.regex' => 'Enter the Airbnb total as an amount, for example 4500 or 4500.50.']);
+
+        $sourceId = (int) $data['booking_source_id'];
+        $camera = $booking->property->category === Property::CAMERAS;
+        $channelTotal = null;
+        if ($this->isAirbnb($sourceId) && ! $camera) {
+            $channelTotal = Money::cents($data['channel_total'] ?? null);
+            if ($channelTotal === null || $channelTotal <= 0) {
+                throw ValidationException::withMessages(['channel_total' => 'Enter the total the guest pays on Airbnb.']);
+            }
+        }
+
+        $priceChanges = $sourceId !== (int) $booking->booking_source_id || $channelTotal !== ($booking->channel_total_cents === null ? null : (int) $booking->channel_total_cents);
+        if ($priceChanges && ! in_array($booking->status, [Booking::INQUIRY, Booking::TENTATIVE, Booking::CONFIRMED, Booking::CHECKED_IN], true)) {
+            throw ValidationException::withMessages(['booking_source_id' => 'The source and Airbnb total cannot change once a booking is '.str_replace('_', ' ', $booking->status).'. Notes and the reference can still be edited.']);
+        }
+
+        DB::transaction(function () use ($booking, $data, $sourceId, $channelTotal, $priceChanges) {
+            $booking->update([
+                'source_reference' => trim((string) ($data['source_reference'] ?? '')) ?: null,
+                'special_requests' => trim((string) ($data['special_requests'] ?? '')) ?: null,
+                'internal_notes' => trim((string) ($data['internal_notes'] ?? '')) ?: null,
+            ]);
+            if ($priceChanges) {
+                // Goes through amend, so a priced stay is repriced and a closed month is protected.
+                $this->bookings->amend($booking, ['booking_source_id' => $sourceId, 'channel_total_cents' => $channelTotal, 'reason' => 'Booking source or Airbnb total changed']);
+            }
+            Audit::log('booking.details_updated', $booking, ['booking_source_id' => $sourceId, 'channel_total_cents' => $channelTotal]);
+        });
+
+        return back()->with('success', $priceChanges && in_array($booking->status, [Booking::CONFIRMED, Booking::CHECKED_IN], true)
+            ? 'Details saved. The price was recalculated for the new source.'
+            : 'Details saved.');
     }
 
     private function receiptRows(Booking $booking): array
@@ -400,6 +494,19 @@ class BookingController extends Controller
             'balance_cents' => $canPay && $unpaid > 0 ? $unpaid : null,
             'pending_cents' => $canPay && $unpaid > 0 ? (int) $this->finance->balance($booking)['pending_cents'] : 0,
         ];
+    }
+
+    /** Each parking on the booking with its own fee, payment and assignment status. */
+    private function parkingRows(Booking $booking): array
+    {
+        $rows = ParkingAssignment::where('booking_id', $booking->id)->with('space:id,code,name,ownership,vendor_name')->orderBy('start_date')->get();
+        $pay = $this->parking->payments($rows);
+
+        return $rows->map(fn (ParkingAssignment $p) => [
+            'id' => $p->id, 'slot' => $p->space?->label(), 'space_id' => $p->parking_space_id, 'start' => $p->start_date->toDateString(), 'end' => $p->end_date->toDateString(),
+            'nights' => $p->nights, 'rate' => Money::pesos($p->rate_cents), 'status' => $p->status, 'vehicle' => $p->vehicle, 'notes' => $p->notes, 'guest' => $p->holder_name,
+            'borrowed' => (bool) $p->space?->isBorrowed(), 'owner' => $p->space?->vendor_name, 'remitted' => $p->remitted_on !== null,
+        ] + $pay[$p->id])->all();
     }
 
     public function hold(Request $request, Booking $booking)
@@ -477,6 +584,11 @@ class BookingController extends Controller
             : 'Checked out. The unpaid balance stays on the booking.');
     }
 
+    private function isAirbnb(int $sourceId): bool
+    {
+        return BookingSource::whereKey($sourceId)->value('code') === 'airbnb';
+    }
+
     /** What the guest still owes here, regardless of where the booking came from. */
     private function unpaidAtCheckOut(Booking $booking): int
     {
@@ -493,8 +605,18 @@ class BookingController extends Controller
             'adults' => 'nullable|integer|min:1|max:30',
             'children' => 'nullable|integer|min:0|max:30',
             'approved_early_time' => 'nullable|date_format:H:i',
+            'channel_total' => ['nullable', Money::RULE],
             'reason' => 'required|string|max:255',
-        ]);
+        ], ['channel_total.regex' => 'Enter the Airbnb total as an amount, for example 4500 or 4500.50.']);
+        // An Airbnb booking keeps a fixed total; changing dates on Airbnb usually changes it, so it can be corrected here.
+        unset($data['channel_total']);
+        if ($booking->channel_total_cents !== null && $request->filled('channel_total')) {
+            $cents = Money::cents($request->input('channel_total'));
+            if ($cents <= 0) {
+                throw ValidationException::withMessages(['channel_total' => 'Enter the total the guest pays on Airbnb.']);
+            }
+            $data['channel_total_cents'] = $cents;
+        }
         if ($booking->status !== Booking::CHECKED_IN && isset($data['check_in']) && $data['check_in'] < Local::today()) {
             throw ValidationException::withMessages(['check_in' => 'Check-in cannot be before today.']);
         }

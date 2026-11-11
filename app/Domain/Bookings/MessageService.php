@@ -46,7 +46,10 @@ class MessageService
         $vars = $this->variables($booking);
         $camera = $booking->property->category === \App\Models\Property::CAMERAS;
 
-        return MessageTemplate::where('key', $camera ? 'like' : 'not like', self::CAMERA_PREFIX.'%')->orderBy('id')->get()->map(fn ($t) => [
+        // Templates for one property only show on that property's bookings.
+        return MessageTemplate::where('key', $camera ? 'like' : 'not like', self::CAMERA_PREFIX.'%')
+            ->where(fn ($q) => $q->whereNull('property_id')->orWhere('property_id', $booking->property_id))
+            ->orderBy('id')->get()->map(fn ($t) => [
             'key' => $t->key,
             'name' => $t->name,
             'body' => $this->render($t->body, $vars),

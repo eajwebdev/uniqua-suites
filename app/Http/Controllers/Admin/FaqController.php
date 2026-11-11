@@ -21,6 +21,7 @@ class FaqController extends Controller
                 'topic' => $f->topic,
                 'question' => $f->question,
                 'answer' => $f->answer,
+                'show_on_website' => $f->show_on_website,
                 'times_copied' => $f->times_copied,
                 'updated_by' => $f->editor?->name,
                 'updated_at' => $f->updated_at,
@@ -34,7 +35,9 @@ class FaqController extends Controller
         $faq = Faq::create($this->validated($request) + ['category' => AdminCategory::current(), 'updated_by' => $request->user()->id]);
         Audit::log('faq.created', $faq, ['question' => $faq->question]);
 
-        return back()->with('success', 'Question added. Use Copy to paste the answer in Messenger.');
+        return back()->with('success', $faq->show_on_website
+            ? 'Question added. It now shows on the website, and you can Copy it for Messenger.'
+            : 'Question added. Use Copy to paste the answer in Messenger.');
     }
 
     public function update(Request $request, Faq $faq)
@@ -68,8 +71,10 @@ class FaqController extends Controller
             'topic' => 'nullable|string|max:60',
             'question' => 'required|string|max:255',
             'answer' => 'required|string|max:5000',
+            'show_on_website' => 'boolean',
         ], ['answer.required' => 'Write the answer you would send the guest.']);
         $data['topic'] = trim((string) ($data['topic'] ?? '')) ?: null;
+        $data['show_on_website'] = $request->boolean('show_on_website', true);
 
         return $data;
     }

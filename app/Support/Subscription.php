@@ -230,7 +230,7 @@ final class Subscription
         }
 
         $message = self::message($status, $s, self::paidThrough($s), self::locksOn($s), $today);
-        User::role(['Owner', 'Administrator'])->where('is_active', true)->get()
+        User::role(Permissions::SUBSCRIPTION_VIEWERS)->where('is_active', true)->get()
             ->each(fn (User $u) => $u->notify(new SystemNotice($message, '/admin/subscription')));
         Settings::set('subscription.last_reminder', $today);
 

@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Domain\Availability\InventoryService;
 use App\Domain\Availability\StayRules;
 use App\Domain\Pricing\PricingService;
+use App\Models\Faq;
 use App\Models\Property;
 use App\Models\Room;
 use App\Models\RoomType;
@@ -43,6 +44,7 @@ class PublicSiteController extends Controller
             'properties' => Property::where('category', Property::SUITES)->orderBy('id')->get(['name', 'slug', 'location_label']),
             'types' => RoomType::whereHas('rooms', fn ($r) => $r->suites())->orderBy('id')->get(['name', 'slug']),
             'policy' => $this->policy(),
+            'faqs' => Faq::forWebsite(Property::SUITES),
         ]), Seo::page(
             null,
             self::HOME_DESCRIPTION,
@@ -150,7 +152,7 @@ class PublicSiteController extends Controller
 
     public function policies()
     {
-        return Seo::attach(Inertia::render('Public/Policies', ['policy' => $this->policy()]), Seo::page('Policies & FAQ', 'How to book with UNIQA SUITES in Cagayan de Oro: check-in, early arrival, extra guests and parking, plus our privacy notice.', '/policies'));
+        return Seo::attach(Inertia::render('Public/Policies', ['policy' => $this->policy(), 'faqs' => Faq::forWebsite(Property::SUITES)]), Seo::page('Policies & FAQ', 'How to book with UNIQA SUITES in Cagayan de Oro: check-in, early arrival, extra guests and parking, plus our privacy notice.', '/policies'));
     }
 
     /** Every public page, for search engines. Robots.txt points here. */

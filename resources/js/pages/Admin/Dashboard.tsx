@@ -240,7 +240,48 @@ function ExpenseList({ rows, empty }: { rows: any[]; empty: string }) {
     );
 }
 
-function Overview({ actions, today, forecastData, nextBusy, money, performance, period, donut, can, openTab }: any) {
+/** Parking at a glance: stalls today, reservations, and (for money viewers) what parking has earned and is still owed. */
+function ParkingPanel({ parking }: { parking: any }) {
+    const m = parking.money;
+    const split = (rows: any[]) => (
+        <ul className="space-y-1 text-sm">
+            {rows.map((r: any) => (
+                <li key={r.label} className="flex justify-between gap-2"><span className="text-muted">{r.label}</span><span className="tabular-nums"><strong>{pesoWhole(r.fee_cents)}</strong> <span className="text-xs text-muted">· {pesoWhole(r.paid_cents)} collected</span></span></li>
+            ))}
+        </ul>
+    );
+
+    return (
+        <>
+            <SectionTitle title="Parking" right={<MoreLink href="/admin/parking">Parking</MoreLink>} />
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
+                <Stat label="Occupied now" value={<>{parking.occupied} <span className="text-sm font-normal text-muted">of {parking.spaces}</span></>} icon={Car} href="/admin/parking" />
+                <Stat label="Available now" value={parking.available} icon={CheckCircle2} href="/admin/parking" />
+                <Stat label="Blocked or unavailable" value={parking.blocked} icon={Ban} href="/admin/parking" />
+                <Stat label="Open reservations" value={parking.reservations} icon={ClipboardCheck} href="/admin/parking" />
+                <Stat label="Upcoming" value={parking.upcoming} icon={LogIn} href="/admin/parking" />
+                <Stat label="Waiting for a stall" value={parking.unassigned} icon={AlertTriangle} href="/admin/parking?assignment=requested" />
+                {m && <Stat label="Parking to collect" value={pesoWhole(m.outstanding_cents)} hint={`${m.unpaid} unpaid · ${m.partial} partly paid`} icon={Wallet} href="/admin/parking?payment=to_collect" />}
+            </div>
+            {m && (
+                <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                    <Card title="This month's parking">
+                        <dl className="space-y-1 text-sm">
+                            <div className="flex justify-between"><dt className="text-muted">Parking fees</dt><dd className="font-semibold tabular-nums">{pesoWhole(m.month_fee_cents)}</dd></div>
+                            <div className="flex justify-between"><dt className="text-muted">Collected</dt><dd className="font-semibold tabular-nums">{pesoWhole(m.month_collected_cents)}</dd></div>
+                            <div className="flex justify-between"><dt className="text-muted">Still owed, all dates</dt><dd className="font-semibold tabular-nums">{pesoWhole(m.outstanding_cents)}</dd></div>
+                        </dl>
+                        <p className="mt-2 text-xs text-muted">By parking start date. Third-party stall fees are passed on to their owners.</p>
+                    </Card>
+                    <Card title="By ownership">{split(m.by_ownership)}</Card>
+                    <Card title="By booking type">{split(m.by_booking_type)}</Card>
+                </div>
+            )}
+        </>
+    );
+}
+
+function Overview({ actions, today, forecastData, nextBusy, money, performance, period, donut, can, openTab, parking }: any) {
     const cam = useCameras();
 
     return (
@@ -273,6 +314,8 @@ function Overview({ actions, today, forecastData, nextBusy, money, performance, 
                     ? <Stat label="Available now" value={today.vacant} icon={CheckCircle2} />
                     : <Stat label="Rooms to get ready" value={today.not_ready} icon={Sparkles} href={can('housekeeping.manage') || can('housekeeping.inspect') ? '/admin/housekeeping' : undefined} />}
             </div>
+
+            {parking && !cam && <ParkingPanel parking={parking} />}
 
             {money && performance && (
                 <>
@@ -612,9 +655,9 @@ const TAB_LIST = [
     { key: 'operations', label: 'Operations', icon: Wrench },
 ];
 
-export default function Dashboard({ actions, today, board, forecast, period, money, performance, bookingsTab, income, expenses, operations, team, date }: any) {
+export default function Dashboard({ actions, today, board, forecast, period, money, performance, bookingsTab, income, expenses, operations, team, date, parking }: any) {
     const cam = useCameras();
-    useLiveRefresh(['actions', 'board', 'forecast', 'bookingsTab', 'income', 'expenses', 'operations', 'team'], 30_000);
+    useLiveRefresh(['actions', 'board', 'forecast', 'bookingsTab', 'income', 'expenses', 'operations', 'team', 'parking'], 30_000);
     const { auth } = usePage<any>().props as any;
     const can = (p: string) => auth.user.permissions.includes(p);
     const firstName = String(auth.user.name).split(' ')[0];
@@ -709,7 +752,7 @@ export default function Dashboard({ actions, today, board, forecast, period, mon
             </div>
 
             <div id="dashboard-panel" role="tabpanel" aria-labelledby={`tab-${tab}`}>
-                {tab === 'overview' && <Overview actions={actions} today={today} forecastData={forecastData} nextBusy={nextBusy} money={money} performance={performance} period={period} donut={donut} can={can} openTab={openTab} />}
+                {tab === 'overview' && <Overview actions={actions} today={today} forecastData={forecastData} nextBusy={nextBusy} money={money} performance={performance} period={period} donut={donut} can={can} openTab={openTab} parking={parking} />}
                 {tab === 'bookings' && bookingsTab && <BookingsTab data={bookingsTab} money={money} performance={performance} period={period} />}
                 {tab === 'rooms' && <RoomsTab today={today} board={board} forecastData={forecastData} nextBusy={nextBusy} performance={performance} period={period} hasTrend={hasTrend} trend={trend} spark={spark} donut={donut} />}
                 {tab === 'income' && income && <IncomeTab money={money} income={income} period={period} hasTrend={hasTrend} trend={trend} spark={spark} />}

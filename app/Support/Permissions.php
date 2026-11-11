@@ -139,10 +139,15 @@ class Permissions
     /** The ticks a new person starts with, before anyone adjusts them. */
     public const ROLE_PAGES = [
         'Owner' => ['dashboard', 'bookings', 'quotes', 'guests', 'rooms', 'housekeeping_own', 'housekeeping', 'inspect', 'maintenance_own', 'maintenance', 'incidents', 'inventory', 'parking', 'payments', 'expenses', 'reports', 'advances', 'team', 'settings', 'audit', 'dashboard_money', 'confirm', 'discount', 'override', 'room_edit', 'wifi', 'verify', 'refunds', 'expense_approve', 'lock', 'damage_charge', 'reports_money'],
-        'Operations Manager' => ['dashboard', 'bookings', 'quotes', 'guests', 'rooms', 'housekeeping_own', 'housekeeping', 'inspect', 'maintenance_own', 'maintenance', 'incidents', 'inventory', 'parking', 'reports', 'override', 'wifi'],
+        // By owner decision a manager starts with everything the Owner has, Confirm bookings included.
+        // What sets them apart is on the Team screen: a manager cannot see, change or create Owners or Administrators.
+        'Operations Manager' => ['dashboard', 'bookings', 'quotes', 'guests', 'rooms', 'housekeeping_own', 'housekeeping', 'inspect', 'maintenance_own', 'maintenance', 'incidents', 'inventory', 'parking', 'payments', 'expenses', 'reports', 'advances', 'team', 'settings', 'audit', 'dashboard_money', 'confirm', 'discount', 'override', 'room_edit', 'wifi', 'verify', 'refunds', 'expense_approve', 'lock', 'damage_charge', 'reports_money'],
         'Booking / Reception' => ['dashboard', 'bookings', 'quotes', 'guests', 'rooms', 'inspect', 'incidents', 'parking', 'payments', 'confirm', 'wifi'],
         'Staff' => ['housekeeping_own', 'maintenance_own'],
     ];
+
+    /** Who sees the system subscription (view only; only the Administrator changes it). */
+    public const SUBSCRIPTION_VIEWERS = ['Owner', 'Operations Manager', 'Administrator'];
 
     public static function isFullAccess(string $role): bool
     {

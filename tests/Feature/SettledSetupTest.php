@@ -21,6 +21,7 @@ class SettledSetupTest extends DomainTestCase
             'room_ids' => [$this->room('venice')->id],
             'booking_source_id' => $this->source('airbnb'),
             'source_reference' => 'HMSYNTH123',
+            'channel_total' => '4500',
             'check_in' => '2031-03-03',
             'check_out' => '2031-03-05',
             'adults' => 2,

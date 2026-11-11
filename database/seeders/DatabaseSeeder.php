@@ -191,7 +191,7 @@ class DatabaseSeeder extends Seeder
             'incident' => ['Damage or incident notice', 'Hi {{guest}}, we need to discuss an item noted after your stay in {{room}} (booking {{reference}}). May we share the details with you here?'],
         ];
         foreach ($templates as $key => [$name, $body]) {
-            MessageTemplate::firstOrCreate(['key' => $key], ['name' => $name, 'body' => $body]);
+            MessageTemplate::withTrashed()->firstOrCreate(['key' => $key], ['name' => $name, 'body' => $body]); // a deleted one stays deleted
         }
     }
 

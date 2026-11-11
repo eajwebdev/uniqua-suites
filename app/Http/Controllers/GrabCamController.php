@@ -61,6 +61,7 @@ class GrabCamController extends Controller
             'models' => $models,
             'brands' => $models->pluck('brand')->filter()->unique()->values(),
             'grabcam' => ['messenger_url' => config('uniqa.grabcam.messenger_url'), 'facebook_url' => config('uniqa.grabcam.facebook_url')],
+            'faqs' => \App\Models\Faq::forWebsite(\App\Models\Property::CAMERAS),
         ]), $this->seo($models));
     }
 

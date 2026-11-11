@@ -2,8 +2,8 @@ import { MessageButton } from '@/components/public';
 import { time12 } from '@/lib/format';
 import PublicLayout from '@/layouts/PublicLayout';
 
-export default function Policies({ policy }: any) {
-    const faqs = [
+export default function Policies({ policy, faqs: added = [] }: any) {
+    const standard = [
         ['How do I book?', 'Press Book Now on any suite and choose free dates. Taken dates cannot be chosen. It then opens a Messenger chat with us, where our staff send your quotation. Your dates are reserved only when staff confirm them in the chat, and payment is arranged there, not on this website.'],
         ['How much does a suite cost?', 'It depends on the suite, your dates and your party size, so our staff quote it for you when you message us.'],
         ['What time is check-in?', `Standard check-in is ${time12(policy.standard_check_in)}.${policy.standard_check_out ? ` Standard check-out is ${time12(policy.standard_check_out)}.` : ' Please ask us about check-out time.'}`],
@@ -12,6 +12,13 @@ export default function Policies({ policy }: any) {
         ['Is parking available?', 'Parking is arranged separately and depends on what is available for your dates. Please ask us.'],
         ...(policy.cancellation ? [['What is your cancellation policy?', policy.cancellation]] : []),
         ...(policy.house_rules ? [['What are the house rules?', policy.house_rules]] : []),
+    ];
+    // Questions staff add in Admin > FAQ come after these. One with the same question replaces the standard answer.
+    const key = (q: string) => q.trim().toLowerCase();
+    const own: string[][] = added.map((f: { question: string; answer: string }) => [f.question, f.answer]);
+    const faqs = [
+        ...standard.map(([q, a]) => own.find(([oq]) => key(oq) === key(q)) ?? [q, a]),
+        ...own.filter(([oq]) => !standard.some(([q]) => key(q) === key(oq))),
     ];
 
     return (

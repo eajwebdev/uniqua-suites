@@ -1,6 +1,5 @@
 <?php
 
-use App\Models\MessageTemplate;
 use App\Models\OwnerDecision;
 use App\Models\RateRule;
 use App\Models\Room;
@@ -9,6 +8,7 @@ use App\Support\OwnerDefaults;
 use App\Support\Settings;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -44,7 +44,8 @@ return new class extends Migration
             OwnerDecision::where('key', $key)->update(['resolution' => OwnerDefaults::RESOLUTIONS[$key]]);
         }
 
-        MessageTemplate::where('key', 'quote')->where('body', self::OLD_QUOTE_TEMPLATE)->update(['body' => OwnerDefaults::QUOTE_TEMPLATE]);
+        // The table, not the model: later the model gains soft deletes, whose column does not exist yet here.
+        DB::table('message_templates')->where('key', 'quote')->where('body', self::OLD_QUOTE_TEMPLATE)->update(['body' => OwnerDefaults::QUOTE_TEMPLATE]);
     }
 
     public function down(): void

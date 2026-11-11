@@ -25,8 +25,7 @@ class TeamController extends Controller
             'title' => 'Team & Permissions',
             'subtitle' => 'Click a name to choose the pages that person can open. '.(config('mail.default') === 'log' ? 'New staff get a temporary password to hand over, shown once.' : 'Invited staff set their own password through a reset link.').' Deactivating removes access on the next request.',
             'columns' => [['key' => 'name', 'label' => 'Name (click to edit access)', 'type' => 'link'], ['key' => 'email', 'label' => 'Email'], ['key' => 'role', 'label' => 'Role'], ['key' => 'access', 'label' => 'Access'], ['key' => 'state', 'label' => 'Status', 'type' => 'status'], ['key' => 'two_factor', 'label' => 'Two-factor']],
-            // The Administrator (EAJ) is not one of the business's staff, so only another Administrator sees them.
-            'rows' => User::with('roles')->when(! $editor->hasRole('Administrator'), fn ($q) => $q->whereDoesntHave('roles', fn ($r) => $r->where('name', 'Administrator')))->orderBy('name')->get()->map(fn ($u) => [
+            'rows' => User::with('roles')->whereDoesntHave('roles', fn ($r) => $r->whereIn('name', $this->hiddenRoles($editor)))->orderBy('name')->get()->map(fn ($u) => [
                 'id' => $u->id,
                 'name' => ['label' => $u->name, 'href' => "/admin/team/{$u->id}/edit"],
                 'email' => $u->email,
@@ -166,6 +165,19 @@ class TeamController extends Controller
             'areas' => Permissions::AREAS,
             'allowed' => Permissions::pagesOf($editor),
         ];
+    }
+
+    /**
+     * Accounts left off the list. The Administrator (EAJ) is not one of the business's staff, so only another
+     * Administrator sees them; the Owner's account is seen only by an Owner or the Administrator.
+     */
+    private function hiddenRoles(User $editor): array
+    {
+        return match (true) {
+            $editor->hasRole('Administrator') => [],
+            $editor->hasRole('Owner') => ['Administrator'],
+            default => ['Administrator', 'Owner'],
+        };
     }
 
     private function mayGiveRole(User $editor, string $role): bool

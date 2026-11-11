@@ -6,12 +6,16 @@ use App\Domain\Bookings\MessageService;
 use App\Http\Controllers\Controller;
 use App\Models\MessageTemplate;
 use App\Models\OwnerDecision;
+use App\Models\Property;
 use App\Models\TaxRule;
 use App\Support\Audit;
 use App\Support\Money;
 use App\Support\Settings;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 
 class SettingsController extends Controller
@@ -47,7 +51,17 @@ class SettingsController extends Controller
             'taxes' => TaxRule::orderByDesc('effective_from')->orderByDesc('id')->get()->map(fn ($t) => ['id' => $t->id, 'name' => $t->name, 'percent' => number_format($t->rate_basis_points / 100, 2, '.', ''), 'from' => $t->effective_from->toDateString(), 'to' => $t->effective_to?->toDateString()]),
             // Setup notes are for the Administrator. Not sent at all to anyone else, including the Owner.
             'decisions' => $request->user()->hasRole('Administrator') ? OwnerDecision::orderBy('id')->get(['id', 'title', 'resolution']) : null,
-            'templates' => MessageTemplate::orderBy('id')->get(['id', 'key', 'name', 'body']),
+            'templates' => MessageTemplate::orderBy('id')->get(['id', 'key', 'name', 'body', 'property_id'])->map(fn (MessageTemplate $t) => [
+                'id' => $t->id,
+                'key' => $t->key,
+                'name' => $t->name,
+                'body' => $t->body,
+                'property_id' => $t->property_id,
+                'business' => $t->isCamera() ? Property::CAMERAS : Property::SUITES,
+                'system' => $t->isSystem(),
+            ]),
+            // A suite template can be for one of these, or for all of them.
+            'templateProperties' => Property::where('category', Property::SUITES)->orderBy('id')->get(['id', 'name']),
             'placeholders' => MessageService::PLACEHOLDERS,
             'contact' => array_map(fn ($v) => (bool) $v, config('uniqa.contact')),
         ]);
@@ -144,12 +158,62 @@ class SettingsController extends Controller
         return back()->with('success', "{$rule->name} ends on {$d['effective_to']}.");
     }
 
+    public function storeTemplate(Request $request)
+    {
+        $data = $request->validate([
+            'business' => 'required|in:'.Property::SUITES.','.Property::CAMERAS,
+        ] + $this->templateRules());
+        $prefix = $data['business'] === Property::CAMERAS ? MessageService::CAMERA_PREFIX : '';
+        // The key only tells businesses apart and links the Quotation; staff never see it.
+        $base = $prefix.(Str::slug($data['name'], '_') ?: 'template');
+        $key = $base;
+        while (MessageTemplate::withTrashed()->where('key', $key)->exists()) {
+            $key = $base.'_'.Str::lower(Str::random(4));
+        }
+
+        $template = MessageTemplate::create([
+            'key' => $key,
+            'name' => trim($data['name']),
+            'body' => $data['body'],
+            'property_id' => $data['business'] === Property::SUITES ? ($data['property_id'] ?? null) : null,
+        ]);
+        Audit::log('template.created', $template, ['name' => $template->name]);
+
+        return back()->with('success', "Template \"{$template->name}\" added. It shows under Copy-ready messages on matching bookings.");
+    }
+
     public function updateTemplate(Request $request, MessageTemplate $template)
     {
-        $template->update($request->validate(['body' => 'required|string|max:4000']));
-        Audit::log('template.updated', $template);
+        $data = $request->validate($this->templateRules());
+        $template->update([
+            'name' => trim($data['name']),
+            'body' => $data['body'],
+            // Camera templates and the Quotation are not tied to one property.
+            'property_id' => $template->isCamera() || $template->isSystem() ? null : ($data['property_id'] ?? null),
+        ]);
+        Audit::log('template.updated', $template, ['name' => $template->name, 'property_id' => $template->property_id]);
 
         return back()->with('success', 'Template saved.');
+    }
+
+    public function destroyTemplate(MessageTemplate $template)
+    {
+        if ($template->isSystem()) {
+            throw ValidationException::withMessages(['template' => 'The Quotation template is used to write every quote, so it cannot be deleted. Edit its text instead.']);
+        }
+        Audit::log('template.deleted', $template, ['name' => $template->name]);
+        $template->delete();
+
+        return back()->with('success', "Template \"{$template->name}\" deleted.");
+    }
+
+    private function templateRules(): array
+    {
+        return [
+            'name' => 'required|string|max:120',
+            'body' => 'required|string|max:4000',
+            'property_id' => ['nullable', 'integer', Rule::exists('properties', 'id')->where('category', Property::SUITES)],
+        ];
     }
 
     public function audit(Request $request)

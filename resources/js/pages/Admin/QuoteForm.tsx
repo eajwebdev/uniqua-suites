@@ -1,7 +1,7 @@
 import { router, useForm, usePage } from '@inertiajs/react';
 import { Check, Copy, Loader2 } from 'lucide-react';
 import { FormEvent, useEffect, useRef, useState } from 'react';
-import { Button, Card, cn, copyToClipboard, Field, Input, Select, StatusChip } from '@/components/ui';
+import { Button, Card, cn, copyToClipboard, Field, Input, SearchSelect, Select, StatusChip } from '@/components/ui';
 import { peso } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
 
@@ -85,11 +85,8 @@ export default function QuoteForm({ rooms, sources, guests: guestList, filters, 
     const existingGuest = form.data.guest_mode === 'existing';
     const chosenGuest = guestList.find((g: any) => String(g.id) === String(form.data.guest_id));
     const guestName = (existingGuest ? chosenGuest?.full_name ?? '' : form.data.guest_name).trim();
-    const [guestSearch, setGuestSearch] = useState('');
-    const guestWords = guestSearch.trim().toLowerCase();
     const guestReady = existingGuest ? !!form.data.guest_id : !!form.data.guest_name.trim();
     const chooseExisting = (checked: boolean) => form.setData((d: any) => ({ ...d, guest_mode: checked ? 'existing' : 'new', ...(checked ? { guest_name: '', guest_phone: '', guest_email: '', guest_messenger_handle: '' } : { guest_id: '' }) }));
-    const guestMatches = guestList.filter((g: any) => String(g.id) === String(form.data.guest_id) || !guestWords || `${g.full_name} ${g.contact ?? ''}`.toLowerCase().includes(guestWords));
 
     // The guest's name can be typed after the price is worked out. Staff may still reword it before copying.
     const messageBox = useRef<HTMLTextAreaElement>(null);
@@ -130,9 +127,9 @@ export default function QuoteForm({ rooms, sources, guests: guestList, filters, 
                             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={existingGuest} onChange={(ev) => chooseExisting(ev.target.checked)} /> Existing guest</label>
                             {existingGuest ? (
                                 <>
-                                    <Input type="search" aria-label="Search guests" placeholder="Search name, phone or Messenger" value={guestSearch} onChange={(ev) => setGuestSearch(ev.target.value)} />
                                     <Field label="Guest" required error={e.guest_id}>
-                                        <Select placeholder={guestMatches.length ? `Select… (${guestMatches.length})` : 'No guest matches'} options={guestMatches.map((g: any) => ({ value: g.id, label: g.contact ? `${g.full_name} (${g.contact})` : g.full_name }))} value={form.data.guest_id} onChange={set('guest_id')} />
+                                        <SearchSelect aria-label="Guest" placeholder={`Select a guest (${guestList.length})`} searchPlaceholder="Search name, phone or Messenger" empty="No guest matches. Untick Existing guest to add a new one."
+                                            options={guestList.map((g: any) => ({ value: g.id, label: g.full_name, hint: g.contact ?? undefined }))} value={form.data.guest_id} onChange={(v) => form.setData('guest_id', v)} />
                                     </Field>
                                 </>
                             ) : (

@@ -1,6 +1,6 @@
 import { Head } from '@inertiajs/react';
 import {
-    ArrowRight, BadgeCheck, CalendarCheck, Camera, ChevronLeft, ChevronRight, Clock, HandCoins, IdCard, Loader2, Lock, MessageCircle, PackageCheck, Plane,
+    ArrowRight, BadgeCheck, CalendarCheck, Camera, ChevronDown, ChevronLeft, ChevronRight, Clock, HandCoins, IdCard, Loader2, Lock, MessageCircle, PackageCheck, Plane,
     ShieldAlert, ShieldCheck, Sparkles, TimerReset, X,
 } from 'lucide-react';
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
@@ -335,7 +335,7 @@ function Heading({ eyebrow, bold, light, center, children }: { eyebrow?: string;
     );
 }
 
-export default function GrabCam({ models, brands, grabcam, seo }: { models: Model[]; brands: string[]; grabcam: { messenger_url?: string; facebook_url?: string }; seo?: { title: string; description: string } }) {
+export default function GrabCam({ models, brands, grabcam, seo, faqs = [] }: { models: Model[]; brands: string[]; grabcam: { messenger_url?: string; facebook_url?: string }; seo?: { title: string; description: string }; faqs?: { question: string; answer: string }[] }) {
     const today = todayInManila();
     const chat = grabcam.messenger_url || grabcam.facebook_url || null;
     const [brand, setBrand] = useState('');
@@ -372,7 +372,7 @@ export default function GrabCam({ models, brands, grabcam, seo }: { models: Mode
                 <div className={cn(WIDTH, 'flex h-16 items-center justify-between gap-4 sm:h-20')}>
                     <a href="#top" aria-label="Grab Cam Rental" className="flex items-center gap-2.5"><img src="/brand/grabcam-logo.png" alt="" width={256} height={256} className="size-10 sm:size-12" /><Wordmark /></a>
                     <nav aria-label="Sections" className="hidden items-center gap-7 text-sm text-white/70 md:flex">
-                        {[['Cameras', '#cameras'], ['How it works', '#how'], ['Terms', '#terms']].map(([label, href]) => <a key={href} href={href} className="transition hover:text-white">{label}</a>)}
+                        {[['Cameras', '#cameras'], ['How it works', '#how'], ['Terms', '#terms'], ...(faqs.length ? [['FAQ', '#faq']] : [])].map(([label, href]) => <a key={href} href={href} className="transition hover:text-white">{label}</a>)}
                     </nav>
                     {chat && <a href={messengerUrl(chat)} target="_blank" rel="noreferrer" className={cn(BTN_LIGHT, 'min-h-10 px-5 text-xs sm:min-h-11 sm:text-sm')}><MessageCircle size={16} aria-hidden /> Message us</a>}
                 </div>
@@ -507,6 +507,26 @@ export default function GrabCam({ models, brands, grabcam, seo }: { models: Mode
                     </div>
                 </div>
             </section>
+
+            {/* FAQ: answers staff mark On website in Admin > FAQ (Cameras) */}
+            {faqs.length > 0 && (
+                <section id="faq" className="relative scroll-mt-20 pb-16 sm:pb-24">
+                    <div className={cn(WIDTH, 'max-w-4xl')}>
+                        <Reveal><Heading eyebrow="Good to know" bold="Frequently asked" light="questions" center /></Reveal>
+                        <div className="mt-12 space-y-3">
+                            {faqs.map((f) => (
+                                <details key={f.question} className="group rounded-3xl border border-white/10 bg-white/[0.04] px-5 sm:px-7">
+                                    <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 py-4 font-semibold [&::-webkit-details-marker]:hidden">
+                                        {f.question}
+                                        <ChevronDown size={18} className="shrink-0 text-white/60 transition-transform group-open:rotate-180" aria-hidden />
+                                    </summary>
+                                    <p className="pb-5 leading-relaxed whitespace-pre-line text-white/70">{f.answer}</p>
+                                </details>
+                            ))}
+                        </div>
+                    </div>
+                </section>
+            )}
 
             {/* Closing call */}
             <section className="pb-16 sm:pb-24">

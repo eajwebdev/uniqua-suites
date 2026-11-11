@@ -4,6 +4,8 @@ namespace App\Domain\Reporting;
 
 use App\Domain\Finance\FinanceService;
 use App\Models\Booking;
+use App\Models\BookingCharge;
+use App\Models\ParkingAssignment;
 use App\Models\Room;
 use App\Models\User;
 use App\Support\AdminCategory;
@@ -20,11 +22,11 @@ class ReportService
     private const STAYED = [Booking::CONFIRMED, Booking::CHECKED_IN, Booking::CHECKED_OUT];
 
     public const DEFINITIONS = [
-        'booked' => 'Booked revenue: charges on reservations created in the period, excluding cancelled and no-show bookings and any configured taxes.',
+        'booked' => 'Booked revenue: charges on reservations created in the period, excluding cancelled and no-show bookings, any configured taxes and parking collected for other condo owners.',
         'earned' => 'Earned accommodation: nightly rates for occupied nights in the period, by stay date, before discounts.',
         'collected' => 'Collected cash: verified receipts by receipt date plus actual channel payouts by payout date, less executed refunds.',
         'outstanding' => 'Outstanding: charges on active and completed stays less verified receipts and settled channel gross, as of today.',
-        'gross_operating' => 'Gross operating revenue: earned accommodation plus other charges dated in the period, excluding any configured taxes.',
+        'gross_operating' => 'Gross operating revenue: earned accommodation plus other charges dated in the period, excluding any configured taxes and parking collected for other condo owners.',
         'expenses' => 'Operating expenses: recorded expenses by expense date, whether paid or only incurred.',
         'contribution' => 'Operating contribution: gross operating revenue less operating expenses. Not audited net income.',
         'occupancy' => 'Occupancy: occupied room nights / sellable room nights, excluding blocked nights.',
@@ -33,7 +35,7 @@ class ReportService
     ];
 
     public const BASES = [
-        'created' => ['Booking-created date', 'Totals of reservations by the local date they were created, excluding inquiries, holds, cancellations and no-shows.'],
+        'created' => ['Booking-created date', 'Totals of reservations by the local date they were created, excluding inquiries, holds, cancellations, no-shows and parking collected for other condo owners.'],
         'stay' => ['Stay date', 'Nightly rates by the night occupied, before discounts and extras.'],
         'receipt' => ['Receipt date', 'Verified receipts by receipt date, before refunds. Excludes channel payouts.'],
         'payout' => ['Platform payout date', 'Actual channel payouts received, by payout date.'],
@@ -63,7 +65,7 @@ class ReportService
         $ancillary = (int) DB::table('booking_charges as c')
             ->join('bookings as b', 'b.id', '=', 'c.booking_id')
             ->whereNull('c.voided_at')
-            ->whereNotIn('c.type', ['accommodation', 'tax'])
+            ->whereNotIn('c.type', ['accommodation', ...BookingCharge::NOT_SALES])
             ->whereBetween('c.charge_date', [$from, $to])
             ->whereIn('b.status', self::STAYED)
             ->tap($this->scoped('b.property_id', $propertyId))
@@ -74,7 +76,7 @@ class ReportService
             ->tap($this->scoped('property_id', $propertyId))
             ->sum('total_cents');
         $booked -= (int) DB::table('booking_charges as c')->join('bookings as b', 'b.id', '=', 'c.booking_id')
-            ->where('c.type', 'tax')->whereNull('c.voided_at')
+            ->whereIn('c.type', BookingCharge::NOT_SALES)->whereNull('c.voided_at')
             ->whereNotIn('b.status', [Booking::CANCELLED, Booking::NO_SHOW, Booking::INQUIRY, Booking::EXPIRED, Booking::TENTATIVE])
             ->whereBetween(DB::raw($this->localDate('b.created_at')), [$from, $to])
             ->tap($this->scoped('b.property_id', $propertyId))
@@ -358,7 +360,8 @@ class ReportService
         $query = match ($basis) {
             'created' => DB::table('bookings as b')->whereNotIn('b.status', [Booking::CANCELLED, Booking::NO_SHOW, Booking::INQUIRY, Booking::EXPIRED, Booking::TENTATIVE])
                 ->whereBetween(DB::raw($this->localDate('b.created_at')), [$from, $to])->tap($inBooking)
-                ->selectRaw($this->localDate('b.created_at').' as d, COUNT(*) as n, SUM(b.total_cents) as cents'),
+                // Parking collected for another condo owner is theirs, so it is not counted as booked.
+                ->selectRaw($this->localDate('b.created_at').' as d, COUNT(*) as n, SUM(b.total_cents - COALESCE((SELECT SUM(rc.amount_cents) FROM booking_charges rc WHERE rc.booking_id = b.id AND rc.voided_at IS NULL AND rc.type = ?), 0)) as cents', [BookingCharge::PARKING_REMIT]),
             'stay' => $this->nightsQuery($from, $to, $propertyId)->selectRaw('n.stay_date as d, COUNT(*) as n, SUM(n.rate_cents) as cents'),
             'receipt' => DB::table('receipts as r')->leftJoin('bookings as b', 'b.id', '=', 'r.booking_id')->where('r.verification_status', 'verified')
                 ->whereBetween('r.receipt_date', [$from, $to])->tap($inBooking)->selectRaw('r.receipt_date as d, COUNT(*) as n, SUM(r.amount_cents) as cents'),
@@ -405,21 +408,28 @@ class ReportService
     private function parking(string $from, string $to, ?int $propertyId, callable $peso): array
     {
         $endExclusive = CarbonImmutable::parse($to)->addDay()->toDateString();
-        $rows = DB::table('parking_assignments as a')->join('parking_spaces as s', 's.id', '=', 'a.parking_space_id')->join('properties as p', 'p.id', '=', 's.property_id')
+        $rows = DB::table('parking_assignments as a')->leftJoin('parking_spaces as s', 's.id', '=', 'a.parking_space_id')->leftJoin('properties as p', 'p.id', '=', 's.property_id')
             ->leftJoin('bookings as b', 'b.id', '=', 'a.booking_id')->leftJoin('booking_charges as c', 'c.id', '=', 'a.charge_id')
             ->where('a.start_date', '<', $endExclusive)->where('a.end_date', '>', $from)
             ->tap($this->scoped('s.property_id', $propertyId))
             ->orderBy('a.start_date')->orderBy('s.code')
-            ->get(['s.code', 'p.name as property', 'a.holder_name', 'a.vehicle', 'a.start_date', 'a.end_date', 'a.status', 'b.reference', 'c.amount_cents', 'c.voided_at']);
+            ->get(['s.code', 'p.name as property', 's.ownership', 'a.fee_cents', 'a.remit_to', 'a.remit_cents', 'a.remitted_on', 'a.holder_name', 'a.vehicle', 'a.start_date', 'a.end_date', 'a.status', 'b.reference', 'c.amount_cents', 'c.voided_at']);
 
         return [
-            ['Space', 'Location', 'Holder', 'Vehicle', 'From', 'To (exclusive)', 'Nights in period', 'Status', 'Booking', 'Charge (PHP)'],
+            ['Space', 'Location', 'Stall owner', 'Holder', 'Vehicle', 'From', 'To (exclusive)', 'Nights in period', 'Status', 'Booking', 'Charge (PHP)', 'Remittance'],
             $rows->map(function ($x) use ($from, $endExclusive, $peso) {
-                $nights = $x->status === 'active' ? (int) CarbonImmutable::parse(max($x->start_date, $from))->diffInDays(CarbonImmutable::parse(min($x->end_date, $endExclusive))) : 0;
+                $isLive = in_array($x->status, ParkingAssignment::LIVE, true);
+                $nights = $isLive ? (int) CarbonImmutable::parse(max($x->start_date, $from))->diffInDays(CarbonImmutable::parse(min($x->end_date, $endExclusive))) : 0;
+                $live = $x->amount_cents !== null && $x->voided_at === null;
+                $remit = match (true) {
+                    $x->remit_cents === null || ! $live || ! $isLive => '',
+                    $x->remitted_on !== null => "Remitted {$x->remitted_on}",
+                    default => 'To remit '.$peso($x->remit_cents),
+                };
 
-                return [$x->code, $x->property, $x->holder_name, $x->vehicle, $x->start_date, $x->end_date, $nights, $x->status, $x->reference, $x->amount_cents !== null && $x->voided_at === null ? $peso($x->amount_cents) : ''];
+                return [$x->code ?? 'To be assigned', $x->property ?? '', $x->ownership === null ? '' : ($x->ownership === 'borrowed' ? ($x->remit_to ?: 'Third-party owner') : 'Condo-owned'), $x->holder_name, $x->vehicle, $x->start_date, $x->end_date, $nights, $x->status, $x->reference, $live ? $peso($x->amount_cents) : '', $remit];
             })->all(),
-            'Assignments overlapping the period. The charge is the whole assignment, not only the nights in this period. Cancelled assignments count zero nights.',
+            'Assignments overlapping the period. The charge is the whole assignment, not only the nights in this period. Cancelled assignments count zero nights. Parking on a third-party stall is owed to its owner and is not counted as sales.',
         ];
     }
 

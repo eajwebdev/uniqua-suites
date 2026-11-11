@@ -56,7 +56,7 @@ Route::middleware(['auth', 'auth.session', 'active', 'subscription', 'password.c
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/locked', [\App\Http\Controllers\Admin\SubscriptionController::class, 'locked']);
     // Owner and Administrator see it; only the Administrator changes it (checked in the controller's routes below).
-    Route::get('/subscription', [\App\Http\Controllers\Admin\SubscriptionController::class, 'index'])->middleware('role:Owner|Administrator');
+    Route::get('/subscription', [\App\Http\Controllers\Admin\SubscriptionController::class, 'index'])->middleware('role:Owner|Operations Manager|Administrator');
     Route::post('/subscription', [\App\Http\Controllers\Admin\SubscriptionController::class, 'update'])->middleware('role:Administrator');
     Route::post('/subscription/bills/{bill}/pay', [\App\Http\Controllers\Admin\SubscriptionController::class, 'pay'])->middleware('role:Administrator');
     Route::get('/account', [AuthController::class, 'account']);
@@ -90,6 +90,7 @@ Route::middleware(['auth', 'auth.session', 'active', 'subscription', 'password.c
         Route::post('/bookings/{booking}/check-in', [BookingController::class, 'checkIn']);
         Route::post('/bookings/{booking}/check-out', [BookingController::class, 'checkOut']);
         Route::post('/bookings/{booking}/amend', [BookingController::class, 'amend']);
+        Route::post('/bookings/{booking}/details', [BookingController::class, 'details']);
         Route::post('/bookings/{booking}/charges', [BookingController::class, 'addCharge']);
         Route::post('/bookings/{booking}/rental-security', [BookingController::class, 'rentalSecurity']);
         Route::post('/charges/{charge}/void', [BookingController::class, 'voidCharge']);
@@ -203,10 +204,20 @@ Route::middleware(['auth', 'auth.session', 'active', 'subscription', 'password.c
 
     Route::get('/parking', [ParkingController::class, 'index'])->middleware('perm:parking.view');
     Route::get('/parking/calendar', [ParkingController::class, 'calendar'])->middleware('perm:parking.view');
+    Route::get('/parking/spaces', [ParkingController::class, 'spaces'])->middleware('perm:parking.view');
+    Route::get('/parking/remittances', [ParkingController::class, 'remittances'])->middleware('perm:parking.view');
     Route::middleware('perm:parking.manage')->group(function () {
+        Route::get('/parking/availability', [ParkingController::class, 'availability']);
         Route::post('/parking/spaces', [ParkingController::class, 'storeSpace']);
+        Route::post('/parking/spaces/{space}', [ParkingController::class, 'updateSpace']);
         Route::post('/parking/assignments', [ParkingController::class, 'storeAssignment']);
+        Route::post('/parking/assignments/{assignment}', [ParkingController::class, 'updateAssignment']);
         Route::post('/parking/assignments/{assignment}/cancel', [ParkingController::class, 'cancelAssignment']);
+        Route::post('/parking/assignments/{assignment}/remit', [ParkingController::class, 'remit']);
+        Route::post('/parking/assignments/{assignment}/unremit', [ParkingController::class, 'unremit']);
+        Route::post('/parking/blocks', [ParkingController::class, 'storeBlock']);
+        Route::post('/parking/blocks/{block}', [ParkingController::class, 'updateBlock']);
+        Route::post('/parking/blocks/{block}/delete', [ParkingController::class, 'destroyBlock']);
     });
 
     Route::middleware('perm:advances.manage')->group(function () {
@@ -235,7 +246,9 @@ Route::middleware(['auth', 'auth.session', 'active', 'subscription', 'password.c
         Route::post('/imports/rows/{row}/review', [ImportController::class, 'reviewRow']);
         Route::get('/settings', [SettingsController::class, 'index']);
         Route::post('/settings', [SettingsController::class, 'update']);
+        Route::post('/settings/templates', [SettingsController::class, 'storeTemplate']);
         Route::post('/settings/templates/{template}', [SettingsController::class, 'updateTemplate']);
+        Route::post('/settings/templates/{template}/delete', [SettingsController::class, 'destroyTemplate']);
         Route::post('/settings/taxes', [SettingsController::class, 'storeTax']);
         Route::post('/settings/taxes/{rule}/end', [SettingsController::class, 'endTax']);
     });
