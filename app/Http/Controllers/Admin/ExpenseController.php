@@ -179,16 +179,22 @@ class ExpenseController extends Controller
         $refunds = $booked('refunds', 'x')->where('x.status', 'executed')->whereBetween('x.executed_on', [$from, $to])
             ->get(['x.executed_on as d', 'x.id as ref', 'x.reason as label', 'x.amount_cents as cents']);
 
+        $remitted = DB::table('parking_assignments as x')->join('parking_spaces as s', 's.id', '=', 'x.parking_space_id')
+            ->tap(fn ($q) => AdminCategory::whereProperty($q, 's.property_id'))
+            ->whereNotNull('x.remitted_on')->whereBetween('x.remitted_on', [$from, $to])
+            ->get(['x.remitted_on as d', 'x.remit_reference as ref', 'x.id', 's.code', 'x.remit_to', 'x.remitted_cents as cents']);
+
         $rows = collect()
             ->concat($in->map(fn ($r) => ['date' => $r->d, 'type' => 'Receipt', 'ref' => $r->ref, 'label' => $r->label, 'in_cents' => (int) $r->cents, 'out_cents' => null]))
             ->concat($payouts->map(fn ($r) => ['date' => $r->d, 'type' => 'Channel payout', 'ref' => $r->ref, 'label' => $r->label, 'in_cents' => (int) $r->cents, 'out_cents' => null]))
             ->concat($out->map(fn ($r) => ['date' => $r->d, 'type' => 'Expense paid', 'ref' => 'EXP-'.$r->ref, 'label' => $r->label, 'in_cents' => null, 'out_cents' => (int) $r->cents]))
             ->concat($refunds->map(fn ($r) => ['date' => $r->d, 'type' => 'Refund', 'ref' => 'REF-'.$r->ref, 'label' => $r->label, 'in_cents' => null, 'out_cents' => (int) $r->cents]))
+            ->concat($remitted->map(fn ($r) => ['date' => $r->d, 'type' => 'Parking remitted', 'ref' => $r->ref ?: 'PRK-'.$r->id, 'label' => "{$r->code} to ".($r->remit_to ?: 'stall owner'), 'in_cents' => null, 'out_cents' => (int) $r->cents]))
             ->sortBy('date')->values();
 
         return Inertia::render('Admin/Resource', [
             'title' => 'Cashbook',
-            'subtitle' => "{$from} to {$to}. Money actually moved: verified receipts, received payouts, paid expenses and executed refunds.",
+            'subtitle' => "{$from} to {$to}. Money actually moved: verified receipts, received payouts, paid expenses, executed refunds and parking remitted to other condo owners.",
             'tabs' => self::TABS,
             'stats' => [
                 ['label' => 'Money in', 'value' => $rows->sum('in_cents'), 'type' => 'money'],

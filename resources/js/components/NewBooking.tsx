@@ -4,14 +4,15 @@ import { Loader2 } from 'lucide-react';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { nextDay, RoomPicker, useRoomAvailability } from '@/components/RoomPicker';
 import { Button, confirmDialog, Field, Input, Modal, SearchSelect, Select } from '@/components/ui';
-import { dateOnly, time12 } from '@/lib/format';
+import { dateOnly, peso, time12 } from '@/lib/format';
 
 type QuotedGuest = { id: number; full_name: string; phone: string | null; email: string | null; messenger_handle: string | null };
 /** A quote passes everything it knows: the guest, party size, source and early check-in. */
-type Prefill = { room_id?: number | string; check_in?: string; check_out?: string; guest?: QuotedGuest | null; guest_name?: string | null; adults?: number; source_id?: number | string | null; early_time?: string | null; quote_id?: number; note?: string; from?: string };
-type Options = { rooms: any[]; sources: any[]; guests: any[]; today: string; standard_check_in: string };
+type Prefill = { room_id?: number | string; check_in?: string; check_out?: string; guest?: QuotedGuest | null; guest_name?: string | null; adults?: number; source_id?: number | string | null; early_time?: string | null; quote_id?: number; note?: string; from?: string; parking_nights?: number; parking_rate?: string };
+type Options = { rooms: any[]; sources: any[]; guests: any[]; today: string; standard_check_in: string; parking_rate?: string | null };
 
 const OPEN_EVENT = 'uniqa:new-booking';
+const addDays = (date: string, days: number) => new Date(Date.parse(`${date}T00:00:00Z`) + days * 86400000).toISOString().slice(0, 10);
 const nightsBetween = (from: string, to: string) => from && to && to > from ? Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000) : 0;
 const minuteBefore = (time: string) => {
     const [hours, minutes] = time.split(':').map(Number);
@@ -42,6 +43,10 @@ function BookingFields({ options, prefill, onClose }: { options: Options; prefil
         adults: prefill.adults ?? 2, children: 0, approved_early_time: prefill.early_time ?? '', pickup_time: '', return_time: '', special_requests: '', internal_notes: prefill.note ?? '',
         idempotency_key: useMemo(() => crypto.randomUUID?.() ?? String(Date.now()), []),
         then: '',
+        // Parking asked for with the stay: saved as a request with its own fee, a stall is assigned later.
+        parking: !!prefill.parking_nights, parking_start: prefill.check_in ?? '',
+        parking_end: prefill.parking_nights && prefill.check_in ? addDays(prefill.check_in, prefill.parking_nights) : (prefill.check_out ?? ''),
+        parking_rate: prefill.parking_rate ?? options.parking_rate ?? '', parking_vehicle: '',
     });
     const e = form.errors as any;
     const availability = useRoomAvailability(form.data.check_in, form.data.check_out);
@@ -68,9 +73,17 @@ function BookingFields({ options, prefill, onClose }: { options: Options; prefil
     const guestReady = existing ? !!form.data.guest_id : !!form.data.guest_name.trim() && hasContact;
     const sourceReady = !!form.data.booking_source_id;
     const earlyTimeValid = camera || !form.data.approved_early_time || form.data.approved_early_time < standardCheckIn;
-    const canSave = availability.state === 'ready' && withinCapacity && guestReady && sourceReady && earlyTimeValid && channelTotalReady && !form.processing;
+    const parkingNights = nightsBetween(form.data.parking_start, form.data.parking_end);
+    const parkingFee = Math.round(parkingNights * Number(form.data.parking_rate || 0) * 100);
+    const parkingReady = camera || !form.data.parking || (parkingNights > 0 && Number(form.data.parking_rate) > 0);
+    const canSave = availability.state === 'ready' && withinCapacity && guestReady && sourceReady && earlyTimeValid && channelTotalReady && parkingReady && !form.processing;
 
-    const chooseCheckIn = (value: string) => form.setData((d: any) => ({ ...d, check_in: value, check_out: value && (!d.check_out || d.check_out <= value) ? nextDay(value) : d.check_out }));
+    // Parking follows the stay dates unless staff changed them.
+    const chooseCheckIn = (value: string) => form.setData((d: any) => {
+        const out = value && (!d.check_out || d.check_out <= value) ? nextDay(value) : d.check_out;
+        return { ...d, check_in: value, check_out: out, ...(d.parking_start === d.check_in && d.parking_end === d.check_out ? { parking_start: value, parking_end: out } : {}) };
+    });
+    const chooseCheckOut = (value: string) => form.setData((d: any) => ({ ...d, check_out: value, ...(d.parking_end === d.check_out ? { parking_end: value } : {}) }));
     const toggleExisting = (checked: boolean) => {
         setExisting(checked);
         form.setData((current: any) => checked
@@ -88,7 +101,7 @@ function BookingFields({ options, prefill, onClose }: { options: Options; prefil
             if (!(await confirmDialog({ title: `${action}?`, message, confirmLabel: action }))) return;
         }
         form.transform((d: any) => camera
-            ? { ...d, then, adults: 1, children: 0, approved_early_time: '', channel_total: '' }
+            ? { ...d, then, adults: 1, children: 0, approved_early_time: '', channel_total: '', parking: false }
             : { ...d, then, pickup_time: '', return_time: '', channel_total: airbnb ? d.channel_total : '' });
         form.post('/admin/bookings', { preserveScroll: true, onSuccess: onClose });
     }
@@ -136,7 +149,7 @@ function BookingFields({ options, prefill, onClose }: { options: Options; prefil
                     <legend className="mb-1 text-sm font-semibold">{camera ? 'Rental' : 'Stay'}</legend>
                     <div className="grid grid-cols-2 gap-3">
                         <Field label={camera ? 'Pickup date' : 'Check-in'} required error={e.check_in}><Input type="date" min={today} value={form.data.check_in} onChange={(ev) => chooseCheckIn(ev.target.value)} /></Field>
-                        <Field label={camera ? 'Return date' : 'Check-out'} required error={e.check_out}><Input type="date" min={form.data.check_in ? nextDay(form.data.check_in) : today} value={form.data.check_out} onChange={(ev) => form.setData('check_out', ev.target.value)} /></Field>
+                        <Field label={camera ? 'Return date' : 'Check-out'} required error={e.check_out}><Input type="date" min={form.data.check_in ? nextDay(form.data.check_in) : today} value={form.data.check_out} onChange={(ev) => chooseCheckOut(ev.target.value)} /></Field>
                     </div>
                     {camera ? (
                         <div className="grid grid-cols-2 gap-3">
@@ -155,6 +168,28 @@ function BookingFields({ options, prefill, onClose }: { options: Options; prefil
                 </fieldset>
             </div>
 
+            {!camera && (
+                <fieldset className="rounded-lg border border-line p-3">
+                    <label className="flex items-center gap-2 text-sm font-semibold">
+                        <input type="checkbox" checked={form.data.parking} onChange={(ev) => form.setData((d: any) => ({ ...d, parking: ev.target.checked, parking_start: d.parking_start || d.check_in, parking_end: d.parking_end || d.check_out }))} /> Add parking
+                    </label>
+                    {form.data.parking && (
+                        <div className="mt-3 space-y-2">
+                            <div className="grid gap-3 sm:grid-cols-4">
+                                <Field label="Parking from" required error={e.parking_start}><Input type="date" value={form.data.parking_start} onChange={(ev) => form.setData('parking_start', ev.target.value)} /></Field>
+                                <Field label="Until (car leaves)" required error={e.parking_end}><Input type="date" min={form.data.parking_start || undefined} value={form.data.parking_end} onChange={(ev) => form.setData('parking_end', ev.target.value)} /></Field>
+                                <Field label="Rate per night (PHP)" required error={e.parking_rate}><Input type="number" inputMode="decimal" min={0.01} step={0.01} value={form.data.parking_rate} onChange={(ev) => form.setData('parking_rate', ev.target.value)} /></Field>
+                                <Field label="Vehicle" error={e.parking_vehicle}><Input value={form.data.parking_vehicle} onChange={(ev) => form.setData('parking_vehicle', ev.target.value)} /></Field>
+                            </div>
+                            <p className="text-xs text-muted">
+                                {parkingNights > 0 ? <><strong className="text-chocolate">{parkingNights} night{parkingNights === 1 ? '' : 's'} · {peso(parkingFee)}</strong>. </> : 'Choose the parking dates. '}
+                                {airbnb ? 'Airbnb guests pay this here, apart from the Airbnb stay.' : 'Included in the quotation and the downpayment.'} The stall is assigned later from Parking; nothing is held until then.
+                            </p>
+                        </div>
+                    )}
+                </fieldset>
+            )}
+
             {selected.length > 0 && nights > 0 && (
                 <section aria-labelledby="booking-review" className="rounded-lg border border-line bg-ivory/70 p-4 text-sm">
                     <h3 id="booking-review" className="mb-2 font-semibold">Review before saving</h3>
@@ -166,6 +201,7 @@ function BookingFields({ options, prefill, onClose }: { options: Options; prefil
                         {airbnb && <div><dt className="inline text-muted">Airbnb total: </dt><dd className="inline font-medium">{Number(form.data.channel_total) > 0 ? `₱${Number(form.data.channel_total).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'Not entered'}</dd></div>}
                         <div><dt className="inline text-muted">Status after saving: </dt><dd className="inline font-medium">Choose Inquiry, Hold, or Confirm below</dd></div>
                         {form.data.approved_early_time && <div><dt className="inline text-muted">Early check-in: </dt><dd className="inline font-medium">{time12(form.data.approved_early_time)}</dd></div>}
+                        {!camera && form.data.parking && parkingNights > 0 && <div><dt className="inline text-muted">Parking: </dt><dd className="inline font-medium">{parkingNights} night{parkingNights === 1 ? '' : 's'}, {peso(parkingFee)} (stall to be assigned)</dd></div>}
                     </dl>
                 </section>
             )}

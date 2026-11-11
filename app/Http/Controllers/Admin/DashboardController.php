@@ -102,6 +102,7 @@ class DashboardController extends Controller
             'income' => $income,
             'expenses' => $expenses,
             'operations' => $this->details->operations($user),
+            'parking' => ! AdminCategory::isCameras() && $user->can('parking.view') ? app(\App\Domain\Parking\ParkingService::class)->dashboard($today, $user->can('dashboard.finance')) : null,
             'team' => [
                 'open_tasks' => AdminCategory::isCameras() ? 0 : HousekeepingTask::whereIn('status', ['pending', 'assigned', 'in_progress'])->count(),
                 'late_tasks' => AdminCategory::isCameras() ? 0 : HousekeepingTask::whereIn('status', ['pending', 'assigned', 'in_progress'])->where('due_at', '<', now())->count(),
@@ -258,7 +259,7 @@ class DashboardController extends Controller
             'vacant' => max(0, $rooms - $occupied - $blocked),
             'ready' => AdminCategory::isCameras() ? 0 : Room::suites()->where('housekeeping_status', 'ready')->where('operational_status', 'active')->count(),
             'not_ready' => AdminCategory::isCameras() ? 0 : Room::suites()->where('housekeeping_status', '!=', 'ready')->where('operational_status', 'active')->count(),
-            'parking_in_use' => AdminCategory::isCameras() ? 0 : ParkingAssignment::where('status', 'active')->where('start_date', '<=', $today)->where('end_date', '>', $today)->count(),
+            'parking_in_use' => AdminCategory::isCameras() ? 0 : ParkingAssignment::blocking()->where('start_date', '<=', $today)->where('end_date', '>', $today)->count(),
             'arrivals' => $this->agenda(AdminCategory::bookings(Booking::where('status', Booking::CONFIRMED)->where('check_in', $today))),
             'departures' => $this->agenda(AdminCategory::bookings(Booking::where('status', Booking::CHECKED_IN)->where('check_out', $today))),
         ];

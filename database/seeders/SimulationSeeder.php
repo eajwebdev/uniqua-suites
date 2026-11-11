@@ -235,7 +235,7 @@ class SimulationSeeder extends Seeder
 
         $space = ParkingSpace::orderBy('id')->first();
         if ($space) {
-            ParkingAssignment::create(['parking_space_id' => $space->id, 'holder_name' => 'SIM Guest Parking', 'vehicle' => 'SIM-0000', 'start_date' => $this->date(0), 'end_date' => $this->date(2), 'status' => 'active']);
+            ParkingAssignment::create(['parking_space_id' => $space->id, 'holder_name' => 'SIM Guest Parking', 'vehicle' => 'SIM-0000', 'start_date' => $this->date(0), 'end_date' => $this->date(2), 'nights' => 2, 'status' => 'assigned']);
         }
     }
 

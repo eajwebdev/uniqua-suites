@@ -172,15 +172,15 @@ class ReportExtensionsTest extends DomainTestCase
     public function test_parking_report_counts_nights_inside_the_period_only(): void
     {
         $space = ParkingSpace::where('code', 'T3, LG')->firstOrFail();
-        ParkingAssignment::create(['parking_space_id' => $space->id, 'holder_name' => 'Synthetic Holder', 'start_date' => '2031-02-27', 'end_date' => '2031-03-03', 'status' => 'active']);
+        ParkingAssignment::create(['parking_space_id' => $space->id, 'holder_name' => 'Synthetic Holder', 'start_date' => '2031-02-27', 'end_date' => '2031-03-03', 'status' => 'assigned']);
         ParkingAssignment::create(['parking_space_id' => $space->id, 'holder_name' => 'Synthetic Cancelled', 'start_date' => '2031-03-04', 'end_date' => '2031-03-06', 'status' => 'cancelled']);
-        ParkingAssignment::create(['parking_space_id' => $space->id, 'holder_name' => 'Synthetic Later', 'start_date' => '2031-04-01', 'end_date' => '2031-04-02', 'status' => 'active']);
+        ParkingAssignment::create(['parking_space_id' => $space->id, 'holder_name' => 'Synthetic Later', 'start_date' => '2031-04-01', 'end_date' => '2031-04-02', 'status' => 'assigned']);
 
         [$headers, $rows] = $this->report('parking');
         $nights = array_search('Nights in period', $headers, true);
 
         $this->assertCount(2, $rows);
-        $this->assertSame('Synthetic Holder', $rows[0][2]);
+        $this->assertSame('Synthetic Holder', $rows[0][array_search('Holder', $headers, true)]);
         $this->assertSame(2, $rows[0][$nights], '1 and 2 March; the 3rd is the exclusive end.');
         $this->assertSame(0, $rows[1][$nights]);
     }

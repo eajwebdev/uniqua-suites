@@ -54,6 +54,8 @@ const statusTone: Record<string, keyof typeof tones> = {
     critical: 'bad', high: 'warn', normal: 'neutral', low: 'neutral', staged: 'warn', committed: 'good', rolled_back: 'neutral', low_stock: 'bad', not_counted: 'warn', ok: 'good',
     suggested: 'warn', collected: 'info', processing: 'info', delivered: 'good', reported: 'warn', evidence_pending: 'warn', under_review: 'warn', approved_for_charge: 'info', disputed: 'bad',
     connected: 'good', degraded: 'warn', failed: 'bad', not_connected: 'neutral',
+    remitted: 'good', to_remit: 'warn', not_owed: 'neutral', ours: 'good', borrowed: 'warn', condo_owned: 'good', third_party: 'warn', unavailable: 'warn', inactive: 'neutral',
+    to_collect: 'bad', partially_paid: 'warn', no_fee: 'neutral', requested: 'neutral', pending_confirmation: 'warn', parking_assigned: 'good', occupied: 'info', upcoming: 'good', pending_slot: 'warn', ended: 'neutral',
 };
 
 export function StatusChip({ value, label }: { value?: string | null; label?: string }) {

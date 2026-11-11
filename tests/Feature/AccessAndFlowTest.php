@@ -323,9 +323,10 @@ class AccessAndFlowTest extends DomainTestCase
     public function test_parking_cannot_be_given_to_two_guests_at_once(): void
     {
         $space = ParkingSpace::firstOrFail();
-        $this->post('/admin/parking/assignments', ['parking_space_id' => $space->id, 'holder_name' => 'A', 'start_date' => '2031-03-03', 'end_date' => '2031-03-05'])->assertSessionHas('success');
-        $this->post('/admin/parking/assignments', ['parking_space_id' => $space->id, 'holder_name' => 'B', 'start_date' => '2031-03-04', 'end_date' => '2031-03-06'])->assertSessionHas('error');
-        $this->post('/admin/parking/assignments', ['parking_space_id' => $space->id, 'holder_name' => 'C', 'start_date' => '2031-03-05', 'end_date' => '2031-03-06'])->assertSessionHas('success');
+        $assigned = ['parking_space_id' => $space->id, 'status' => 'assigned'];
+        $this->post('/admin/parking/assignments', $assigned + ['holder_name' => 'A', 'start_date' => '2031-03-03', 'end_date' => '2031-03-05'])->assertSessionHas('success');
+        $this->post('/admin/parking/assignments', $assigned + ['holder_name' => 'B', 'start_date' => '2031-03-04', 'end_date' => '2031-03-06'])->assertSessionHasErrors('parking_space_id');
+        $this->post('/admin/parking/assignments', $assigned + ['holder_name' => 'C', 'start_date' => '2031-03-05', 'end_date' => '2031-03-06'])->assertSessionHas('success');
         $this->assertSame(2, ParkingAssignment::count());
     }
 

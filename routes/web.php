@@ -204,10 +204,20 @@ Route::middleware(['auth', 'auth.session', 'active', 'subscription', 'password.c
 
     Route::get('/parking', [ParkingController::class, 'index'])->middleware('perm:parking.view');
     Route::get('/parking/calendar', [ParkingController::class, 'calendar'])->middleware('perm:parking.view');
+    Route::get('/parking/spaces', [ParkingController::class, 'spaces'])->middleware('perm:parking.view');
+    Route::get('/parking/remittances', [ParkingController::class, 'remittances'])->middleware('perm:parking.view');
     Route::middleware('perm:parking.manage')->group(function () {
+        Route::get('/parking/availability', [ParkingController::class, 'availability']);
         Route::post('/parking/spaces', [ParkingController::class, 'storeSpace']);
+        Route::post('/parking/spaces/{space}', [ParkingController::class, 'updateSpace']);
         Route::post('/parking/assignments', [ParkingController::class, 'storeAssignment']);
+        Route::post('/parking/assignments/{assignment}', [ParkingController::class, 'updateAssignment']);
         Route::post('/parking/assignments/{assignment}/cancel', [ParkingController::class, 'cancelAssignment']);
+        Route::post('/parking/assignments/{assignment}/remit', [ParkingController::class, 'remit']);
+        Route::post('/parking/assignments/{assignment}/unremit', [ParkingController::class, 'unremit']);
+        Route::post('/parking/blocks', [ParkingController::class, 'storeBlock']);
+        Route::post('/parking/blocks/{block}', [ParkingController::class, 'updateBlock']);
+        Route::post('/parking/blocks/{block}/delete', [ParkingController::class, 'destroyBlock']);
     });
 
     Route::middleware('perm:advances.manage')->group(function () {

@@ -88,6 +88,7 @@ class FinanceController extends Controller
     {
         $data = $request->validate([
             'booking_reference' => 'nullable|exists:bookings,reference',
+            'parking_assignment_id' => 'nullable|integer|exists:parking_assignments,id',
             'received_at' => 'required|date',
             'amount' => ['required', Money::RULE],
             'method' => 'required|in:cash,gcash,bank_transfer,other',
@@ -107,15 +108,29 @@ class FinanceController extends Controller
 
         // The booking row is locked, so two quick clicks are checked one after the other and the second sees the first.
         DB::transaction(function () use ($request, $data, $cents, $receivedAt, $reference) {
-            $booking = ! empty($data['booking_reference']) ? Booking::where('reference', $data['booking_reference'])->lockForUpdate()->first() : null;
+            // A parking payment belongs to the parking's booking, whatever reference was typed.
+            $parking = ! empty($data['parking_assignment_id']) ? \App\Models\ParkingAssignment::findOrFail($data['parking_assignment_id']) : null;
+            $bookingId = $parking ? $parking->booking_id : null;
+            $booking = $bookingId ? Booking::whereKey($bookingId)->lockForUpdate()->first()
+                : (! $parking && ! empty($data['booking_reference']) ? Booking::where('reference', $data['booking_reference'])->lockForUpdate()->first() : null);
 
             $warnings = $this->finance->receiptWarnings($booking, $cents, $receivedAt, $reference);
+            if ($parking) {
+                // Compared with what is left on the parking, not on the whole booking.
+                unset($warnings['amount']);
+                $owed = app(\App\Domain\Parking\ParkingService::class)->payments(collect([$parking]))[$parking->id];
+                $left = max(0, $owed['balance_cents'] - $owed['pending_cents']);
+                if ($owed['fee_cents'] > 0 && $cents > $left) {
+                    $warnings['amount'] = 'This is '.Money::format($cents - $left).' more than the '.Money::format($left).' of parking left to pay.';
+                }
+            }
             if ($warnings && ! $request->boolean('confirm_unusual')) {
                 throw ValidationException::withMessages($warnings + ['confirm_unusual' => 'Please check the warning. If the payment is correct, tick this box and save again.']);
             }
 
             $receipt = $this->finance->recordReceipt([
                 'booking_id' => $booking?->id,
+                'parking_assignment_id' => $parking?->id,
                 'received_at' => $data['received_at'],
                 'amount_cents' => $cents,
                 'method' => $data['method'],

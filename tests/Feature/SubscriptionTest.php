@@ -240,11 +240,12 @@ class SubscriptionTest extends DomainTestCase
     {
         $this->travelTo('2026-11-08');
         $this->agreed();
-        $staff = $this->person('Operations Manager');
+        $staff = $this->person('Booking / Reception');
         $badge = fn (User $u) => $this->actingAs($u)->get('/admin/account')->original->getData()['page']['props']['subscriptionBadge'];
 
         $this->assertSame(['status' => 'trial', 'title' => 'Free trial', 'detail' => '14 days left'], $badge($this->owner));
-        $this->assertNull($badge($staff), 'Only the Owner and Administrator see it.');
+        $this->assertNull($badge($staff), 'Only the Owner, managers and the Administrator see it.');
+        $this->assertNotNull($badge($this->person('Operations Manager')), 'A manager sees what the Owner sees.');
         $this->assertSame('ends today', Subscription::badge('2026-11-22')['detail']);
         $this->assertSame(['status' => 'due', 'title' => 'Subscription expired', 'detail' => 'locks in 2 days'], Subscription::badge('2026-11-24'));
         $this->assertSame('locks in 1 day', Subscription::badge('2026-11-25')['detail']);
@@ -268,7 +269,7 @@ class SubscriptionTest extends DomainTestCase
     public function test_only_the_administrator_can_change_the_subscription_and_the_owner_can_see_it(): void
     {
         $this->plan();
-        $staff = $this->person('Operations Manager');
+        $staff = $this->person('Booking / Reception');
         $form = ['monthly_fee' => '1', 'end' => '2099-12-31', 'start' => '2026-12-01', 'grace_days' => 3];
 
         $this->actingAs($this->owner);
@@ -302,7 +303,7 @@ class SubscriptionTest extends DomainTestCase
     public function test_reminders_reach_the_owner_and_administrator_bell_on_the_right_days_only(): void
     {
         $this->plan();
-        $staff = $this->person('Operations Manager');
+        $staff = $this->person('Booking / Reception');
         $sentOn = [];
 
         for ($day = \Carbon\CarbonImmutable::parse('2026-12-25'); $day->lte(\Carbon\CarbonImmutable::parse('2027-01-06')); $day = $day->addDay()) {
@@ -339,7 +340,7 @@ class SubscriptionTest extends DomainTestCase
     public function test_the_banner_shows_to_owner_and_administrator_only_when_it_matters(): void
     {
         $this->plan();
-        $staff = $this->person('Operations Manager');
+        $staff = $this->person('Booking / Reception');
         $banner = fn (User $u) => $this->actingAs($u)->get('/admin/account')->original->getData()['page']['props']['subscription'];
 
         $this->travelTo('2026-12-10');

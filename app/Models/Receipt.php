@@ -19,6 +19,12 @@ class Receipt extends Model
         return $this->belongsTo(Booking::class);
     }
 
+    /** Set when the payment was for a parking fee rather than the stay. */
+    public function parkingAssignment()
+    {
+        return $this->belongsTo(ParkingAssignment::class);
+    }
+
     public function account()
     {
         return $this->belongsTo(PaymentAccount::class, 'payment_account_id');

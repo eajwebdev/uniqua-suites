@@ -2,6 +2,7 @@ import { Link, useForm, usePage } from '@inertiajs/react';
 import { useState } from 'react';
 import { Ban, Pencil, RotateCcw } from 'lucide-react';
 import { openNewBooking } from '@/components/NewBooking';
+import { AssignmentChip, ParkingForm, ParkingPaymentForm, PaymentChip } from '@/components/ParkingForms';
 import { nextDay, RoomPicker, useRoomAvailability } from '@/components/RoomPicker';
 import { ActionButton, Button, Card, confirmDialog, CopyButton, Empty, Field, FieldDef, Input, Modal, RowAction, Select, StatusChip, buttonClass } from '@/components/ui';
 import { dateOnly, dateTime, humanize, peso, time12 } from '@/lib/format';
@@ -270,10 +271,13 @@ function ReceiptRow({ receipt: r, can }: { receipt: any; can: (p: string) => boo
     );
 }
 
-/** Until the booking is priced, its estimate stands in for the charges, marked as an estimate. */
-function withEstimate(balance: any, estimate: any) {
-    if (!balance || balance.charges_cents > 0 || !estimate?.total_cents) return balance;
-    return { ...balance, estimated: true, charges_cents: estimate.total_cents, balance_cents: balance.balance_cents + estimate.total_cents, status: 'Estimate' };
+/**
+ * Until the booking is priced, its estimate stands in for the charges, marked as an estimate. Charges added
+ * before confirmation (such as parking) are already part of the estimate, so they are not counted twice.
+ */
+function withEstimate(balance: any, estimate: any, pricingVersion: number) {
+    if (!balance || pricingVersion > 0 || !estimate?.total_cents) return balance;
+    return { ...balance, estimated: true, charges_cents: estimate.total_cents, balance_cents: balance.balance_cents - balance.charges_cents + estimate.total_cents, status: 'Estimate' };
 }
 
 function EstimateTable({ estimate }: { estimate: any }) {
@@ -408,21 +412,21 @@ function ClosedNotice({ booking: b, today, canBook }: { booking: any; today: str
     );
 }
 
-export default function BookingShow({ booking: b, charges, balance: savedBalance, estimate, receipts, checkout, nowLocal, today, standardCheckIn, downpaymentPercent, settlements, refunds, events, snapshots, parking, messages, rooms, sources = [] }: any) {
+export default function BookingShow({ booking: b, charges, balance: savedBalance, estimate, receipts, checkout, nowLocal, today, standardCheckIn, downpaymentPercent, settlements, refunds, events, snapshots, parking, parkingSplit, parkingForm, messages, rooms, sources = [] }: any) {
     const [paying, setPaying] = useState(false);
+    const [parkingDialog, setParkingDialog] = useState<null | { kind: 'edit' | 'payment'; item?: any }>(null);
     const [editing, setEditing] = useState<'details' | 'guest' | null>(null);
     const closed = CLOSED.includes(b.status);
     const shownRooms = b.rooms.length ? b.rooms : (b.released_rooms ?? []);
-    const balance = withEstimate(savedBalance, estimate);
+    const balance = withEstimate(savedBalance, estimate, b.pricing_version);
     const perms: string[] = (usePage<any>().props as any).auth.user.permissions;
     const can = (p: string) => perms.includes(p);
     const url = `/admin/bookings/${b.id}`;
     const open = ['inquiry', 'tentative', 'confirmed'].includes(b.status);
     let amendable = false;
 
+    // Parking is added with Add parking, so it has its own dates, stall and payment status.
     const moneyFields: FieldDef[] = [
-        // Cameras have no parking; a discount still applies.
-        ...(b.is_camera ? [] : [{ name: 'parking', label: 'Parking (PHP)', type: 'money' } as FieldDef]),
         ...(can('bookings.discount') ? ([
             { name: 'discount', label: 'Authorized discount (PHP)', type: 'money' },
             { name: 'discount_reason', label: 'Discount reason', type: 'text' },
@@ -509,7 +513,7 @@ export default function BookingShow({ booking: b, charges, balance: savedBalance
                             <ActionButton action={{
                                 label: 'Add charge', url: `${url}/charges`, confirm: 'This changes what the guest owes. Continue?', fields: [
                                     { name: 'type', label: 'Type', type: 'select', required: true, options: [
-                                        { value: 'service', label: 'Other service' }, { value: 'late_check_out', label: 'Late check-out' }, { value: 'parking', label: 'Parking' },
+                                        { value: 'service', label: 'Other service' }, { value: 'late_check_out', label: 'Late check-out' },
                                         ...(can('bookings.discount') ? [{ value: 'adjustment', label: 'Adjustment' }, { value: 'discount', label: 'Discount' }] : []),
                                     ] },
                                     { name: 'description', label: 'Description', type: 'text', required: true },
@@ -518,7 +522,9 @@ export default function BookingShow({ booking: b, charges, balance: savedBalance
                             }} />
                         ) : undefined}
                     >
-                        {charges.length === 0 && estimate?.lines ? <EstimateTable estimate={estimate} /> : charges.length === 0 ? (
+                        {estimate?.lines && !b.pricing_version && <EstimateTable estimate={estimate} />}
+                        {estimate?.lines && !b.pricing_version && charges.length > 0 && <p className="mt-3 mb-1 text-xs font-medium text-muted">Added before confirmation (kept when the price is locked)</p>}
+                        {estimate?.lines && !b.pricing_version && charges.length === 0 ? null : charges.length === 0 ? (
                             <Empty>{closed ? 'No charges. This booking closed before it was priced.' : estimate?.error ?? 'Priced when the booking is confirmed. Use New quote for an estimate.'}</Empty>
                         ) : (
                             <div className="overflow-x-auto">
@@ -581,6 +587,12 @@ export default function BookingShow({ booking: b, charges, balance: savedBalance
                                 {balance.settled_gross_cents > 0 && <Line label="Settled via channel (gross)" value={-balance.settled_gross_cents} />}
                                 {balance.refunded_cents > 0 && <Line label="Refunds paid out" value={balance.refunded_cents} />}
                                 <div className="flex justify-between border-t border-line pt-1 font-semibold"><dt>{balance.estimated ? 'Balance due (estimate)' : 'Balance due'}</dt><dd className="tabular-nums">{peso(balance.balance_cents)}</dd></div>
+                                {parkingSplit && parkingSplit.parking_fee_cents > 0 && !balance.estimated && (
+                                    <div className="mt-2 space-y-1 rounded-md bg-ivory px-2.5 py-2 text-xs">
+                                        <div className="flex justify-between gap-2"><dt>Stay: {peso(parkingSplit.stay_paid_cents)} paid of {peso(parkingSplit.stay_charges_cents)}</dt><dd className="font-medium">{parkingSplit.stay_paid_cents >= parkingSplit.stay_charges_cents ? 'Paid' : 'Open'}</dd></div>
+                                        <div className="flex justify-between gap-2"><dt>Parking: {peso(parkingSplit.parking_paid_cents)} paid of {peso(parkingSplit.parking_fee_cents)}</dt><dd className="font-medium">{parkingSplit.parking_balance_cents > 0 ? `${peso(parkingSplit.parking_balance_cents)} to collect` : 'Paid'}</dd></div>
+                                    </div>
+                                )}
                                 {balance.estimated && downpaymentPercent && balance.verified_cents === 0 && <Line label={`${downpaymentPercent}% downpayment`} value={Math.round((balance.charges_cents * downpaymentPercent) / 100)} />}
                                 {balance.pending_cents > 0 && <p className="text-xs text-amber-900">{peso(balance.pending_cents)} awaiting verification is not counted yet.</p>}
                             </dl>
@@ -632,17 +644,39 @@ export default function BookingShow({ booking: b, charges, balance: savedBalance
                         </Card>
                     )}
 
-                    {parking.length > 0 && (
-                        <Card title="Parking">
-                            <ul className="space-y-1 text-sm">
-                                {parking.map((p: any, i: number) => <li key={i}>{p.code}: {dateOnly(p.start)} to {dateOnly(p.end)} <StatusChip value={p.status} /></li>)}
-                            </ul>
+                    {parkingForm && (
+                        <Card title="Parking" action={can('parking.manage') && !closed && b.status !== 'checked_out' ? <Button small onClick={() => setParkingDialog({ kind: 'edit' })}>Add parking</Button> : undefined}>
+                            {parking.length === 0 ? <Empty>No parking. Add it now or any time up to check-out; the room price is not changed.</Empty> : (
+                                <ul className="space-y-3 text-sm">
+                                    {parking.map((p: any) => (
+                                        <li key={p.id} className={p.status === 'cancelled' ? 'text-muted' : undefined}>
+                                            <div className="flex flex-wrap items-center gap-1.5">
+                                                <span className="font-medium">{p.slot ?? 'Stall to be assigned'}</span>
+                                                <AssignmentChip status={p.status} />
+                                                {p.status !== 'cancelled' && <PaymentChip status={p.payment_status} />}
+                                            </div>
+                                            <p className="text-xs text-muted">{dateOnly(p.start)} to {dateOnly(p.end)} · {p.nights} night{p.nights === 1 ? '' : 's'}{p.vehicle ? ` · ${p.vehicle}` : ''}</p>
+                                            {p.status !== 'cancelled' && p.fee_cents > 0 && <p className="text-xs tabular-nums">Fee {peso(p.fee_cents)} · paid {peso(p.paid_cents)}{p.balance_cents > 0 ? ` · ${peso(p.balance_cents)} to collect` : ''}{p.pending_cents > 0 ? ` · ${peso(p.pending_cents)} to verify` : ''}</p>}
+                                            {p.slot && <p className="text-xs text-muted">{p.borrowed ? `Third-party stall of ${p.owner || 'another owner'}: the fee is remitted to them${p.remitted ? ' (done)' : ''}.` : 'Condo-owned stall.'}</p>}
+                                            {p.status !== 'cancelled' && (
+                                                <div className="mt-1 flex flex-wrap gap-1">
+                                                    {can('parking.manage') && <Button small onClick={() => setParkingDialog({ kind: 'edit', item: p })}>Edit</Button>}
+                                                    {can('payments.record') && p.balance_cents > 0 && <Button small onClick={() => setParkingDialog({ kind: 'payment', item: p })}>Record parking payment</Button>}
+                                                    {can('parking.manage') && !p.remitted && <ActionButton action={{ label: 'Cancel', url: `/admin/parking/assignments/${p.id}/cancel`, variant: 'danger', confirm: 'Cancel this parking? Its stall is released and its charge is removed.' }} />}
+                                                </div>
+                                            )}
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
                         </Card>
                     )}
                 </div>
             </div>
             {editing === 'details' && <EditDetails booking={b} sources={sources} url={url} onClose={() => setEditing(null)} />}
             {editing === 'guest' && <EditGuest guest={b.guest} onClose={() => setEditing(null)} />}
+            {parkingDialog?.kind === 'edit' && parkingForm && <ParkingForm assignment={parkingDialog.item} fixedReservation={parkingForm.reservation} defaultRate={parkingForm.defaultRate} onClose={() => setParkingDialog(null)} />}
+            {parkingDialog?.kind === 'payment' && parkingForm && <ParkingPaymentForm parking={parkingDialog.item} methods={parkingForm.methods} nowLocal={nowLocal} onClose={() => setParkingDialog(null)} />}
             {paying && balance && <RecordPayment booking={b} balance={balance} downpaymentPercent={downpaymentPercent} nowLocal={nowLocal} onClose={() => setPaying(false)} />}
         </AdminLayout>
     );

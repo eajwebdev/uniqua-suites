@@ -6,6 +6,7 @@ use App\Domain\Availability\RoomConflict;
 use App\Domain\Bookings\BookingService;
 use App\Domain\Bookings\MessageService;
 use App\Domain\Finance\FinanceService;
+use App\Domain\Parking\ParkingService;
 use App\Http\Controllers\Controller;
 use App\Models\Booking;
 use App\Models\BookingCharge;
@@ -27,7 +28,7 @@ use Inertia\Inertia;
 
 class BookingController extends Controller
 {
-    public function __construct(private BookingService $bookings, private FinanceService $finance, private MessageService $messages)
+    public function __construct(private BookingService $bookings, private FinanceService $finance, private MessageService $messages, private ParkingService $parking)
     {
     }
 
@@ -79,6 +80,7 @@ class BookingController extends Controller
             'guests' => Guest::where(fn ($w) => $w->whereHas('bookings', fn ($b) => AdminCategory::bookings($b))->orWhereDoesntHave('bookings'))->orderByDesc('id')->limit(200)->get(['id', 'full_name', 'phone']),
             'today' => Local::today(),
             'standard_check_in' => (string) Settings::get('pricing.standard_check_in'),
+            'parking_rate' => Money::pesos((int) Settings::get('pricing.parking_night_cents')),
         ])->header('Cache-Control', 'no-store');
     }
 
@@ -123,7 +125,13 @@ class BookingController extends Controller
             'then' => 'nullable|in:hold,confirm',
             'quote_id' => 'nullable|integer|exists:quotes,id',
             'channel_total' => ['nullable', Money::RULE],
-        ], ['channel_total.regex' => 'Enter the Airbnb total as an amount, for example 4500 or 4500.50.']);
+            // Parking asked for with the reservation: recorded as a request (no stall yet) with its own fee.
+            'parking' => 'nullable|boolean',
+            'parking_start' => 'required_if:parking,true|nullable|date_format:Y-m-d',
+            'parking_end' => 'required_if:parking,true|nullable|date_format:Y-m-d|after:parking_start',
+            'parking_rate' => ['required_if:parking,true', 'nullable', Money::RULE],
+            'parking_vehicle' => 'nullable|string|max:80',
+        ], ['channel_total.regex' => 'Enter the Airbnb total as an amount, for example 4500 or 4500.50.', 'parking_end.after' => 'Parking ends after it starts.']);
         abort_if(($data['then'] ?? null) === 'confirm' && ! $request->user()->can('bookings.confirm'), 403);
 
         if (empty($data['guest_id']) && empty($data['guest_phone']) && empty($data['guest_email']) && empty($data['guest_messenger_handle'])) {
@@ -174,6 +182,13 @@ class BookingController extends Controller
                 }
 
                 $booking = $this->bookings->createInquiry($data);
+                if (! empty($data['parking'])) {
+                    $this->parking->save(null, [
+                        'booking_id' => $booking->id, 'holder_name' => $booking->guest->full_name, 'vehicle' => $data['parking_vehicle'] ?? null,
+                        'status' => \App\Models\ParkingAssignment::REQUESTED, 'start_date' => $data['parking_start'], 'end_date' => $data['parking_end'],
+                        'rate_cents' => Money::cents($data['parking_rate'] ?? null),
+                    ], auth()->id());
+                }
                 // A booking made from a quote is linked to it, so the quote no longer offers Create booking.
                 if (! empty($data['quote_id'])) {
                     \App\Models\Quote::whereKey($data['quote_id'])->whereNull('booking_id')->update(['booking_id' => $booking->id, 'guest_id' => $booking->guest_id]);
@@ -262,7 +277,13 @@ class BookingController extends Controller
             'refunds' => $canPay ? $booking->refunds()->orderByDesc('id')->get() : [],
             'events' => $booking->statusEvents->map(fn ($e) => ['from' => $e->from_status, 'to' => $e->to_status, 'note' => $e->note, 'by' => $e->user?->name, 'at' => $e->created_at]),
             'snapshots' => $booking->snapshots->map(fn ($s) => ['version' => $s->version, 'total_cents' => (int) $s->total_cents, 'reason' => $s->reason, 'at' => $s->created_at]),
-            'parking' => ParkingAssignment::where('booking_id', $booking->id)->with('space:id,code')->get()->map(fn ($p) => ['code' => $p->space->code, 'start' => $p->start_date->toDateString(), 'end' => $p->end_date->toDateString(), 'status' => $p->status]),
+            'parking' => $this->parkingRows($booking),
+            'parkingSplit' => $canPay && $booking->property->category !== Property::CAMERAS ? $this->parking->bookingSplit($booking, $this->finance->balance($booking)) : null,
+            'parkingForm' => $booking->property->category === Property::CAMERAS ? null : [
+                'reservation' => ParkingController::reservationOption($booking->loadMissing('activeRooms.room')),
+                'defaultRate' => Money::pesos((int) Settings::get('pricing.parking_night_cents')),
+                'methods' => [['value' => 'cash', 'label' => 'Cash'], ['value' => 'gcash', 'label' => 'GCash'], ['value' => 'bank_transfer', 'label' => 'Bank transfer'], ['value' => 'other', 'label' => 'Other']],
+            ],
             'messages' => $this->messages->renderAll($booking),
             'rooms' => Room::where('operational_status', '!=', 'retired')->whereHas('property', fn ($p) => $p->where('category', $booking->property->category))->orderBy('id')->get(['id', 'name', 'unit_code', 'max_guests']),
         ]);
@@ -354,6 +375,19 @@ class BookingController extends Controller
             'balance_cents' => $canPay && $unpaid > 0 ? $unpaid : null,
             'pending_cents' => $canPay && $unpaid > 0 ? (int) $this->finance->balance($booking)['pending_cents'] : 0,
         ];
+    }
+
+    /** Each parking on the booking with its own fee, payment and assignment status. */
+    private function parkingRows(Booking $booking): array
+    {
+        $rows = ParkingAssignment::where('booking_id', $booking->id)->with('space:id,code,name,ownership,vendor_name')->orderBy('start_date')->get();
+        $pay = $this->parking->payments($rows);
+
+        return $rows->map(fn (ParkingAssignment $p) => [
+            'id' => $p->id, 'slot' => $p->space?->label(), 'space_id' => $p->parking_space_id, 'start' => $p->start_date->toDateString(), 'end' => $p->end_date->toDateString(),
+            'nights' => $p->nights, 'rate' => Money::pesos($p->rate_cents), 'status' => $p->status, 'vehicle' => $p->vehicle, 'notes' => $p->notes, 'guest' => $p->holder_name,
+            'borrowed' => (bool) $p->space?->isBorrowed(), 'owner' => $p->space?->vendor_name, 'remitted' => $p->remitted_on !== null,
+        ] + $pay[$p->id])->all();
     }
 
     public function hold(Request $request, Booking $booking)

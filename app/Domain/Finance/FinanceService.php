@@ -30,6 +30,7 @@ class FinanceService
         $receipt = Receipt::create([
             'reference' => 'RC-'.Local::now()->format('ym').'-'.Str::upper(Str::random(6)),
             'booking_id' => $data['booking_id'] ?? null,
+            'parking_assignment_id' => $data['parking_assignment_id'] ?? null,
             'received_at' => $receivedAt->utc(),
             'receipt_date' => $receivedAt->toDateString(),
             'amount_cents' => $data['amount_cents'],
@@ -331,6 +332,7 @@ class FinanceService
         $reversal = Receipt::create([
             'reference' => 'RC-'.Local::now()->format('ym').'-'.Str::upper(Str::random(6)),
             'booking_id' => $receipt->booking_id,
+            'parking_assignment_id' => $receipt->parking_assignment_id,
             'received_at' => now(),
             'receipt_date' => $today,
             'amount_cents' => -(int) $receipt->amount_cents,

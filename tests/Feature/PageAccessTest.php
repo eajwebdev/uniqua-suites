@@ -318,8 +318,8 @@ class PageAccessTest extends DomainTestCase
     public function test_a_manager_never_sees_or_changes_owner_or_administrator_accounts(): void
     {
         $manager = $this->person('Operations Manager');
-        $owner = User::role('Owner')->firstOrFail();
-        $admin = User::role('Administrator')->firstOrFail();
+        $owner = $this->owner;
+        $admin = $this->person('Administrator');
         $reception = $this->person('Booking / Reception');
 
         $emails = fn () => collect($this->get('/admin/team')->assertOk()->original->getData()['page']['props']['rows'])->pluck('email')->all();

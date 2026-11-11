@@ -6,6 +6,7 @@ use App\Domain\Availability\InventoryService;
 use App\Domain\Availability\RoomConflict;
 use App\Domain\Availability\StayRules;
 use App\Domain\Finance\FinanceService;
+use App\Domain\Parking\ParkingService;
 use App\Domain\Pricing\PricingService;
 use App\Domain\Tasks\TurnoverService;
 use App\Models\Booking;
@@ -31,6 +32,7 @@ class BookingService
         private TurnoverService $turnover,
         private StayRules $stayRules,
         private FinanceService $finance,
+        private ParkingService $parking,
     ) {
     }
 
@@ -218,6 +220,7 @@ class BookingService
             $from = $fresh->status;
             $fresh->update(['status' => Booking::CANCELLED, 'cancellation_reason' => $reason, 'hold_expires_at' => null]);
             $fresh->activeRooms()->update(['released_at' => now()]);
+            $this->parking->releaseForBooking($fresh, 'Booking cancelled');
             $this->turnover->syncWaiting($fresh);
             $this->event($fresh, $from, Booking::CANCELLED, $reason);
 
@@ -235,6 +238,7 @@ class BookingService
             $this->finance->assertStayOpen($fresh->check_in->toDateString(), $fresh->check_out->toDateString());
             $fresh->update(['status' => Booking::NO_SHOW]);
             $fresh->activeRooms()->update(['released_at' => now()]);
+            $this->parking->releaseForBooking($fresh, 'No-show');
             $this->turnover->syncWaiting($fresh);
             $this->event($fresh, Booking::CONFIRMED, Booking::NO_SHOW, $note ?? 'No show');
 
@@ -488,14 +492,22 @@ class BookingService
             return null;
         }
 
+        // Charges added by hand before confirmation (parking, services) survive confirmation, so they belong in the estimate.
+        $added = $booking->activeCharges()->orderBy('id')->get()->map(fn ($c) => ['type' => $c->type, 'description' => $c->description, 'amount_cents' => (int) $c->amount_cents])->all();
+        $hasParking = \App\Models\ParkingAssignment::where('booking_id', $booking->id)->live()->exists();
+
         $quote = $booking->channel_total_cents !== null ? null : Quote::with('items')->where('booking_id', $booking->id)->orderByDesc('id')->first();
         if ($quote && $rooms->count() === 1 && (int) $quote->room_id === (int) $rooms[0]->room_id
             && $quote->check_in->toDateString() === $booking->check_in->toDateString() && $quote->check_out->toDateString() === $booking->check_out->toDateString()) {
+            // Quoted parking became a parking request with its own charge, so it is not counted twice.
+            $items = $quote->items->filter(fn ($i) => $i->type !== 'parking' || ! $hasParking);
+            $lines = [...$items->map(fn ($i) => ['type' => $i->type, 'description' => $i->description, 'amount_cents' => (int) $i->amount_cents])->values()->all(), ...$added];
+
             return [
                 'source' => 'quote',
                 'quote' => "{$quote->reference} v{$quote->version}",
-                'lines' => $quote->items->map(fn ($i) => ['type' => $i->type, 'description' => $i->description, 'amount_cents' => (int) $i->amount_cents])->values()->all(),
-                'total_cents' => (int) $quote->total_cents,
+                'lines' => $lines,
+                'total_cents' => array_sum(array_column($lines, 'amount_cents')),
             ];
         }
 
@@ -519,6 +531,8 @@ class BookingService
         } catch (RoomConflict $e) { // includes missing rates and pricing settings
             return ['error' => 'An estimate cannot be worked out yet: '.$e->getMessage()];
         }
+
+        $lines = [...$lines, ...$added];
 
         return ['source' => $channelShares ? 'channel' : 'rates', 'lines' => $lines, 'total_cents' => array_sum(array_column($lines, 'amount_cents'))];
     }
