@@ -21,7 +21,7 @@ type Rate = { label: string; min_days: number; max_days: number | null; daily_ce
 type Model = { free_day_from: number; name: string; slug: string; brand: string | null; specs: string | null; description: string | null; units: number; closed: boolean; images: { url: string; alt: string; default?: boolean }[]; rates: Rate[]; unavailable: { from: string; to: string }[]; busy?: Busy[] };
 /** When every unit of a model is out, Manila wall-clock 'YYYY-MM-DD HH:mm'. */
 type Busy = { from: string; to: string };
-type Check = { state: 'idle' | 'checking' | 'free' | 'taken'; message?: string; days?: number; estimate_cents?: number; daily_cents?: number; free_day?: boolean; extra_minutes?: number };
+type Check = { state: 'idle' | 'checking' | 'free' | 'taken'; message?: string; retry?: boolean; days?: number; estimate_cents?: number; daily_cents?: number; free_day?: boolean; extra_minutes?: number };
 
 const WIDTH = 'mx-auto w-full max-w-6xl px-4 sm:px-6';
 const DISPLAY = "font-['Montserrat',ui-sans-serif,system-ui,sans-serif]";
@@ -79,6 +79,29 @@ const WEEK = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 // Store hours: pickups and returns happen between these times.
 const OPENS = '08:00';
 const CLOSES = '18:00';
+
+/** The next quarter hour at least 30 minutes from now in Manila, for a pickup today. Null once the store has closed. */
+function nextPickupToday(): string | null {
+    const now = new Date(Date.now() + 8 * 3600e3); // Manila clock, read in UTC
+    const minutes = Math.ceil((now.getUTCHours() * 60 + now.getUTCMinutes() + 30) / 15) * 15;
+    const time = `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+    if (time > CLOSES) return null;
+
+    return time < OPENS ? OPENS : time;
+}
+
+/** Why a check failed, in words a renter can act on. Validation and rate limits come back as JSON. */
+async function checkFailure(response: Response): Promise<{ message: string; retry: boolean }> {
+    if (response.status === 429) return { message: 'Too many checks just now. Wait a few seconds, then try again.', retry: true };
+    if (response.status === 422) {
+        const body = await response.json().catch(() => null);
+        const first = body?.errors ? Object.values(body.errors).flat()[0] : null;
+        return { message: String(first ?? body?.message ?? 'Please check the days and times you chose.'), retry: false };
+    }
+    if (response.status === 419 || response.status === 401) return { message: 'This page has been open a while. Reload it, then try again.', retry: false };
+
+    return { message: 'Our availability check is not responding right now. Please try again, or message us and we will check for you.', retry: true };
+}
 
 const atLabel = (at: string) => `${shortDate(at.slice(0, 10))}, ${time12(at.slice(11, 16))}`;
 
@@ -265,21 +288,48 @@ function InquirePanel({ model, chat, initialFrom = '', initialTo = '' }: { model
     const inHours = (t: string) => t >= OPENS && t <= CLOSES;
     const blocking = timesValid ? clashes(model.busy, `${from} ${pickupTime}`, `${to} ${returnTime}`) : [];
 
+    const [attempt, setAttempt] = useState(0);
+
+    // Waits until the renter stops typing a time, then asks the server; one quiet retry before showing a problem.
     useEffect(() => {
         if (!from || !to || !timesValid) return setCheck({ state: 'idle' });
         const request = new AbortController();
         setCheck({ state: 'checking' });
         const query = new URLSearchParams({ check_in: from, check_out: to, pickup_time: pickupTime, return_time: returnTime });
-        fetch(`/grabcam/${model.slug}/check-dates?${query}`, { headers: { Accept: 'application/json' }, signal: request.signal })
-            .then((r) => (r.ok ? r.json() : Promise.reject(new Error('check failed'))))
-            .then((body) => setCheck(body.available ? { state: 'free', days: body.days, estimate_cents: body.estimate_cents, daily_cents: body.daily_cents, free_day: body.free_day, extra_minutes: body.extra_minutes } : { state: 'taken', message: body.message }))
-            .catch((error) => error.name !== 'AbortError' && setCheck({ state: 'taken', message: 'We could not check those times. Please try again.' }));
+        const ask = async (tries: number): Promise<void> => {
+            let response: Response;
+            try {
+                response = await fetch(`/grabcam/${model.slug}/check-dates?${query}`, { headers: { Accept: 'application/json' }, signal: request.signal });
+            } catch (error: any) {
+                if (error?.name === 'AbortError') return;
+                if (tries > 0) { await new Promise((r) => setTimeout(r, 1000)); return ask(tries - 1); }
+                return setCheck({ state: 'taken', retry: true, message: 'We could not reach Grab Cam. Check your connection, then try again.' });
+            }
+            if (!response.ok) {
+                if (response.status >= 500 && tries > 0) { await new Promise((r) => setTimeout(r, 1000)); return ask(tries - 1); }
+                const failure = await checkFailure(response);
+                return setCheck({ state: 'taken', ...failure });
+            }
+            const body = await response.json();
+            setCheck(body.available
+                ? { state: 'free', days: body.days, estimate_cents: body.estimate_cents, daily_cents: body.daily_cents, free_day: body.free_day, extra_minutes: body.extra_minutes }
+                : { state: 'taken', message: body.message });
+        };
+        const timer = window.setTimeout(() => { ask(1).catch(() => setCheck({ state: 'taken', retry: true, message: 'We could not check those times. Please try again.' })); }, 400);
 
-        return () => request.abort();
-    }, [from, to, pickupTime, returnTime, timesValid, model.slug]);
+        return () => { window.clearTimeout(timer); request.abort(); };
+    }, [from, to, pickupTime, returnTime, timesValid, model.slug, attempt]);
 
     // Tapping the pickup day again makes a same-day rental.
     const pick = (date: string) => {
+        // A pickup today starts at the next free slot, not at a time that has already passed.
+        if ((!from || to || date < from) && date === today) {
+            const slot = nextPickupToday();
+            if (slot && pickupTime < slot) {
+                setPickupTime(slot);
+                if (returnTime === pickupTime) setReturnTime(slot);
+            }
+        }
         if (!from || to || date < from) {
             setFrom(date);
             setTo('');
@@ -359,7 +409,12 @@ function InquirePanel({ model, chat, initialFrom = '', initialTo = '' }: { model
                     <p role="status" className="mt-2 flex items-center gap-1.5 font-medium">
                         {check.state === 'checking' && <><Loader2 size={15} className="animate-spin" aria-hidden /> Checking…</>}
                         {check.state === 'free' && <span className="flex items-center gap-1.5 text-emerald-700"><BadgeCheck size={16} aria-hidden /> Available</span>}
-                        {check.state === 'taken' && <span className="text-red-700">{check.message}</span>}
+                        {check.state === 'taken' && (
+                            <span className="text-red-700">
+                                {check.message}
+                                {check.retry && <button type="button" onClick={() => setAttempt((n) => n + 1)} className="ml-2 font-semibold underline">Try again</button>}
+                            </span>
+                        )}
                     </p>
                     {check.state === 'free' && check.estimate_cents !== undefined && (
                         <p className="mt-1 text-slate-600">Estimated <strong className="text-[#0c1f3d]">{pesoWhole(check.estimate_cents)}</strong> at {pesoWhole(check.daily_cents)}/day{check.free_day ? ', 1 day free' : ''}. We confirm the final amount.</p>
