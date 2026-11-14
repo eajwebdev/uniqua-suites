@@ -29,6 +29,11 @@ class WorkOrder extends Model
         return $this->belongsTo(User::class, 'assigned_to');
     }
 
+    public function booking()
+    {
+        return $this->belongsTo(Booking::class);
+    }
+
     public function vendor()
     {
         return $this->belongsTo(Vendor::class);

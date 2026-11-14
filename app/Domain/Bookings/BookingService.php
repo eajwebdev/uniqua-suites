@@ -53,14 +53,21 @@ class BookingService
         if ($rooms->pluck('property_id')->unique()->count() > 1) {
             throw new RoomConflict('All rooms in one booking must be at the same property.');
         }
-        if ($data['check_in'] >= $data['check_out']) {
+        // A camera rental runs from an exact pickup moment to an exact return moment; it can start and end on one day.
+        $period = $rooms->first()->isCamera()
+            ? RentalPeriod::fromParts($data['check_in'], $data['pickup_time'] ?? null, $data['check_out'], $data['return_time'] ?? null)
+            : null;
+        if ($period) {
+            $data['check_in'] = $period->checkIn();
+            $data['check_out'] = $period->checkOut();
+        } elseif ($data['check_in'] >= $data['check_out']) {
             throw new RoomConflict('Check-out must be after check-in.');
         }
 
         $guestCount = (int) $data['adults'] + (int) ($data['children'] ?? 0);
         $this->assertCapacity($rooms, $guestCount);
 
-        return DB::transaction(function () use ($data, $rooms, $guestCount) {
+        return DB::transaction(function () use ($data, $rooms, $guestCount, $period) {
             $booking = Booking::create([
                 'reference' => $this->newReference(),
                 'idempotency_key' => $data['idempotency_key'] ?? null,
@@ -73,8 +80,10 @@ class BookingService
                 'check_in' => $data['check_in'],
                 'check_out' => $data['check_out'],
                 'approved_early_time' => $data['approved_early_time'] ?? null,
-                'requested_arrival_time' => $data['pickup_time'] ?? null,
-                'return_time' => $data['return_time'] ?? null,
+                'requested_arrival_time' => $period && ! empty($data['pickup_time']) ? $period->pickupTime() : ($data['pickup_time'] ?? null),
+                'return_time' => $period && ! empty($data['return_time']) ? $period->returnTime() : ($data['return_time'] ?? null),
+                'pickup_at' => $period?->startsAt(),
+                'return_at' => $period?->endsAt(),
                 'adults' => $data['adults'],
                 'children' => $data['children'] ?? 0,
                 'guest_count' => $guestCount,
@@ -84,7 +93,7 @@ class BookingService
                 'created_by' => auth()->id(),
             ]);
 
-            $this->writeRooms($booking, $rooms, $data['check_in'], $data['check_out'], $guestCount);
+            $this->writeRooms($booking, $rooms, $data['check_in'], $data['check_out'], $guestCount, $period);
             $this->event($booking, null, Booking::INQUIRY, 'Created');
 
             return $booking;
@@ -148,6 +157,20 @@ class BookingService
             $fresh = Booking::lockForUpdate()->findOrFail($booking->id);
             $this->assertStatus($fresh, [Booking::INQUIRY, Booking::TENTATIVE, Booking::CONFIRMED, Booking::CHECKED_IN], 'amend');
 
+            $camera = $fresh->property->category === \App\Models\Property::CAMERAS;
+            $period = null;
+            if ($camera) {
+                // Anything not changed keeps its booked moment; a changed date keeps its booked time unless a new time is given.
+                $was = $fresh->pickup_at ? RentalPeriod::between($fresh->pickup_at, $fresh->return_at) : null;
+                $period = RentalPeriod::fromParts(
+                    $data['check_in'] ?? ($was?->checkIn() ?? $fresh->check_in->toDateString()),
+                    $data['pickup_time'] ?? ($was?->pickupTime() ?? $fresh->requested_arrival_time),
+                    $data['check_out'] ?? ($was?->ends->toDateString() ?? $fresh->check_out->toDateString()),
+                    $data['return_time'] ?? ($was?->returnTime() ?? $fresh->return_time),
+                );
+                $data['check_in'] = $period->checkIn();
+                $data['check_out'] = $period->checkOut();
+            }
             $checkIn = $data['check_in'] ?? $fresh->check_in->toDateString();
             $checkOut = $data['check_out'] ?? $fresh->check_out->toDateString();
             $adults = (int) ($data['adults'] ?? $fresh->adults);
@@ -172,14 +195,15 @@ class BookingService
             }
 
             $current = $fresh->activeRooms()->pluck('room_id')->sort()->values()->all();
-            $moved = $checkIn !== $fresh->check_in->toDateString() || $checkOut !== $fresh->check_out->toDateString() || $current !== $rooms->pluck('id')->sort()->values()->all();
+            $moved = $checkIn !== $fresh->check_in->toDateString() || $checkOut !== $fresh->check_out->toDateString() || $current !== $rooms->pluck('id')->sort()->values()->all()
+                || ($period && ($period->startsAt() !== $this->moment($fresh->pickup_at) || $period->endsAt() !== $this->moment($fresh->return_at)));
 
             // An inquiry holds nothing, but it must not be moved onto dates that are already taken either.
             if (in_array($fresh->status, [Booking::INQUIRY, Booking::TENTATIVE, Booking::CONFIRMED, Booking::CHECKED_IN], true)) {
                 foreach ($rooms as $room) {
-                    $this->inventory->assertFree($room, $checkIn, $checkOut, $fresh->id);
+                    $this->inventory->assertFree($room, $period?->startsAt() ?? $checkIn, $period?->endsAt() ?? $checkOut, $fresh->id);
                     if ($moved) {
-                        $this->assertStayRules($room, $checkIn, $checkOut);
+                        $this->assertStayRules($room, $period?->startsAt() ?? $checkIn, $period?->endsAt() ?? $checkOut);
                     }
                 }
             }
@@ -194,9 +218,15 @@ class BookingService
                 'approved_early_time' => array_key_exists('approved_early_time', $data) ? $data['approved_early_time'] : $fresh->approved_early_time,
                 'channel_total_cents' => array_key_exists('channel_total_cents', $data) ? $data['channel_total_cents'] : $fresh->channel_total_cents,
                 'booking_source_id' => $data['booking_source_id'] ?? $fresh->booking_source_id,
+                ...($period ? [
+                    'pickup_at' => $period->startsAt(),
+                    'return_at' => $period->endsAt(),
+                    'requested_arrival_time' => $period->pickupTime(),
+                    'return_time' => $period->returnTime(),
+                ] : []),
             ]);
             $fresh->activeRooms()->update(['released_at' => now()]);
-            $this->writeRooms($fresh, $rooms, $checkIn, $checkOut, $adults + $children);
+            $this->writeRooms($fresh, $rooms, $checkIn, $checkOut, $adults + $children, $period);
 
             if (in_array($fresh->status, [Booking::CONFIRMED, Booking::CHECKED_IN], true)) {
                 $this->reprice($fresh, $pricingOpts, $data['reason'] ?? 'Amendment');
@@ -204,7 +234,7 @@ class BookingService
             $this->inventory->syncClaims($fresh);
             $this->turnover->syncWaiting($fresh);
             $this->event($fresh, $fresh->status, $fresh->status, 'Amended: '.($data['reason'] ?? 'dates, rooms or party'));
-            Audit::log('booking.amended', $fresh, ['check_in' => $checkIn, 'check_out' => $checkOut, 'room_ids' => $roomIds]);
+            Audit::log('booking.amended', $fresh, ['check_in' => $checkIn, 'check_out' => $checkOut, 'room_ids' => $roomIds] + ($period ? ['pickup_at' => $period->startsAt(), 'return_at' => $period->endsAt()] : []));
 
             return $fresh;
         });
@@ -278,14 +308,30 @@ class BookingService
     }
 
     /** Safe to retry: a repeated checkout returns without duplicating turnover work. */
-    public function checkOut(Booking $booking, ?string $note = null): Booking
+    /** $returnedAt: for a camera, the property-local moment it actually came back, when staff record it afterwards. Defaults to now. */
+    public function checkOut(Booking $booking, ?string $note = null, ?string $returnedAt = null): Booking
     {
-        return $this->lockForBooking($booking, function ($fresh, $rooms) use ($note) {
+        return $this->lockForBooking($booking, function ($fresh, $rooms) use ($note, $returnedAt) {
             if ($fresh->status === Booking::CHECKED_OUT) {
                 return $fresh;
             }
             $this->assertStatus($fresh, [Booking::CHECKED_IN], 'check out');
-            $fresh->update(['status' => Booking::CHECKED_OUT, 'actual_check_out_at' => now()]);
+            $at = now();
+            if ($returnedAt !== null) {
+                $at = \Carbon\Carbon::parse($returnedAt, Local::tz())->utc();
+                if ($at->isFuture()) {
+                    throw new RoomConflict('The return time cannot be in the future.');
+                }
+                if ($fresh->actual_check_in_at && $at->lt($fresh->actual_check_in_at)) {
+                    throw new RoomConflict('The return time cannot be before the pickup.');
+                }
+            }
+            $fresh->update(['status' => Booking::CHECKED_OUT, 'actual_check_out_at' => $at]);
+            // A late return is recorded, never charged automatically: the owner decides on a late fee.
+            $late = $fresh->lateMinutes();
+            if ($late > 0) {
+                $note = ($note ?? 'Returned').'. Returned '.self::duration($late).' after the agreed return time.';
+            }
             $this->event($fresh, Booking::CHECKED_IN, Booking::CHECKED_OUT, $note ?? 'Checked out');
 
             foreach ($rooms as $room) {
@@ -354,8 +400,9 @@ class BookingService
     private function assertRoomsFree(Booking $booking): void
     {
         foreach ($booking->activeRooms()->with('room')->get() as $br) {
-            $this->inventory->assertFree($br->room, $br->check_in->toDateString(), $br->check_out->toDateString(), $booking->id);
-            $this->assertStayRules($br->room, $br->check_in->toDateString(), $br->check_out->toDateString());
+            // A camera unit is checked to the minute; a suite by nights.
+            $this->inventory->assertFree($br->room, $br->starts_at ?? $br->check_in->toDateString(), $br->ends_at ?? $br->check_out->toDateString(), $booking->id);
+            $this->assertStayRules($br->room, $br->starts_at ?? $br->check_in->toDateString(), $br->ends_at ?? $br->check_out->toDateString());
         }
     }
 
@@ -383,7 +430,7 @@ class BookingService
         }
     }
 
-    private function writeRooms(Booking $booking, $rooms, string $in, string $out, int $guests): void
+    private function writeRooms(Booking $booking, $rooms, string $in, string $out, int $guests, ?RentalPeriod $period = null): void
     {
         $remaining = $guests;
         foreach ($rooms as $room) {
@@ -394,6 +441,8 @@ class BookingService
                 'room_id' => $room->id,
                 'check_in' => $in,
                 'check_out' => $out,
+                'starts_at' => $period?->startsAt(),
+                'ends_at' => $period?->endsAt(),
                 'guest_count' => $here,
             ]);
         }
@@ -431,6 +480,7 @@ class BookingService
             $roomOpts['parking_cents'] = $earlyApplied ? 0 : ($opts['parking_cents'] ?? 0);
             $roomOpts['discount_cents'] = $earlyApplied ? 0 : ($opts['discount_cents'] ?? 0);
             $earlyApplied = true;
+            $roomOpts += $this->rentalDays($br);
 
             $quote = $this->pricing->quote($br->room, $br->check_in->toDateString(), $br->check_out->toDateString(), max(1, $br->guest_count), $roomOpts);
             $all[] = ['room' => $br->room->name, 'unit_code' => $br->room->unit_code] + $quote;
@@ -523,6 +573,7 @@ class BookingService
                 if ($channelShares) {
                     $roomOpts['channel_total_cents'] = $channelShares[$index];
                 }
+                $roomOpts += $this->rentalDays($br);
                 $priced = $this->pricing->quote($br->room, $br->check_in->toDateString(), $br->check_out->toDateString(), max(1, $br->guest_count), $roomOpts);
                 foreach ($priced['lines'] as $line) {
                     $lines[] = ['type' => $line['type'], 'description' => ($rooms->count() > 1 ? "{$br->room->name}: " : '').$line['description'], 'amount_cents' => (int) $line['amount_cents']];
@@ -553,6 +604,26 @@ class BookingService
         $left = $total - $each * $roomCount;
 
         return array_map(fn ($i) => $each + ($i < $left ? 1 : 0), range(0, $roomCount - 1));
+    }
+
+    /** A camera rental is billed by whole 24-hour blocks of its exact times, not by calendar days. */
+    private function rentalDays(BookingRoom $stay): array
+    {
+        return $stay->starts_at ? ['days' => RentalPeriod::between($stay->starts_at, $stay->ends_at)->days()] : [];
+    }
+
+    private function moment(mixed $at): ?string
+    {
+        return $at === null ? null : \App\Domain\Availability\InventoryService::moment((string) $at);
+    }
+
+    /** 75 -> "1 h 15 min". */
+    public static function duration(int $minutes): string
+    {
+        $h = intdiv($minutes, 60);
+        $m = $minutes % 60;
+
+        return trim(($h ? "{$h} h " : '').($m || ! $h ? "{$m} min" : ''));
     }
 
     /** Recalculates the stored total after a non-engine charge is added or voided. */

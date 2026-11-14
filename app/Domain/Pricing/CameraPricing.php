@@ -23,7 +23,9 @@ class CameraPricing
         }
 
         $start = CarbonImmutable::parse($from);
-        $days = (int) $start->diffInDays(CarbonImmutable::parse($to));
+        // A timed rental passes its billed days: whole 24-hour blocks of the exact pickup and return times
+        // (see RentalPeriod). Extra hours are never charged here. Without times, the calendar days.
+        $days = isset($opts['days']) ? max(1, (int) $opts['days']) : (int) $start->diffInDays(CarbonImmutable::parse($to));
         $tier = $this->tier($room->room_type_id, $days, $from);
         if (! $tier) {
             throw new RoomConflict("No camera rate is configured for {$room->name} for {$days} day(s).");

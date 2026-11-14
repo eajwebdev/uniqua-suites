@@ -8,10 +8,13 @@ type Availability = { state: 'waiting' | 'checking' | 'ready' | 'failed'; taken:
 export const nextDay = (date: string) => new Date(Date.parse(`${date}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
 
 /** Asks the server which rooms are taken for these dates, so what can be ticked always comes from live inventory. */
-export function useRoomAvailability(checkIn: string, checkOut: string, ignoreBooking?: number) {
+/** Camera units are checked against exact pickup and return times when given; a same-day rental needs both. */
+export function useRoomAvailability(checkIn: string, checkOut: string, ignoreBooking?: number, times?: { pickup?: string; return?: string }) {
     const [availability, setAvailability] = useState<Availability>({ state: 'waiting', taken: {} });
     const [attempt, setAttempt] = useState(0);
-    const valid = !!checkIn && !!checkOut && checkIn < checkOut;
+    const pickup = times?.pickup ?? '';
+    const back = times?.return ?? '';
+    const valid = !!checkIn && !!checkOut && (checkIn < checkOut || (checkIn === checkOut && !!pickup && !!back && pickup < back));
 
     useEffect(() => {
         if (!valid) {
@@ -20,7 +23,7 @@ export function useRoomAvailability(checkIn: string, checkOut: string, ignoreBoo
         }
         const request = new AbortController();
         setAvailability((current) => ({ ...current, state: 'checking' }));
-        const query = new URLSearchParams({ check_in: checkIn, check_out: checkOut, ...(ignoreBooking ? { ignore_booking: String(ignoreBooking) } : {}) });
+        const query = new URLSearchParams({ check_in: checkIn, check_out: checkOut, ...(ignoreBooking ? { ignore_booking: String(ignoreBooking) } : {}), ...(pickup ? { pickup_time: pickup } : {}), ...(back ? { return_time: back } : {}) });
         fetch(`/admin/bookings/availability?${query}`, { headers: { Accept: 'application/json' }, signal: request.signal })
             .then((response) => (response.ok ? response.json() : Promise.reject(new Error('check failed'))))
             .then((body) => setAvailability({ state: 'ready', taken: body.taken }))
@@ -29,7 +32,7 @@ export function useRoomAvailability(checkIn: string, checkOut: string, ignoreBoo
             });
 
         return () => request.abort();
-    }, [checkIn, checkOut, ignoreBooking, valid, attempt]);
+    }, [checkIn, checkOut, ignoreBooking, pickup, back, valid, attempt]);
 
     // Keep an open booking form current while another staff member may be changing the calendar.
     useEffect(() => {

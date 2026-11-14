@@ -17,7 +17,11 @@ class StayRules
     {
         $camera = $room->isCamera();
         $minimum = $room->min_nights ?? ($camera ? null : Settings::get('stay.min_nights'));
-        $nights = (int) CarbonImmutable::parse($checkIn)->diffInDays(CarbonImmutable::parse($checkOut));
+        // A timed camera rental counts whole 24-hour blocks, the same days it is billed for.
+        $nights = $camera && (strlen($checkIn) > 10 || strlen($checkOut) > 10)
+            ? \App\Domain\Bookings\RentalPeriod::between($checkIn, $checkOut)->days()
+            : (int) CarbonImmutable::parse($checkIn)->diffInDays(CarbonImmutable::parse($checkOut));
+        $checkIn = substr($checkIn, 0, 10);
         if ($minimum && $nights < $minimum) {
             return $camera
                 ? "{$room->name} has a minimum rental of {$minimum} day(s); {$nights} requested."

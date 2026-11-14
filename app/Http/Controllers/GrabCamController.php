@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Domain\Availability\InventoryService;
+use App\Domain\Availability\RoomConflict;
+use App\Domain\Bookings\RentalPeriod;
 use App\Domain\Pricing\CameraPricing;
 use App\Models\Room;
 use App\Models\RoomType;
@@ -53,7 +55,10 @@ class GrabCamController extends Controller
                     ->whenEmpty(fn ($none) => $none->push(['url' => self::DEFAULT_IMAGE, 'alt' => "{$type->name}: photo coming soon", 'default' => true])),
                 'rates' => $rates = $this->pricing->card($type->id, $today),
                 'free_day_from' => (int) ($rates[0]['free_day_from'] ?? 0),
-                'unavailable' => $open->isEmpty() ? [] : $this->allTaken($open, $today, $until),
+                // When every unit is out, to the minute, so renters see the times they cannot book, not only whole days.
+                'busy' => $busy = $open->isEmpty() ? [] : $this->allBusy($open, $today, $until),
+                // Whole days with no free minute: only these are crossed out.
+                'unavailable' => $open->isEmpty() ? [] : $this->fullDays($busy),
             ];
         })->values();
 
@@ -99,21 +104,43 @@ class GrabCamController extends Controller
         $type = RoomType::where('slug', $slug)->firstOrFail();
         $units = $this->units()->where('room_type_id', $type->id)->get();
         abort_if($units->isEmpty(), 404);
-        $dates = $request->validate(['check_in' => 'required|date_format:Y-m-d', 'check_out' => 'required|date_format:Y-m-d|after:check_in']);
+        $dates = $request->validate([
+            'check_in' => 'required|date_format:Y-m-d',
+            'check_out' => 'required|date_format:Y-m-d|after_or_equal:check_in',
+            'pickup_time' => 'nullable|date_format:H:i|required_with:return_time',
+            'return_time' => 'nullable|date_format:H:i|required_with:pickup_time',
+        ]);
+
+        // With times, the exact moments are checked, as staff will; without, whole days as before.
+        $period = null;
+        if (! empty($dates['pickup_time'])) {
+            try {
+                $period = RentalPeriod::fromParts($dates['check_in'], $dates['pickup_time'], $dates['check_out'], $dates['return_time']);
+            } catch (RoomConflict $e) {
+                return response()->json(['available' => false, 'message' => 'The return time must be after the pickup time.'])->header('Cache-Control', 'no-store');
+            }
+        } elseif ($dates['check_out'] <= $dates['check_in']) {
+            return response()->json(['available' => false, 'message' => 'Choose a return day after the pickup day.'])->header('Cache-Control', 'no-store');
+        }
+        $open = $units->reject(fn ($r) => $this->isClosed($r));
+        $free = fn ($r) => $period
+            ? $this->inventory->conflicts($r->id, $period->startsAt(), $period->endsAt())->isEmpty()
+            : $this->inventory->isFree($r->id, $dates['check_in'], $dates['check_out']);
 
         $message = match (true) {
-            $dates['check_in'] < Local::today() => 'Those dates have passed. Please choose new dates.',
-            $units->every(fn ($r) => $this->isClosed($r)) => "{$type->name} is not available right now.",
-            ! $units->contains(fn ($r) => ! $this->isClosed($r) && $this->inventory->isFree($r->id, $dates['check_in'], $dates['check_out'])) => "{$type->name} is fully booked for some of those days. Please choose other dates.",
+            $dates['check_in'] < Local::today() || ($period && $period->starts->lt(Local::now())) => 'That pickup time has passed. Please choose a later time.',
+            $open->isEmpty() => "{$type->name} is not available right now.",
+            ! $open->contains($free) => $period ? $this->takenMessage($type->name, $open, $period) : "{$type->name} is fully booked for some of those days. Please choose other dates.",
             default => null,
         };
 
         // The real price for those days, from the rate set in force on the pickup date. Staff still confirm it.
         $estimate = null;
         if ($message === null) {
-            $quote = $this->pricing->quote($units->first(), $dates['check_in'], $dates['check_out']);
+            $quote = $this->pricing->quote($units->first(), $period?->checkIn() ?? $dates['check_in'], $period?->checkOut() ?? $dates['check_out'], $period ? ['days' => $period->days()] : []);
             $paid = collect($quote['nights'])->where('cents', '>', 0);
-            $estimate = ['days' => count($quote['nights']), 'estimate_cents' => $quote['total_cents'], 'daily_cents' => (int) ($paid->first()['cents'] ?? 0), 'free_day' => $paid->count() < count($quote['nights'])];
+            $estimate = ['days' => count($quote['nights']), 'estimate_cents' => $quote['total_cents'], 'daily_cents' => (int) ($paid->first()['cents'] ?? 0), 'free_day' => $paid->count() < count($quote['nights'])]
+                + ($period ? ['extra_minutes' => $period->extraMinutes()] : []);
         }
 
         return response()->json(['available' => $message === null, 'message' => $message] + ($estimate ?? []))->header('Cache-Control', 'no-store');
@@ -129,32 +156,70 @@ class GrabCamController extends Controller
         return $room->operational_status !== 'active' || $room->hasOpenSafetyBlock();
     }
 
-    /** Days on which every unit is taken, as [from, to) ranges like a single unit's taken dates. */
-    private function allTaken(Collection $units, string $from, string $to): array
+    /** Which booked times stand in the way, so the renter knows what to change. */
+    private function takenMessage(string $name, Collection $units, RentalPeriod $period): string
+    {
+        $clash = collect($this->allBusy($units, $period->startsAt(), $period->endsAt()))
+            ->map(fn ($w) => self::label($w['from']).' to '.self::label($w['to']))->take(3)->implode('; ');
+
+        // With several units, each can be out at a different part of those times, so there is no one window to name.
+        return $clash === ''
+            ? "{$name} is not free for that whole time. Please choose shorter or other times."
+            : "{$name} is booked at that time ({$clash}). Please choose other times.";
+    }
+
+    private static function label(string $at): string
+    {
+        return CarbonImmutable::parse($at)->format('M j, g:i A');
+    }
+
+    /**
+     * When every unit is out at once, to the minute: the intersection of each unit's busy times.
+     * A model with one free unit is never shown as busy.
+     *
+     * @return list<array{from: string, to: string}>
+     */
+    private function allBusy(Collection $units, string $from, string $to): array
     {
         $common = null;
         foreach ($units as $unit) {
-            $days = [];
-            foreach ($this->inventory->takenRanges($unit->id, $from, $to) as $range) {
-                for ($d = CarbonImmutable::parse($range['from']); $d->toDateString() < $range['to']; $d = $d->addDay()) {
-                    $days[$d->toDateString()] = true;
-                }
-            }
-            $common = $common === null ? $days : array_intersect_key($common, $days);
+            $mine = $this->inventory->busyWindows($unit->id, $from, $to);
+            $common = $common === null ? $mine : self::intersect($common, $mine);
             if (! $common) {
                 return [];
             }
         }
 
-        ksort($common);
+        return $common ?? [];
+    }
+
+    /** Both lists are sorted and merged; the result is too. */
+    private static function intersect(array $a, array $b): array
+    {
+        $out = [];
+        $i = $j = 0;
+        while ($i < count($a) && $j < count($b)) {
+            $from = max($a[$i]['from'], $b[$j]['from']);
+            $to = min($a[$i]['to'], $b[$j]['to']);
+            if ($from < $to) {
+                $out[] = ['from' => $from, 'to' => $to];
+            }
+            $a[$i]['to'] < $b[$j]['to'] ? $i++ : $j++;
+        }
+
+        return $out;
+    }
+
+    /** Days covered from midnight to midnight by busy times, as [from, to) day ranges. */
+    private function fullDays(array $busy): array
+    {
         $ranges = [];
-        foreach (array_keys($common) as $day) {
-            $next = CarbonImmutable::parse($day)->addDay()->toDateString();
-            $last = count($ranges) - 1;
-            if ($last >= 0 && $ranges[$last]['to'] === $day) {
-                $ranges[$last]['to'] = $next;
-            } else {
-                $ranges[] = ['from' => $day, 'to' => $next];
+        foreach ($busy as $w) {
+            $first = CarbonImmutable::parse($w['from']);
+            $first = $first->format('H:i') === '00:00' ? $first->startOfDay() : $first->addDay()->startOfDay();
+            $end = CarbonImmutable::parse($w['to'])->startOfDay(); // the day containing 'to' is not fully covered
+            if ($first->lt($end)) {
+                $ranges[] = ['from' => $first->toDateString(), 'to' => $end->toDateString()];
             }
         }
 

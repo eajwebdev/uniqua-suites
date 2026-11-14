@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Support\AdminCategory;
 use App\Domain\Finance\FinanceService;
+use App\Domain\Finance\RoomExpenses;
 use App\Http\Controllers\Controller;
 use App\Models\Expense;
 use App\Models\ExpenseCategory;
@@ -13,13 +14,14 @@ use App\Models\Vendor;
 use App\Support\Audit;
 use App\Support\Local;
 use App\Support\Money;
+use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 
 class ExpenseController extends Controller
 {
-    private const TABS = [['label' => 'Expenses', 'href' => '/admin/expenses'], ['label' => 'Cashbook', 'href' => '/admin/cashbook']];
+    private const TABS = [['label' => 'Expenses', 'href' => '/admin/expenses'], ['label' => 'Room costs', 'href' => '/admin/room-costs'], ['label' => 'Cashbook', 'href' => '/admin/cashbook']];
 
     public function __construct(private FinanceService $finance)
     {
@@ -28,10 +30,11 @@ class ExpenseController extends Controller
     public function index(Request $request)
     {
         $user = $request->user();
-        $f = $request->validate(['category' => 'nullable|integer', 'status' => 'nullable|in:incurred,paid']);
+        $f = $request->validate(['category' => 'nullable|integer', 'status' => 'nullable|in:incurred,paid', 'room' => 'nullable|integer']);
         $rows = AdminCategory::expenses(Expense::query())->with(['category:id,name', 'room:id,name', 'property:id,name', 'vendor:id,name'])
             ->when($f['category'] ?? null, fn ($q, $v) => $q->where('expense_category_id', $v))
             ->when($f['status'] ?? null, fn ($q, $v) => $q->where('status', $v))
+            ->when($f['room'] ?? null, fn ($q, $v) => $q->where('room_id', $v))
             ->orderByDesc('expense_date')->orderByDesc('id')->paginate(15)->withQueryString();
         $reversed = Expense::whereNotNull('reverses_expense_id')->pluck('reverses_expense_id');
         $categories = ExpenseCategory::orderBy('name')->get()->map(fn ($c) => ['value' => $c->id, 'label' => $c->name])->all();
@@ -43,6 +46,7 @@ class ExpenseController extends Controller
             'filters' => [
                 ['name' => 'category', 'label' => 'Category', 'value' => $f['category'] ?? null, 'options' => $categories],
                 ['name' => 'status', 'label' => 'Status', 'value' => $f['status'] ?? null, 'options' => [['value' => 'incurred', 'label' => 'Incurred'], ['value' => 'paid', 'label' => 'Paid']]],
+                ['name' => 'room', 'label' => 'Room', 'value' => $f['room'] ?? null, 'options' => AdminCategory::rooms(Room::query())->orderBy('id')->get()->map(fn ($r) => ['value' => $r->id, 'label' => $r->name])->all()],
             ],
             'columns' => [
                 ['key' => 'expense_date', 'label' => 'Date', 'type' => 'date'],
@@ -156,6 +160,71 @@ class ExpenseController extends Controller
         $this->finance->reverseExpense($expense, $request->validate(['reason' => 'required|string|max:200'])['reason']);
 
         return back()->with('success', 'Reversal recorded, dated today. The original expense is unchanged.');
+    }
+
+    /**
+     * Each room's spending month by month: every expense tagged to the room (repairs, damage
+     * replacements, bills, utilities, supplies), by the date it was incurred. Damage charged back
+     * to guests is shown beside it, so the owner sees what a room really costs.
+     */
+    public function roomCosts(Request $request, RoomExpenses $expenses)
+    {
+        $f = $request->validate(['months' => 'nullable|in:3,6,12', 'category' => 'nullable|integer', 'end' => 'nullable|date_format:Y-m']);
+        $count = (int) ($f['months'] ?? 6);
+        $end = CarbonImmutable::parse(($f['end'] ?? Local::now()->format('Y-m')).'-01');
+        $months = collect(range($count - 1, 0))->map(fn ($i) => $end->subMonths($i)->format('Y-m'))->all();
+        $from = $months[0].'-01';
+        $to = $end->endOfMonth()->toDateString();
+
+        $rooms = AdminCategory::rooms(Room::query())->where('operational_status', '!=', 'retired')->orderBy('id')->get(['id', 'name', 'unit_code']);
+        $spend = $expenses->monthly($rooms->pluck('id'), $months, $f['category'] ?? null);
+        $recovered = ($f['category'] ?? null) ? collect() : $expenses->recovered($rooms->pluck('id'), $from, $to);
+        $key = fn (string $m) => 'm'.str_replace('-', '', $m);
+
+        $rows = $rooms->map(function ($r) use ($months, $spend, $recovered, $key) {
+            $row = ['id' => $r->id, 'room' => ['label' => "{$r->name} ({$r->unit_code})", 'href' => "/admin/expenses?room={$r->id}"]];
+            foreach ($months as $m) {
+                $row[$key($m)] = (int) ($spend[$r->id][$m] ?? 0);
+            }
+            $row['total'] = array_sum(array_map(fn ($m) => $row[$key($m)], $months));
+            $row['recovered'] = (int) ($recovered[$r->id] ?? 0);
+            $row['net'] = $row['total'] - $row['recovered'];
+
+            return $row;
+        })->sortByDesc('total')->values();
+
+        $sum = fn (string $col) => (int) $rows->sum($col);
+        $totals = ['id' => 'total', 'room' => ['label' => 'All rooms']];
+        foreach ([...array_map($key, $months), 'total', 'recovered', 'net'] as $col) {
+            $totals[$col] = $sum($col);
+        }
+        $thisMonth = $key(end($months));
+        $top = $rows->sortByDesc($thisMonth)->first();
+        $categories = ExpenseCategory::orderBy('name')->get()->map(fn ($c) => ['value' => $c->id, 'label' => $c->name])->all();
+
+        return Inertia::render('Admin/Resource', [
+            'title' => 'Room costs',
+            'subtitle' => 'What each room cost each month: every expense recorded on the room (repairs, damage replacements, bills, utilities, supplies), by the date it was incurred. "Charged to guests" is approved damage billed to the guest. Expenses with no room are not shown here. Click a room to see its expenses.',
+            'tabs' => self::TABS,
+            'stats' => [
+                ['label' => 'All rooms, '.CarbonImmutable::parse(end($months).'-01')->format('F Y'), 'value' => $totals[$thisMonth], 'type' => 'money'],
+                ['label' => 'All rooms, '.$count.' months', 'value' => $totals['total'], 'type' => 'money'],
+                ['label' => 'Charged to guests (damage)', 'value' => $totals['recovered'], 'type' => 'money'],
+                ...($top && $top[$thisMonth] > 0 ? [['label' => 'Highest this month: '.$top['room']['label'], 'value' => $top[$thisMonth], 'type' => 'money']] : []),
+            ],
+            'filters' => [
+                ['name' => 'months', 'label' => 'Months', 'value' => (string) $count, 'options' => [['value' => '3', 'label' => 'Last 3 months'], ['value' => '6', 'label' => 'Last 6 months'], ['value' => '12', 'label' => 'Last 12 months']]],
+                ['name' => 'end', 'label' => 'Up to', 'value' => $end->format('Y-m'), 'options' => collect(range(0, 23))->map(fn ($i) => Local::now()->startOfMonth()->subMonths($i))->map(fn ($d) => ['value' => $d->format('Y-m'), 'label' => $d->format('F Y')])->all()],
+                ['name' => 'category', 'label' => 'Category', 'value' => $f['category'] ?? null, 'options' => $categories],
+            ],
+            'columns' => [
+                ['key' => 'room', 'label' => 'Room', 'type' => 'link'],
+                ...array_map(fn ($m) => ['key' => $key($m), 'label' => CarbonImmutable::parse("{$m}-01")->format('M Y'), 'type' => 'money'], $months),
+                ['key' => 'total', 'label' => 'Total', 'type' => 'money'],
+                ...(($f['category'] ?? null) ? [] : [['key' => 'recovered', 'label' => 'Charged to guests', 'type' => 'money'], ['key' => 'net', 'label' => 'Net cost', 'type' => 'money']]),
+            ],
+            'rows' => [...$rows->all(), $totals],
+        ]);
     }
 
     /** Actual money movements by date. Unpaid expenses and unverified receipts are excluded. */

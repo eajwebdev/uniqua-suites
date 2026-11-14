@@ -159,6 +159,7 @@ Route::middleware(['auth', 'auth.session', 'active', 'subscription', 'password.c
 
     Route::get('/expenses', [ExpenseController::class, 'index'])->middleware('perm:expenses.view');
     Route::get('/cashbook', [ExpenseController::class, 'cashbook'])->middleware('perm:expenses.view');
+    Route::get('/room-costs', [ExpenseController::class, 'roomCosts'])->middleware('perm:expenses.view');
     Route::post('/expenses', [ExpenseController::class, 'store'])->middleware('perm:expenses.manage');
     Route::post('/expenses/{expense}/paid', [ExpenseController::class, 'markPaid'])->middleware('perm:expenses.manage');
     Route::post('/expenses/{expense}/approve', [ExpenseController::class, 'approve'])->middleware('perm:expenses.approve');
@@ -185,6 +186,7 @@ Route::middleware(['auth', 'auth.session', 'active', 'subscription', 'password.c
     Route::middleware('perm:maintenance.own|maintenance.manage')->group(function () {
         Route::get('/work-orders', [MaintenanceController::class, 'workOrders']);
         Route::post('/work-orders/{order}/status', [MaintenanceController::class, 'updateWorkOrder']);
+        Route::post('/work-orders/{order}/complete', [MaintenanceController::class, 'completeWorkOrder']);
     });
     Route::post('/work-orders', [MaintenanceController::class, 'storeWorkOrder'])->middleware('perm:maintenance.manage');
     Route::get('/incidents', [MaintenanceController::class, 'incidents'])->middleware('perm:incidents.view');

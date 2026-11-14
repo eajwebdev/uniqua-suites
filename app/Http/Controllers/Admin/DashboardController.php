@@ -168,10 +168,12 @@ class DashboardController extends Controller
     private function roomBoard(string $today): array
     {
         $stays = DB::table('booking_rooms as br')->join('bookings as b', 'b.id', '=', 'br.booking_id')->join('guests as g', 'g.id', '=', 'b.guest_id')
-            ->whereNull('br.released_at')->where('br.check_out', '>=', $today)
+            // A camera still out after its return day is still out, so it stays on the board.
+            ->whereNull('br.released_at')->where(fn ($q) => $q->where('br.check_out', '>=', $today)
+                ->orWhere(fn ($c) => $c->whereNotNull('br.starts_at')->where('b.status', Booking::CHECKED_IN)))
             ->whereIn('b.status', [Booking::CONFIRMED, Booking::CHECKED_IN])
             ->orderBy('br.check_in')
-            ->get(['br.room_id', 'b.id', 'b.status', 'br.check_in', 'br.check_out', 'g.full_name as guest'])
+            ->get(['br.room_id', 'b.id', 'b.status', 'br.check_in', 'br.check_out', 'br.ends_at as return_at', 'g.full_name as guest'])
             ->groupBy('room_id');
         $blocks = RoomBlock::whereNull('released_at')->where('start_date', '<=', $today)->where('end_date', '>', $today)->get()->keyBy('room_id');
 
@@ -193,7 +195,7 @@ class DashboardController extends Controller
                         $next?->check_in === $today => 'arriving',
                         default => 'vacant',
                     },
-                    'stay' => $inHouse ? ['booking_id' => $inHouse->id, 'guest' => $inHouse->guest, 'check_out' => $inHouse->check_out] : null,
+                    'stay' => $inHouse ? ['booking_id' => $inHouse->id, 'guest' => $inHouse->guest, 'check_out' => ! empty($inHouse->return_at) ? substr((string) $inHouse->return_at, 0, 10) : $inHouse->check_out] : null,
                     'next' => $next ? ['booking_id' => $next->id, 'guest' => $next->guest, 'check_in' => $next->check_in] : null,
                 ];
             })->all();
@@ -261,7 +263,10 @@ class DashboardController extends Controller
             'not_ready' => AdminCategory::isCameras() ? 0 : Room::suites()->where('housekeeping_status', '!=', 'ready')->where('operational_status', 'active')->count(),
             'parking_in_use' => AdminCategory::isCameras() ? 0 : ParkingAssignment::blocking()->where('start_date', '<=', $today)->where('end_date', '>', $today)->count(),
             'arrivals' => $this->agenda(AdminCategory::bookings(Booking::where('status', Booking::CONFIRMED)->where('check_in', $today))),
-            'departures' => $this->agenda(AdminCategory::bookings(Booking::where('status', Booking::CHECKED_IN)->where('check_out', $today))),
+            // A camera is due back on its exact return day (a same-day rental returns on its pickup day); one still out after that stays listed.
+            'departures' => $this->agenda(AdminCategory::bookings(Booking::where('status', Booking::CHECKED_IN)->where(fn ($q) => $q
+                ->where(fn ($s) => $s->whereNull('return_at')->where('check_out', $today))
+                ->orWhere(fn ($c) => $c->whereNotNull('return_at')->where('return_at', '<', \Carbon\CarbonImmutable::parse($today)->addDay()->toDateString().' 00:00:00'))))),
         ];
     }
 

@@ -45,6 +45,7 @@ const tones: Record<string, string> = {
     bad: 'bg-red-50 text-red-900 border-red-200',
     info: 'bg-sky-50 text-sky-900 border-sky-200',
     neutral: 'bg-beige text-espresso border-line',
+    urgent: 'bg-red-600 text-white border-red-700 font-semibold',
 };
 
 const statusTone: Record<string, keyof typeof tones> = {
@@ -53,6 +54,8 @@ const statusTone: Record<string, keyof typeof tones> = {
     in_progress: 'warn', accepted: 'good', open: 'warn', resolved: 'good', closed: 'neutral', approved: 'good', proposed: 'warn', published: 'good', unpublished: 'neutral', active: 'good', deactivated: 'bad',
     critical: 'bad', high: 'warn', normal: 'neutral', low: 'neutral', staged: 'warn', committed: 'good', rolled_back: 'neutral', low_stock: 'bad', not_counted: 'warn', ok: 'good',
     suggested: 'warn', collected: 'info', processing: 'info', delivered: 'good', reported: 'warn', evidence_pending: 'warn', under_review: 'warn', approved_for_charge: 'info', disputed: 'bad',
+    // Work order priorities: red for High, solid red for Urgent.
+    Urgent: 'urgent', High: 'bad', Normal: 'info', Low: 'neutral',
     connected: 'good', degraded: 'warn', failed: 'bad', not_connected: 'neutral',
     remitted: 'good', to_remit: 'warn', not_owed: 'neutral', ours: 'good', borrowed: 'warn', condo_owned: 'good', third_party: 'warn', unavailable: 'warn', inactive: 'neutral',
     to_collect: 'bad', partially_paid: 'warn', no_fee: 'neutral', requested: 'neutral', pending_confirmation: 'warn', parking_assigned: 'good', occupied: 'info', upcoming: 'good', pending_slot: 'warn', ended: 'neutral',

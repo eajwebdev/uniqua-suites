@@ -5,6 +5,7 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { nextDay, RoomPicker, useRoomAvailability } from '@/components/RoomPicker';
 import { Button, confirmDialog, Field, Input, Modal, SearchSelect, Select } from '@/components/ui';
 import { dateOnly, peso, time12 } from '@/lib/format';
+import { duration, plural, rentalLength } from '@/lib/rental';
 
 type QuotedGuest = { id: number; full_name: string; phone: string | null; email: string | null; messenger_handle: string | null };
 /** A quote passes everything it knows: the guest, party size, source and early check-in. */
@@ -49,8 +50,10 @@ function BookingFields({ options, prefill, onClose }: { options: Options; prefil
         parking_rate: prefill.parking_rate ?? options.parking_rate ?? '', parking_vehicle: '',
     });
     const e = form.errors as any;
-    const availability = useRoomAvailability(form.data.check_in, form.data.check_out);
     const selected = rooms.filter((r: any) => form.data.room_ids.includes(r.id));
+    // Camera units are checked against the exact pickup and return times; suites ignore them.
+    const cameraList = rooms.length > 0 && rooms.every((r: any) => r.category === 'cameras');
+    const availability = useRoomAvailability(form.data.check_in, form.data.check_out, undefined, { pickup: form.data.pickup_time, return: form.data.return_time });
     const selectedProperty = selected[0]?.property_id;
     const roomAvailability = useMemo(() => selectedProperty ? {
         ...availability,
@@ -61,11 +64,13 @@ function BookingFields({ options, prefill, onClose }: { options: Options; prefil
     } : availability, [availability.state, availability.taken, availability.retry, selectedProperty, rooms]);
     const capacity = selected.reduce((sum: number, r: any) => sum + r.max, 0);
     // A Grab Cam unit is rented to one customer: no party size, early check-in or cleaning. Pickup and return times instead.
-    const camera = selected[0]?.category === 'cameras';
+    const camera = selected.length ? selected[0]?.category === 'cameras' : cameraList;
+    const rental = camera ? rentalLength(form.data.check_in, form.data.pickup_time, form.data.check_out, form.data.return_time) : null;
+    const rentalReady = !camera || !!rental?.valid;
     const party = camera ? 1 : Number(form.data.adults) + Number(form.data.children);
     const withinCapacity = selected.length > 0 && party <= capacity;
     const source = sources.find((s: any) => String(s.id) === String(form.data.booking_source_id));
-    const nights = nightsBetween(form.data.check_in, form.data.check_out);
+    const nights = camera ? (rental?.valid ? rental.days : 0) : nightsBetween(form.data.check_in, form.data.check_out);
     // Airbnb sets its own price, so staff type the total from Airbnb instead of using the nightly rates.
     const airbnb = source?.code === 'airbnb' && !camera;
     const channelTotalReady = !airbnb || Number(form.data.channel_total) > 0;
@@ -76,11 +81,12 @@ function BookingFields({ options, prefill, onClose }: { options: Options; prefil
     const parkingNights = nightsBetween(form.data.parking_start, form.data.parking_end);
     const parkingFee = Math.round(parkingNights * Number(form.data.parking_rate || 0) * 100);
     const parkingReady = camera || !form.data.parking || (parkingNights > 0 && Number(form.data.parking_rate) > 0);
-    const canSave = availability.state === 'ready' && withinCapacity && guestReady && sourceReady && earlyTimeValid && channelTotalReady && parkingReady && !form.processing;
+    const canSave = availability.state === 'ready' && withinCapacity && guestReady && sourceReady && earlyTimeValid && channelTotalReady && parkingReady && rentalReady && !form.processing;
 
     // Parking follows the stay dates unless staff changed them.
     const chooseCheckIn = (value: string) => form.setData((d: any) => {
-        const out = value && (!d.check_out || d.check_out <= value) ? nextDay(value) : d.check_out;
+        // A camera can go out and come back on the same day; a suite stay is at least one night.
+        const out = value && (!d.check_out || d.check_out < value || (!camera && d.check_out === value)) ? nextDay(value) : d.check_out;
         return { ...d, check_in: value, check_out: out, ...(d.parking_start === d.check_in && d.parking_end === d.check_out ? { parking_start: value, parking_end: out } : {}) };
     });
     const chooseCheckOut = (value: string) => form.setData((d: any) => ({ ...d, check_out: value, ...(d.parking_end === d.check_out ? { parking_end: value } : {}) }));
@@ -96,7 +102,7 @@ function BookingFields({ options, prefill, onClose }: { options: Options; prefil
         if (then) {
             const action = then === 'confirm' ? 'Confirm booking' : 'Place hold';
             const message = camera
-                ? `${selected.map((room: any) => room.label).join(', ')}. Pickup ${dateOnly(form.data.check_in)}, return ${dateOnly(form.data.check_out)}, ${nights} day${nights === 1 ? '' : 's'}.`
+                ? `${selected.map((room: any) => room.label).join(', ')}. Pickup ${dateOnly(form.data.check_in)} ${time12(form.data.pickup_time)}, return ${dateOnly(form.data.check_out)} ${time12(form.data.return_time)}. ${plural(nights, 'day')} charged${rental?.extraMinutes ? `, plus ${duration(rental.extraMinutes)} not charged automatically` : ''}.`
                 : `${selected.map((room: any) => room.label).join(', ')}. ${dateOnly(form.data.check_in)} to ${dateOnly(form.data.check_out)}, ${nights} night${nights === 1 ? '' : 's'}, ${party} guest${party === 1 ? '' : 's'}.`;
             if (!(await confirmDialog({ title: `${action}?`, message, confirmLabel: action }))) return;
         }
@@ -149,13 +155,22 @@ function BookingFields({ options, prefill, onClose }: { options: Options; prefil
                     <legend className="mb-1 text-sm font-semibold">{camera ? 'Rental' : 'Stay'}</legend>
                     <div className="grid grid-cols-2 gap-3">
                         <Field label={camera ? 'Pickup date' : 'Check-in'} required error={e.check_in}><Input type="date" min={today} value={form.data.check_in} onChange={(ev) => chooseCheckIn(ev.target.value)} /></Field>
-                        <Field label={camera ? 'Return date' : 'Check-out'} required error={e.check_out}><Input type="date" min={form.data.check_in ? nextDay(form.data.check_in) : today} value={form.data.check_out} onChange={(ev) => chooseCheckOut(ev.target.value)} /></Field>
+                        <Field label={camera ? 'Return date' : 'Check-out'} required error={e.check_out}><Input type="date" min={form.data.check_in ? (camera ? form.data.check_in : nextDay(form.data.check_in)) : today} value={form.data.check_out} onChange={(ev) => chooseCheckOut(ev.target.value)} /></Field>
                     </div>
                     {camera ? (
-                        <div className="grid grid-cols-2 gap-3">
-                            <Field label="Pickup time" error={e.pickup_time}><Input type="time" value={form.data.pickup_time} onChange={(ev) => form.setData('pickup_time', ev.target.value)} /></Field>
-                            <Field label="Return time" error={e.return_time}><Input type="time" value={form.data.return_time} onChange={(ev) => form.setData('return_time', ev.target.value)} /></Field>
-                        </div>
+                        <>
+                            <div className="grid grid-cols-2 gap-3">
+                                <Field label="Pickup time" required error={e.pickup_time}><Input type="time" required value={form.data.pickup_time} onChange={(ev) => form.setData((d: any) => ({ ...d, pickup_time: ev.target.value, return_time: d.return_time || ev.target.value }))} /></Field>
+                                <Field label="Return time" required error={e.return_time} help="The customer returns it before this time."><Input type="time" required value={form.data.return_time} onChange={(ev) => form.setData('return_time', ev.target.value)} /></Field>
+                            </div>
+                            {rental && (rental.valid ? (
+                                <p role="status" className="rounded-md bg-ivory px-3 py-2 text-xs text-muted">
+                                    <strong className="text-chocolate">{plural(rental.days, 'day')}</strong> charged ({duration(rental.minutes)} in all, billed per full 24 hours).
+                                    {rental.extraMinutes > 0 && <> The extra {duration(rental.extraMinutes)} is not charged automatically; add a charge on the booking if you want to.</>}
+                                    {' '}The camera is reserved to the minute: the next renter can pick it up from the return time.
+                                </p>
+                            ) : <p role="alert" className="text-xs text-red-800">The return must be after the pickup.</p>)}
+                        </>
                     ) : (
                     <div className="grid grid-cols-3 gap-3">
                         <Field label="Adults" required error={e.adults}><Input type="number" min={1} max={30} step={1} value={form.data.adults} onChange={(ev) => form.setData('adults', ev.target.value)} /></Field>
@@ -195,8 +210,12 @@ function BookingFields({ options, prefill, onClose }: { options: Options; prefil
                     <h3 id="booking-review" className="mb-2 font-semibold">Review before saving</h3>
                     <dl className="grid gap-x-6 gap-y-1 sm:grid-cols-2">
                         <div><dt className="inline text-muted">Room: </dt><dd className="inline font-medium">{selected.map((room: any) => room.label).join(', ')}</dd></div>
-                        <div><dt className="inline text-muted">Stay: </dt><dd className="inline font-medium">{dateOnly(form.data.check_in)} to {dateOnly(form.data.check_out)} · {nights} night{nights === 1 ? '' : 's'}</dd></div>
-                        <div><dt className="inline text-muted">Guests: </dt><dd className="inline font-medium">{party} total · maximum {capacity}</dd></div>
+                        {camera ? (
+                            <div><dt className="inline text-muted">Rental: </dt><dd className="inline font-medium">{dateOnly(form.data.check_in)} {time12(form.data.pickup_time)} to {dateOnly(form.data.check_out)} {time12(form.data.return_time)} · {plural(nights, 'day')}</dd></div>
+                        ) : (
+                            <div><dt className="inline text-muted">Stay: </dt><dd className="inline font-medium">{dateOnly(form.data.check_in)} to {dateOnly(form.data.check_out)} · {nights} night{nights === 1 ? '' : 's'}</dd></div>
+                        )}
+                        {!camera && <div><dt className="inline text-muted">Guests: </dt><dd className="inline font-medium">{party} total · maximum {capacity}</dd></div>}
                         <div><dt className="inline text-muted">Source: </dt><dd className="inline font-medium">{source?.name ?? 'Not selected'}</dd></div>
                         {airbnb && <div><dt className="inline text-muted">Airbnb total: </dt><dd className="inline font-medium">{Number(form.data.channel_total) > 0 ? `₱${Number(form.data.channel_total).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'Not entered'}</dd></div>}
                         <div><dt className="inline text-muted">Status after saving: </dt><dd className="inline font-medium">Choose Inquiry, Hold, or Confirm below</dd></div>

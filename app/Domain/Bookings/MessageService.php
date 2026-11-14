@@ -80,6 +80,11 @@ class MessageService
             'pickup_time' => $booking->requested_arrival_time ? date('g:i A', strtotime($booking->requested_arrival_time)) : 'the agreed time',
             'return_time' => $booking->return_time ? date('g:i A', strtotime($booking->return_time)) : 'the agreed time',
             'days' => (string) $booking->check_in->diffInDays($booking->check_out),
+            // A camera rental's exact return day (a same-day rental returns on its pickup day) and its billed days.
+            ...($booking->pickup_at && $booking->return_at ? [
+                'check_out' => \Carbon\CarbonImmutable::parse($booking->return_at)->format('M j, Y'),
+                'days' => (string) RentalPeriod::between($booking->pickup_at, $booking->return_at)->days(),
+            ] : []),
         ];
     }
 }

@@ -7,6 +7,7 @@ import { nextDay, RoomPicker, useRoomAvailability } from '@/components/RoomPicke
 import { ActionButton, Button, Card, confirmDialog, CopyButton, Empty, Field, FieldDef, Input, Modal, RowAction, Select, StatusChip, buttonClass } from '@/components/ui';
 import { dateOnly, dateTime, humanize, peso, time12 } from '@/lib/format';
 import { shrinkPhoto } from '@/lib/images';
+import { duration, plural as count, rentalLength } from '@/lib/rental';
 import AdminLayout from '@/layouts/AdminLayout';
 
 const minuteBefore = (time: string) => {
@@ -24,7 +25,8 @@ const daysBetween = (from: string, to: string) => Math.round((Date.parse(`${to}T
 function CameraRental({ booking: b }: { booking: any }) {
     const { auth } = usePage<any>().props as any;
     const canManage = (auth.user?.permissions ?? []).includes('bookings.manage');
-    const days = daysBetween(b.check_in, b.check_out);
+    const days = b.rental_days ?? daysBetween(b.check_in, b.check_out);
+    const at = (local: string | null, date: string, time: string | null) => local ? `${dateOnly(local)}, ${time12(local.slice(11, 16))}` : `${dateOnly(date)}${time ? `, ${time12(time)}` : ''}`;
 
     return (
         <Card
@@ -43,14 +45,26 @@ function CameraRental({ booking: b }: { booking: any }) {
                 <Row label="Customer"><Link href={`/admin/guests/${b.guest.id}`} className="underline">{b.guest.full_name}</Link></Row>
                 <Row label="Contact">{[b.guest.phone, b.guest.email, b.guest.messenger_handle].filter(Boolean).join(' · ') || '—'}</Row>
                 <Row label="Camera">{b.rooms.map((r: any) => `${r.name} (${r.unit})`).join(', ')}</Row>
-                <Row label="Rental">{days} day{days === 1 ? '' : 's'}</Row>
-                <Row label="Pickup">{dateOnly(b.check_in)}{b.pickup_time ? `, ${time12(b.pickup_time)}` : ''}</Row>
-                <Row label="Return">{dateOnly(b.check_out)}{b.return_time ? `, ${time12(b.return_time)}` : ''}</Row>
+                <Row label="Rental">
+                    {count(days, 'day')} charged
+                    {b.rental_hours != null && <span className="text-muted"> · {duration(Math.round(b.rental_hours * 60))} booked</span>}
+                    {b.extra_minutes > 0 && <span className="block text-xs text-amber-900">{duration(b.extra_minutes)} over {count(days, 'day')}: not charged automatically.</span>}
+                </Row>
+                <Row label="Pickup">{at(b.pickup_at, b.check_in, b.pickup_time)}</Row>
+                <Row label="Return by">
+                    {at(b.return_at, b.check_out, b.return_time)}
+                    {b.overdue && <span role="status" className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-900">Overdue {duration(b.late_minutes)}</span>}
+                </Row>
                 <Row label="ID">{labelOf(ID_STATUS, b.id_status)}{b.id_type ? ` · ${b.id_type}` : ''}</Row>
                 <Row label="Booking source">{b.source}{b.source_reference ? ` · ${b.source_reference}` : ''}</Row>
                 <Row label="Picked up">{dateTime(b.actual_check_in_at)}</Row>
-                <Row label="Returned">{dateTime(b.actual_check_out_at)}</Row>
+                <Row label="Returned">
+                    {dateTime(b.actual_check_out_at)}
+                    {b.status === 'checked_out' && b.late_minutes > 0 && <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-950">{duration(b.late_minutes)} late</span>}
+                    {b.status === 'checked_out' && b.return_at && b.late_minutes === 0 && <span className="ml-2 text-xs text-muted">On time</span>}
+                </Row>
             </dl>
+            {b.late_minutes > 0 && <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-950">Late time is not charged automatically. To charge for it, use <strong>Add charge</strong> → Late return under Charges.</p>}
             {b.special_requests && <p className="mt-3 rounded-md bg-beige px-3 py-2 text-sm"><strong>Requests:</strong> {b.special_requests}</p>}
             {b.internal_notes && <p className="mt-2 text-sm text-muted"><strong>Internal:</strong> {b.internal_notes}</p>}
         </Card>
@@ -60,35 +74,58 @@ function CameraRental({ booking: b }: { booking: any }) {
 /** Changing a stay uses the same room picker as a new booking. The booking's own dates never count against it. */
 function ChangeStay({ booking: b, rooms, url, today, standardCheckIn }: { booking: any; rooms: any[]; url: string; today: string; standardCheckIn: string }) {
     const [open, setOpen] = useState(false);
-    const form = useForm<any>({ check_in: b.check_in, check_out: b.check_out, room_ids: b.rooms.map((r: any) => r.id), adults: b.adults, children: b.children, approved_early_time: b.approved_early_time ?? '', channel_total: b.channel_total_cents != null ? (b.channel_total_cents / 100).toFixed(2) : '', reason: '' });
+    const camera = !!b.is_camera;
+    const form = useForm<any>({
+        check_in: b.check_in, check_out: camera && b.return_date ? b.return_date : b.check_out,
+        pickup_time: camera ? (b.pickup_at?.slice(11, 16) ?? b.pickup_time ?? '') : '', return_time: camera ? (b.return_at?.slice(11, 16) ?? b.return_time ?? '') : '',
+        room_ids: b.rooms.map((r: any) => r.id), adults: b.adults, children: b.children, approved_early_time: b.approved_early_time ?? '', channel_total: b.channel_total_cents != null ? (b.channel_total_cents / 100).toFixed(2) : '', reason: '',
+    });
     const e = form.errors as any;
-    const availability = useRoomAvailability(open ? form.data.check_in : '', open ? form.data.check_out : '', b.id);
+    const availability = useRoomAvailability(open ? form.data.check_in : '', open ? form.data.check_out : '', b.id, camera ? { pickup: form.data.pickup_time, return: form.data.return_time } : undefined);
+    const rental = camera ? rentalLength(form.data.check_in, form.data.pickup_time, form.data.check_out, form.data.return_time) : null;
     const picker = rooms.map((r: any) => ({ id: r.id, label: `${r.name} (${r.unit_code})`, max: r.max_guests ?? 0 }));
     const capacity = picker.filter((r: any) => form.data.room_ids.includes(r.id)).reduce((sum: number, r: any) => sum + Number(r.max || 0), 0);
     const party = Number(form.data.adults || 0) + Number(form.data.children || 0);
     const capacityValid = capacity > 0 && party <= capacity;
     const earlyTimeValid = !form.data.approved_early_time || form.data.approved_early_time < standardCheckIn.slice(0, 5);
     const channelTotalValid = b.channel_total_cents == null || Number(form.data.channel_total) > 0;
-    const canSave = availability.state === 'ready' && form.data.room_ids.length > 0 && capacityValid && earlyTimeValid && channelTotalValid && String(form.data.reason).trim().length > 0 && !form.processing;
+    const canSave = availability.state === 'ready' && form.data.room_ids.length > 0 && capacityValid && earlyTimeValid && channelTotalValid && (!camera || !!rental?.valid) && String(form.data.reason).trim().length > 0 && !form.processing;
+    const title = camera ? 'Change times or camera' : 'Change dates, room or party';
 
     return (
         <>
-            <Button onClick={() => setOpen(true)}>Change dates, room or party</Button>
+            <Button onClick={() => setOpen(true)}>{title}</Button>
             {open && (
-                <Modal open title="Change dates, room or party" onClose={() => setOpen(false)}>
+                <Modal open title={title} onClose={() => setOpen(false)}>
                     <form
                         className="space-y-3"
                         onSubmit={async (ev) => {
                             ev.preventDefault();
-                            if (await confirmDialog({ title: 'Save these changes?', message: 'This may change what the guest owes.', confirmLabel: 'Save changes' })) form.post(`${url}/amend`, { preserveScroll: true, onSuccess: () => setOpen(false) });
+                            if (!(await confirmDialog({ title: 'Save these changes?', message: 'This may change what the guest owes.', confirmLabel: 'Save changes' }))) return;
+                            form.transform((d: any) => camera ? { ...d, adults: 1, children: 0, approved_early_time: '' } : { ...d, pickup_time: '', return_time: '' });
+                            form.post(`${url}/amend`, { preserveScroll: true, onSuccess: () => setOpen(false) });
                         }}
                     >
+                        {camera ? (
+                            <>
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                    <Field label="Pickup date" error={e.check_in}><Input type="date" min={b.status === 'checked_in' ? undefined : today} value={form.data.check_in} onChange={(ev) => { const value = ev.target.value; form.setData((d: any) => ({ ...d, check_in: value, check_out: value && d.check_out < value ? value : d.check_out })); }} /></Field>
+                                    <Field label="Pickup time" error={e.pickup_time}><Input type="time" value={form.data.pickup_time} onChange={(ev) => form.setData('pickup_time', ev.target.value)} /></Field>
+                                    <Field label="Return date" error={e.check_out}><Input type="date" min={form.data.check_in || undefined} value={form.data.check_out} onChange={(ev) => form.setData('check_out', ev.target.value)} /></Field>
+                                    <Field label="Return time" error={e.return_time}><Input type="time" value={form.data.return_time} onChange={(ev) => form.setData('return_time', ev.target.value)} /></Field>
+                                </div>
+                                {rental && (rental.valid
+                                    ? <p role="status" className="text-xs text-muted"><strong className="text-chocolate">{count(rental.days, 'day')}</strong> charged ({duration(rental.minutes)}){rental.extraMinutes > 0 ? `; the extra ${duration(rental.extraMinutes)} is not charged automatically` : ''}.</p>
+                                    : <p role="alert" className="text-xs text-red-800">The return must be after the pickup.</p>)}
+                            </>
+                        ) : (
                         <div className="grid gap-3 sm:grid-cols-2">
                             <Field label="Check-in" error={e.check_in}><Input type="date" min={b.status === 'checked_in' ? undefined : today} value={form.data.check_in} onChange={(ev) => { const value = ev.target.value; form.setData((d: any) => ({ ...d, check_in: value, check_out: value && d.check_out <= value ? nextDay(value) : d.check_out })); }} /></Field>
                             <Field label="Check-out" error={e.check_out}><Input type="date" min={form.data.check_in ? nextDay(form.data.check_in) : undefined} value={form.data.check_out} onChange={(ev) => form.setData('check_out', ev.target.value)} /></Field>
                         </div>
+                        )}
                         <RoomPicker rooms={picker} availability={availability} value={form.data.room_ids} onChange={(ids) => form.setData('room_ids', ids)} error={e.room_ids} />
-                        <div className="grid gap-3 sm:grid-cols-3">
+                        <div className={camera ? 'hidden' : 'grid gap-3 sm:grid-cols-3'}>
                             <Field label="Adults" error={e.adults}><Input type="number" min={1} max={30} step={1} value={form.data.adults} onChange={(ev) => form.setData('adults', ev.target.value)} /></Field>
                             <Field label="Children" error={e.children}><Input type="number" min={0} max={30} step={1} value={form.data.children} onChange={(ev) => form.setData('children', ev.target.value)} /></Field>
                             <Field label="Approved early check-in" error={e.approved_early_time} help={`Optional. Must be before the standard ${time12(standardCheckIn)} check-in.`}><Input type="time" max={minuteBefore(standardCheckIn)} value={form.data.approved_early_time} onChange={(ev) => form.setData('approved_early_time', ev.target.value)} /></Field>
@@ -209,11 +246,19 @@ function RecordPayment({ booking: b, balance, downpaymentPercent, nowLocal, onCl
 }
 
 /** A guest can always leave. Leaving with money owed is allowed, but it is never silent: it needs a reason, which stays on the booking. */
-function CheckOut({ url, checkout, onRecordPayment, camera }: { url: string; checkout: any; onRecordPayment?: () => void; camera?: boolean }) {
+function CheckOut({ url, checkout, onRecordPayment, camera, nowLocal }: { url: string; checkout: any; onRecordPayment?: () => void; camera?: boolean; nowLocal?: string }) {
     const [open, setOpen] = useState(false);
     const label = camera ? 'Mark returned' : 'Check out';
-    const form = useForm({ unpaid_reason: '' });
+    const form = useForm<any>({ unpaid_reason: '', ...(camera ? { returned_at: nowLocal ?? '' } : {}) });
     const e = form.errors as any;
+
+    // A camera's return is recorded at the moment it actually came back, which decides whether it was late.
+    if (camera && !checkout.unpaid) {
+        return <ActionButton small={false} action={{
+            label, url: `${url}/check-out`, variant: 'primary', confirm: 'Mark this camera as returned? Check the camera and its accessories first.',
+            fields: [{ name: 'returned_at', label: 'Returned at', type: 'datetime', required: true, default: nowLocal, help: 'When the customer actually handed it back. Any time past the agreed return is shown as late.' }],
+        }} />;
+    }
 
     if (!checkout.unpaid) {
         return <ActionButton small={false} action={{ label, url: `${url}/check-out`, variant: 'primary', confirm: camera ? 'Mark this camera as returned? Check the camera and its accessories first.' : 'Check out? This marks the room dirty and creates turnover work.' }} />;
@@ -223,19 +268,20 @@ function CheckOut({ url, checkout, onRecordPayment, camera }: { url: string; che
         <>
             <Button variant="primary" onClick={() => setOpen(true)}>{label}</Button>
             {open && (
-                <Modal open title="Check out with an unpaid balance?" onClose={() => setOpen(false)}>
+                <Modal open title={camera ? "Mark returned with an unpaid balance?" : "Check out with an unpaid balance?"} onClose={() => setOpen(false)}>
                     <form className="space-y-3" onSubmit={(ev) => { ev.preventDefault(); form.post(`${url}/check-out`, { preserveScroll: true, onSuccess: () => setOpen(false) }); }}>
                         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
                             {checkout.balance_cents !== null ? <p className="text-lg font-semibold tabular-nums">{peso(checkout.balance_cents)} still unpaid</p> : <p className="font-semibold">This booking still has an unpaid balance.</p>}
                             {checkout.pending_cents > 0 && <p className="mt-1 text-xs">{peso(checkout.pending_cents)} of that is a payment waiting to be verified.</p>}
-                            <p className="mt-1 text-xs">The guest can still check out. The balance stays on this booking and on your list of money to collect, and you can record the payment any time.</p>
+                            <p className="mt-1 text-xs">{camera ? "The camera can still be marked returned." : "The guest can still check out."} The balance stays on this booking and on your list of money to collect, and you can record the payment any time.</p>
                         </div>
+                        {camera && <Field label="Returned at" required error={e.returned_at}><Input type="datetime-local" required max={nowLocal} value={form.data.returned_at} onChange={(ev) => form.setData('returned_at', ev.target.value)} /></Field>}
                         <Field label="Why is it not fully paid?" required error={e.unpaid_reason} help="For example: paying by bank transfer tomorrow. This is saved in the booking history.">
                             <Input required autoFocus aria-invalid={!!e.unpaid_reason} value={form.data.unpaid_reason} onChange={(ev) => form.setData('unpaid_reason', ev.target.value)} />
                         </Field>
                         <div className="flex flex-wrap justify-end gap-2 pt-1">
                             {onRecordPayment && <Button onClick={() => { setOpen(false); onRecordPayment(); }}>Record a payment first</Button>}
-                            <Button type="submit" variant="primary" disabled={form.processing}>{form.processing ? 'Checking out…' : 'Check out with balance'}</Button>
+                            <Button type="submit" variant="primary" disabled={form.processing}>{form.processing ? 'Saving…' : camera ? 'Mark returned with balance' : 'Check out with balance'}</Button>
                         </div>
                     </form>
                 </Modal>
@@ -465,7 +511,7 @@ export default function BookingShow({ booking: b, charges, balance: savedBalance
                 <div className="ml-auto flex flex-wrap gap-2">
                     {amendable && <ChangeStay booking={b} rooms={rooms} url={url} today={today} standardCheckIn={standardCheckIn} />}
                 {actions.map((a) => <ActionButton key={a.label} action={a} small={false} />)}
-                    {can('bookings.manage') && b.status === 'checked_in' && <CheckOut camera={b.is_camera} url={url} checkout={checkout} onRecordPayment={can('payments.record') && balance ? () => setPaying(true) : undefined} />}
+                    {can('bookings.manage') && b.status === 'checked_in' && <CheckOut camera={b.is_camera} nowLocal={nowLocal} url={url} checkout={checkout} onRecordPayment={can('payments.record') && balance ? () => setPaying(true) : undefined} />}
                     {can('quotes.manage') && !closed && b.status !== 'checked_out' && <Link className={buttonClass('secondary')} href={`/admin/quotes/create?room_id=${b.rooms[0]?.id ?? ''}&check_in=${b.check_in}&check_out=${b.check_out}&guests=${b.guest_count}&booking_id=${b.id}`}>New quote</Link>}
                 </div>
             </div>
@@ -513,7 +559,7 @@ export default function BookingShow({ booking: b, charges, balance: savedBalance
                             <ActionButton action={{
                                 label: 'Add charge', url: `${url}/charges`, confirm: 'This changes what the guest owes. Continue?', fields: [
                                     { name: 'type', label: 'Type', type: 'select', required: true, options: [
-                                        { value: 'service', label: 'Other service' }, { value: 'late_check_out', label: 'Late check-out' },
+                                        { value: 'service', label: 'Other service' }, { value: 'late_check_out', label: b.is_camera ? 'Late return' : 'Late check-out' },
                                         ...(can('bookings.discount') ? [{ value: 'adjustment', label: 'Adjustment' }, { value: 'discount', label: 'Discount' }] : []),
                                     ] },
                                     { name: 'description', label: 'Description', type: 'text', required: true },

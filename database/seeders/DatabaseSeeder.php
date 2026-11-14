@@ -89,7 +89,7 @@ class DatabaseSeeder extends Seeder
             BookingSource::firstOrCreate(['code' => $code], ['name' => $name, 'is_legacy_only' => $legacy]);
         }
 
-        foreach (['Water', 'Electricity', 'Wi-Fi', 'Rent', 'Laundry', 'Cleaning', 'Essentials', 'Refills', 'Repairs & Maintenance', 'Renovation', 'Platform Fees', 'Other'] as $name) {
+        foreach (['Water', 'Electricity', 'Wi-Fi', 'Rent', 'Laundry', 'Cleaning', 'Essentials', 'Refills', 'Repairs & Maintenance', 'Damage & Replacement', 'Renovation', 'Platform Fees', 'Other'] as $name) {
             ExpenseCategory::firstOrCreate(['name' => $name]);
         }
 

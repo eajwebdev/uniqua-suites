@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Domain\Availability\RoomConflict;
 use App\Domain\Bookings\BookingService;
+use App\Domain\Bookings\RentalPeriod;
 use App\Domain\Bookings\MessageService;
 use App\Domain\Finance\FinanceService;
 use App\Domain\Parking\ParkingService;
@@ -80,8 +81,10 @@ class BookingController extends Controller
             'source' => $b->source->name,
             'status' => $b->status,
             'check_in' => $b->check_in->toDateString(),
-            'check_out' => $b->check_out->toDateString(),
-            'nights' => (int) $b->check_in->diffInDays($b->check_out),
+            'check_out' => $b->return_at ? substr((string) $b->return_at, 0, 10) : $b->check_out->toDateString(),
+            'nights' => $b->pickup_at ? RentalPeriod::between($b->pickup_at, $b->return_at)->days() : (int) $b->check_in->diffInDays($b->check_out),
+            'pickup_time' => $b->pickup_at ? substr((string) $b->pickup_at, 11, 5) : null,
+            'return_time' => $b->return_at ? substr((string) $b->return_at, 11, 5) : null,
             'total_cents' => (int) $b->total_cents,
             'hold_expires_at' => $b->hold_expires_at,
             'charges_cents' => $canPay ? (int) $b->charges_cents : null,
@@ -206,11 +209,29 @@ class BookingController extends Controller
     /** Which rooms cannot take these dates, and why. Capacity is left out: a group can share several rooms. */
     public function availability(Request $request, VacancySearch $vacancies)
     {
-        $data = $request->validate(['check_in' => 'required|date_format:Y-m-d|after_or_equal:'.Local::today(), 'check_out' => 'required|date_format:Y-m-d|after:check_in', 'ignore_booking' => 'nullable|integer|exists:bookings,id']);
+        // Camera units are checked against the exact pickup and return times when given; a same-day rental is allowed for them only.
+        // A booking already under way (checked in or picked up) is checked from its real start, which is in the past.
+        $underway = $request->filled('ignore_booking') && Booking::whereKey($request->integer('ignore_booking'))->where('status', Booking::CHECKED_IN)->exists();
+        $data = $request->validate([
+            'check_in' => 'required|date_format:Y-m-d'.($underway ? '' : '|after_or_equal:'.Local::today()),
+            'check_out' => 'required|date_format:Y-m-d|after_or_equal:check_in',
+            'pickup_time' => 'nullable|date_format:H:i',
+            'return_time' => 'nullable|date_format:H:i',
+            'ignore_booking' => 'nullable|integer|exists:bookings,id',
+        ]);
+        $period = null;
+        try {
+            $period = RentalPeriod::fromParts($data['check_in'], $data['pickup_time'] ?? null, $data['check_out'], $data['return_time'] ?? null);
+        } catch (RoomConflict) {
+        }
 
         $taken = [];
-        foreach (Room::where('operational_status', '!=', 'retired')->orderBy('id')->get() as $room) {
-            $reason = $vacancies->reasonUnavailable($room, $data['check_in'], $data['check_out'], 1, $data['ignore_booking'] ?? null);
+        foreach (Room::with('property:id,category')->where('operational_status', '!=', 'retired')->orderBy('id')->get() as $room) {
+            if ($room->isCamera()) {
+                $reason = $period ? $vacancies->reasonUnavailable($room, $period->startsAt(), $period->endsAt(), 1, $data['ignore_booking'] ?? null) : 'The return time must be after the pickup time.';
+            } else {
+                $reason = $data['check_out'] > $data['check_in'] ? $vacancies->reasonUnavailable($room, $data['check_in'], $data['check_out'], 1, $data['ignore_booking'] ?? null) : 'Check-out must be after check-in.';
+            }
             if ($reason) {
                 $taken[$room->id] = $reason;
             }
@@ -232,7 +253,7 @@ class BookingController extends Controller
             'booking_source_id' => 'required|exists:booking_sources,id',
             'source_reference' => 'nullable|string|max:120',
             'check_in' => 'required|date_format:Y-m-d|after_or_equal:'.Local::today(),
-            'check_out' => 'required|date_format:Y-m-d|after:check_in',
+            'check_out' => 'required|date_format:Y-m-d|after_or_equal:check_in',
             'adults' => 'required|integer|min:1|max:30',
             'children' => 'nullable|integer|min:0|max:30',
             'approved_early_time' => 'nullable|date_format:H:i',
@@ -272,6 +293,21 @@ class BookingController extends Controller
         if ($rooms->pluck('property_id')->unique()->count() > 1) {
             throw ValidationException::withMessages(['room_ids' => 'All rooms in one booking must be at the same property. Create a separate booking for another property.']);
         }
+        // A camera rental needs its exact pickup and return times: availability and the billed days depend on them.
+        $period = null;
+        if ($rooms->first()?->isCamera()) {
+            $missing = array_filter(['pickup_time' => 'Enter the pickup time.', 'return_time' => 'Enter the return time.'], fn ($m, $k) => empty($data[$k]), ARRAY_FILTER_USE_BOTH);
+            if ($missing) {
+                throw ValidationException::withMessages($missing);
+            }
+            try {
+                $period = RentalPeriod::fromParts($data['check_in'], $data['pickup_time'], $data['check_out'], $data['return_time']);
+            } catch (RoomConflict $e) {
+                throw ValidationException::withMessages(['return_time' => $e->getMessage()]);
+            }
+        } elseif ($data['check_out'] <= $data['check_in']) {
+            throw ValidationException::withMessages(['check_out' => 'The check-out must be after the check-in.']);
+        }
         // Airbnb sets its own price: the stay costs the total shown on Airbnb, not the nightly rates.
         $data['channel_total_cents'] = null;
         if ($this->isAirbnb((int) $data['booking_source_id']) && ! $rooms->first()?->isCamera()) {
@@ -288,7 +324,7 @@ class BookingController extends Controller
 
         // The dates and rooms are checked again immediately before creating anything.
         foreach ($rooms as $room) {
-            $reason = $vacancies->reasonUnavailable($room, $data['check_in'], $data['check_out'], 1);
+            $reason = $vacancies->reasonUnavailable($room, $period?->startsAt() ?? $data['check_in'], $period?->endsAt() ?? $data['check_out'], 1);
             if ($reason) {
                 throw ValidationException::withMessages(['room_ids' => "{$room->name} cannot be booked for these dates. {$reason}"]);
             }
@@ -373,6 +409,7 @@ class BookingController extends Controller
                 'is_camera' => $booking->property->category === Property::CAMERAS,
                 'pickup_time' => $booking->requested_arrival_time ? substr($booking->requested_arrival_time, 0, 5) : null,
                 'return_time' => $booking->return_time ? substr($booking->return_time, 0, 5) : null,
+                ...$this->rentalTiming($booking),
                 'deposit_cents' => (int) $booking->deposit_cents,
                 'deposit_status' => $booking->deposit_status,
                 'deposit_note' => $booking->deposit_note,
@@ -406,6 +443,29 @@ class BookingController extends Controller
             'messages' => $this->messages->renderAll($booking),
             'rooms' => Room::where('operational_status', '!=', 'retired')->whereHas('property', fn ($p) => $p->where('category', $booking->property->category))->orderBy('id')->get(['id', 'name', 'unit_code', 'max_guests']),
         ]);
+    }
+
+    /**
+     * A camera rental's exact times: billed days (whole 24-hour blocks), booked hours past them, and how late
+     * the camera came back (or is, while still out). Late time is shown, never charged automatically.
+     */
+    private function rentalTiming(Booking $booking): array
+    {
+        if (! $booking->pickup_at || ! $booking->return_at) {
+            return ['pickup_at' => null, 'return_at' => null];
+        }
+        $period = RentalPeriod::between($booking->pickup_at, $booking->return_at);
+
+        return [
+            'pickup_at' => $period->starts->format('Y-m-d\TH:i'),
+            'return_at' => $period->ends->format('Y-m-d\TH:i'),
+            'return_date' => $period->ends->toDateString(),
+            'rental_days' => $period->days(),
+            'rental_hours' => round($period->minutes() / 60, 1),
+            'extra_minutes' => $period->extraMinutes(),
+            'late_minutes' => $booking->lateMinutes(),
+            'overdue' => $booking->status === Booking::CHECKED_IN && $booking->lateMinutes() > 0,
+        ];
     }
 
     /** The rooms a booking last held before they were released. */
@@ -568,8 +628,12 @@ class BookingController extends Controller
     public function checkOut(Request $request, Booking $booking)
     {
         $unpaid = $booking->status === Booking::CHECKED_IN ? $this->unpaidAtCheckOut($booking) : 0;
+        // A camera can be marked returned afterwards, at the moment it actually came back.
+        $returnedAt = $booking->property->category === Property::CAMERAS
+            ? ($request->validate(['returned_at' => 'nullable|date_format:Y-m-d\TH:i'])['returned_at'] ?? null)
+            : null;
         if ($unpaid <= 0) {
-            $this->bookings->checkOut($booking);
+            $this->bookings->checkOut($booking, null, $returnedAt);
 
             return back()->with('success', $booking->property->category === Property::CAMERAS
                 ? 'Camera marked as returned. Hand back the renter\'s ID if you kept it.'
@@ -577,7 +641,7 @@ class BookingController extends Controller
         }
 
         $reason = $request->validate(['unpaid_reason' => 'required|string|max:200'], ['unpaid_reason.required' => 'This booking still has a balance. Say why it is not fully paid.'])['unpaid_reason'];
-        $this->bookings->checkOut($booking, 'Checked out with '.Money::format($unpaid)." unpaid: {$reason}");
+        $this->bookings->checkOut($booking, 'Checked out with '.Money::format($unpaid)." unpaid: {$reason}", $returnedAt);
 
         return back()->with('success', $request->user()->can('payments.view')
             ? 'Checked out with '.Money::format($unpaid).' unpaid. It stays on your list of money to collect.'
@@ -600,6 +664,8 @@ class BookingController extends Controller
         $data = $request->validate([
             'check_in' => 'nullable|date_format:Y-m-d',
             'check_out' => 'nullable|date_format:Y-m-d',
+            'pickup_time' => 'nullable|date_format:H:i',
+            'return_time' => 'nullable|date_format:H:i',
             'room_ids' => 'nullable|array|min:1',
             'room_ids.*' => 'integer|exists:rooms,id',
             'adults' => 'nullable|integer|min:1|max:30',

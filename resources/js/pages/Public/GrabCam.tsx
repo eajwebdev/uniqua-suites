@@ -6,7 +6,8 @@ import {
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { datesAreFree, monthLabel, shiftMonth, takenNights, todayInManila } from '@/components/public';
 import { cn } from '@/components/ui';
-import { pesoWhole, shortDate } from '@/lib/format';
+import { pesoWhole, shortDate, time12 } from '@/lib/format';
+import { duration } from '@/lib/rental';
 
 /*
  * Grab Cam Rental's own page, made to sit in an iframe on Grab Cam's site. Renters see every camera,
@@ -17,8 +18,10 @@ import { pesoWhole, shortDate } from '@/lib/format';
  */
 
 type Rate = { label: string; min_days: number; max_days: number | null; daily_cents: number };
-type Model = { free_day_from: number; name: string; slug: string; brand: string | null; specs: string | null; description: string | null; units: number; closed: boolean; images: { url: string; alt: string; default?: boolean }[]; rates: Rate[]; unavailable: { from: string; to: string }[] };
-type Check = { state: 'idle' | 'checking' | 'free' | 'taken'; message?: string; days?: number; estimate_cents?: number; daily_cents?: number; free_day?: boolean };
+type Model = { free_day_from: number; name: string; slug: string; brand: string | null; specs: string | null; description: string | null; units: number; closed: boolean; images: { url: string; alt: string; default?: boolean }[]; rates: Rate[]; unavailable: { from: string; to: string }[]; busy?: Busy[] };
+/** When every unit of a model is out, Manila wall-clock 'YYYY-MM-DD HH:mm'. */
+type Busy = { from: string; to: string };
+type Check = { state: 'idle' | 'checking' | 'free' | 'taken'; message?: string; days?: number; estimate_cents?: number; daily_cents?: number; free_day?: boolean; extra_minutes?: number };
 
 const WIDTH = 'mx-auto w-full max-w-6xl px-4 sm:px-6';
 const DISPLAY = "font-['Montserrat',ui-sans-serif,system-ui,sans-serif]";
@@ -30,7 +33,7 @@ const BTN_NAVY = cn(BTN, 'bg-[#0c1f3d] text-white hover:bg-[#17345f]');
 const TIER_DOT = ['bg-[#f3e6c9]', 'bg-[#8fa3c2]', 'bg-[#8b8f98]'];
 
 const STEPS: [string, string, any][] = [
-    ['Choose your camera and days', 'Crossed-out days are fully booked. The longer you rent, the lower the daily rate.', Camera],
+    ['Choose your camera, days and times', 'Crossed-out days are fully booked. Days with an orange dot are booked for part of the day: tap one to see the times. The longer you rent, the lower the daily rate.', Camera],
     ['Message us on Facebook', 'Inquire opens our Facebook page. Tell us the camera and days you picked, and we confirm the time.', MessageCircle],
     ['Pick up with a valid ID', 'No security deposit. Pick up and return within store hours, 8:00 AM to 6:00 PM daily.', IdCard],
 ];
@@ -72,6 +75,30 @@ function monthCells(month: string): (string | null)[] {
 }
 
 const WEEK = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+
+// Store hours: pickups and returns happen between these times.
+const OPENS = '08:00';
+const CLOSES = '18:00';
+
+const atLabel = (at: string) => `${shortDate(at.slice(0, 10))}, ${time12(at.slice(11, 16))}`;
+
+/** The booked parts of one day, clipped to that day: "until 10:00 AM", "from 2:00 PM", "10:00 AM – 2:00 PM" or "all day". */
+function busyOn(busy: Busy[] | undefined, date: string): string[] {
+    const start = `${date} 00:00`;
+    const end = `${addDays(date, 1)} 00:00`;
+
+    return (busy ?? []).filter((w) => w.from < end && w.to > start).map((w) => {
+        const from = w.from > start ? time12(w.from.slice(11, 16)) : null;
+        const to = w.to < end ? time12(w.to.slice(11, 16)) : null;
+        if (!from && !to) return 'all day';
+        if (!from) return `until ${to}`;
+        if (!to) return `from ${from}`;
+        return `${from} – ${to}`;
+    });
+}
+
+/** Does this exact rental touch a time when every unit is out? */
+const clashes = (busy: Busy[] | undefined, from: string, to: string) => (busy ?? []).filter((w) => w.from < to && w.to > from);
 
 /** Fades a section in once it scrolls into view. Without motion preferences or IntersectionObserver it is simply shown. */
 function Reveal({ children, className, delay = 0 }: { children: ReactNode; className?: string; delay?: number }) {
@@ -147,7 +174,8 @@ function messengerUrl(url: string): string {
 function chatLink(raw: string, model: string, from: string, to: string, days?: number, estimate?: number): string {
     const url = messengerUrl(raw);
     if (!/^https:\/\/(www\.)?m\.me\//.test(url)) return url;
-    const text = `Hi Grab Cam! I would like to rent the ${model}, pickup ${shortDate(from)}, return ${shortDate(to)}${days ? ` (${days} day${days > 1 ? 's' : ''})` : ''}.${estimate ? ` Estimated ${pesoWhole(estimate)}.` : ''} Is it available?`;
+    const when = (at: string) => at.length > 10 ? `${shortDate(at.slice(0, 10))} ${time12(at.slice(11, 16))}` : shortDate(at);
+    const text = `Hi Grab Cam! I would like to rent the ${model}, pickup ${when(from)}, return ${when(to)}${days ? ` (${days} day${days > 1 ? 's' : ''})` : ''}.${estimate ? ` Estimated ${pesoWhole(estimate)}.` : ''} Is it available?`;
 
     return `${url}${url.includes('?') ? '&' : '?'}text=${encodeURIComponent(text)}`;
 }
@@ -182,16 +210,39 @@ function MiniMonth({ model, month, from, to }: { model: Model; month: string; fr
                     if (!date) return <span key={`b${i}`} />;
                     const past = date < today;
                     const isTaken = model.closed || taken.has(date);
+                    const partly = !isTaken && busyOn(model.busy, date).length > 0;
                     const chosen = !!from && !!to && date >= from && date < to;
 
                     return (
-                        <span key={date} className={cn('rounded-md py-1.5', past ? 'text-slate-300' : isTaken ? 'bg-slate-100 text-slate-400 line-through' : chosen ? 'bg-[#0c1f3d] font-semibold text-white' : 'text-[#0c1f3d]', date === today && !chosen && 'ring-1 ring-[#0c1f3d]/30')}>
+                        <span key={date} className={cn('relative rounded-md py-1.5', past ? 'text-slate-300' : isTaken ? 'bg-slate-100 text-slate-400 line-through' : chosen ? 'bg-[#0c1f3d] font-semibold text-white' : 'text-[#0c1f3d]', date === today && !chosen && 'ring-1 ring-[#0c1f3d]/30')}>
                             {Number(date.slice(8))}
+                            {!past && partly && <span aria-hidden className="absolute bottom-0.5 left-1/2 size-1 -translate-x-1/2 rounded-full bg-amber-500" />}
                             {!past && isTaken && <span className="sr-only"> fully booked</span>}
+                            {!past && partly && <span className="sr-only"> booked {busyOn(model.busy, date).join(', ')}</span>}
                         </span>
                     );
                 })}
             </div>
+            <MonthBusy model={model} month={month} />
+        </div>
+    );
+}
+
+/** This month's booked times in words, so renters know the exact hours they cannot book. */
+function MonthBusy({ model, month }: { model: Model; month: string }) {
+    const now = `${todayInManila()} 00:00`;
+    const start = `${month}-01 00:00`;
+    const end = `${shiftMonth(month, 1)}-01 00:00`;
+    const shown = (model.busy ?? []).filter((w) => w.to > now && w.from < end && w.to > start);
+    if (model.closed || shown.length === 0) return null;
+
+    return (
+        <div className="mt-2 rounded-lg bg-slate-50 px-2.5 py-2 text-[11px] leading-relaxed text-slate-600">
+            <p className="font-semibold text-[#0c1f3d]">Booked times{model.units > 1 ? ' (all units)' : ''}</p>
+            <ul>
+                {shown.slice(0, 4).map((w) => <li key={w.from} className="tabular-nums">{atLabel(w.from)} → {atLabel(w.to)}</li>)}
+            </ul>
+            {shown.length > 4 && <p className="text-slate-400">+{shown.length - 4} more: tap Check days to see them.</p>}
         </div>
     );
 }
@@ -203,24 +254,33 @@ function InquirePanel({ model, chat, initialFrom = '', initialTo = '' }: { model
     // Days already chosen on the page carry over, so the renter does not pick them twice.
     const [from, setFrom] = useState(initialFrom);
     const [to, setTo] = useState(initialTo);
+    // A rental day is 24 hours, so the return time starts the same as the pickup time.
+    const [pickupTime, setPickupTime] = useState('10:00');
+    const [returnTime, setReturnTime] = useState('10:00');
     const [month, setMonth] = useState((initialFrom || today).slice(0, 7));
     const [check, setCheck] = useState<Check>({ state: 'idle' });
-    const days = from && to ? daysBetween(from, to) : 0;
+    const timesValid = !!from && !!to && `${to} ${returnTime}` > `${from} ${pickupTime}`;
+    const minutes = timesValid ? Math.round((Date.parse(`${to}T${returnTime}:00Z`) - Date.parse(`${from}T${pickupTime}:00Z`)) / 60000) : 0;
+    const days = timesValid ? Math.max(1, Math.floor(minutes / 1440)) : 0;
+    const inHours = (t: string) => t >= OPENS && t <= CLOSES;
+    const blocking = timesValid ? clashes(model.busy, `${from} ${pickupTime}`, `${to} ${returnTime}`) : [];
 
     useEffect(() => {
-        if (!from || !to) return setCheck({ state: 'idle' });
+        if (!from || !to || !timesValid) return setCheck({ state: 'idle' });
         const request = new AbortController();
         setCheck({ state: 'checking' });
-        fetch(`/grabcam/${model.slug}/check-dates?check_in=${from}&check_out=${to}`, { headers: { Accept: 'application/json' }, signal: request.signal })
+        const query = new URLSearchParams({ check_in: from, check_out: to, pickup_time: pickupTime, return_time: returnTime });
+        fetch(`/grabcam/${model.slug}/check-dates?${query}`, { headers: { Accept: 'application/json' }, signal: request.signal })
             .then((r) => (r.ok ? r.json() : Promise.reject(new Error('check failed'))))
-            .then((body) => setCheck(body.available ? { state: 'free', days: body.days, estimate_cents: body.estimate_cents, daily_cents: body.daily_cents, free_day: body.free_day } : { state: 'taken', message: body.message }))
-            .catch((error) => error.name !== 'AbortError' && setCheck({ state: 'taken', message: 'We could not check those days. Please try again.' }));
+            .then((body) => setCheck(body.available ? { state: 'free', days: body.days, estimate_cents: body.estimate_cents, daily_cents: body.daily_cents, free_day: body.free_day, extra_minutes: body.extra_minutes } : { state: 'taken', message: body.message }))
+            .catch((error) => error.name !== 'AbortError' && setCheck({ state: 'taken', message: 'We could not check those times. Please try again.' }));
 
         return () => request.abort();
-    }, [from, to, model.slug]);
+    }, [from, to, pickupTime, returnTime, timesValid, model.slug]);
 
+    // Tapping the pickup day again makes a same-day rental.
     const pick = (date: string) => {
-        if (!from || to || date <= from) {
+        if (!from || to || date < from) {
             setFrom(date);
             setTo('');
         } else {
@@ -230,7 +290,7 @@ function InquirePanel({ model, chat, initialFrom = '', initialTo = '' }: { model
 
     return (
         <div className="space-y-4">
-            <p className="text-sm text-slate-500">{from && to ? 'Your days are below. Tap a new pickup day to change them.' : from ? 'Now tap your return day.' : 'Tap your pickup day, then your return day. A rental day is 24 hours.'}</p>
+            <p className="text-sm text-slate-500">{from && to ? 'Your days are below. Tap a new pickup day to change them.' : from ? 'Now tap your return day (tap the same day for a same-day return).' : 'Tap your pickup day, then your return day. A rental day is 24 hours.'}</p>
             <div>
                 <div className="mb-1 flex items-center justify-between">
                     <button type="button" aria-label="Previous month" disabled={month <= today.slice(0, 7)} onClick={() => setMonth(shiftMonth(month, -1))} className="flex size-11 items-center justify-center rounded-full hover:bg-slate-100 disabled:opacity-30"><ChevronLeft size={18} /></button>
@@ -243,24 +303,59 @@ function InquirePanel({ model, chat, initialFrom = '', initialTo = '' }: { model
                         if (!date) return <span key={`b${i}`} />;
                         const past = date < today;
                         const isTaken = taken.has(date);
-                        // A return day may be another renter's pickup day; a pickup day may not be taken.
-                        const blocked = past || (isTaken && !(from && !to && date > from));
+                        const partly = !isTaken && busyOn(model.busy, date).length > 0;
+                        // A fully booked day has no free minute; a partly booked day can still work at the right time.
+                        const blocked = past || isTaken;
                         const inRange = !!from && date >= from && date <= (to || from);
 
                         return (
                             <button key={date} type="button" disabled={blocked} onClick={() => pick(date)} aria-pressed={inRange}
-                                className={cn('min-h-10 rounded-lg text-sm tabular-nums transition', blocked ? 'text-slate-300 line-through' : 'text-[#0c1f3d] hover:bg-slate-100', inRange && 'bg-[#0c1f3d] font-semibold text-white hover:bg-[#0c1f3d]')}>
+                                className={cn('relative min-h-10 rounded-lg text-sm tabular-nums transition', past ? 'text-slate-300' : blocked ? 'text-slate-300 line-through' : 'text-[#0c1f3d] hover:bg-slate-100', inRange && 'bg-[#0c1f3d] font-semibold text-white hover:bg-[#0c1f3d]')}>
                                 {Number(date.slice(8))}
+                                {partly && !past && <span aria-hidden className="absolute bottom-1 left-1/2 size-1.5 -translate-x-1/2 rounded-full bg-amber-500" />}
                                 {isTaken && !past && <span className="sr-only"> fully booked</span>}
+                                {partly && !past && <span className="sr-only"> booked {busyOn(model.busy, date).join(', ')}</span>}
                             </button>
                         );
                     })}
                 </div>
+                <p className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-500">
+                    <span><span className="text-slate-300 line-through">12</span> Fully booked</span>
+                    <span className="inline-flex items-center gap-1"><span aria-hidden className="size-1.5 rounded-full bg-amber-500" /> Booked part of the day</span>
+                </p>
             </div>
 
-            {from && to && (
+            {from && (
+                <div className="space-y-3 rounded-2xl p-4 ring-1 ring-slate-200">
+                    {[...new Set([from, to || from])].map((date) => {
+                        const taken = busyOn(model.busy, date);
+                        return (
+                            <p key={date} className="text-sm">
+                                <span className="font-semibold text-[#0c1f3d]">{shortDate(date)}: </span>
+                                {taken.length ? <span className="text-amber-800">booked {taken.join(', ')}</span> : <span className="text-emerald-700">free all day</span>}
+                            </p>
+                        );
+                    })}
+                    {to && (
+                        <div className="grid grid-cols-2 gap-3">
+                            <label className="text-sm font-medium text-[#0c1f3d]">Pickup time
+                                <input type="time" min={OPENS} max={CLOSES} step={900} value={pickupTime} onChange={(e) => { const value = e.target.value; setPickupTime(value); if (returnTime === pickupTime) setReturnTime(value); }} className="mt-1 block min-h-11 w-full rounded-lg border border-slate-300 px-3 text-base" />
+                            </label>
+                            <label className="text-sm font-medium text-[#0c1f3d]">Return time
+                                <input type="time" min={OPENS} max={CLOSES} step={900} value={returnTime} onChange={(e) => setReturnTime(e.target.value)} className="mt-1 block min-h-11 w-full rounded-lg border border-slate-300 px-3 text-base" />
+                            </label>
+                        </div>
+                    )}
+                    {to && (!inHours(pickupTime) || !inHours(returnTime)) && <p className="text-xs text-amber-800">Pickup and return are within store hours, {time12(OPENS)} to {time12(CLOSES)}.</p>}
+                    {to && !timesValid && <p role="alert" className="text-xs text-red-700">The return must be after the pickup.</p>}
+                    {blocking.length > 0 && <p className="text-xs text-red-700">Not free at those times: booked {blocking.map((w) => `${atLabel(w.from)} → ${atLabel(w.to)}`).join('; ')}.</p>}
+                </div>
+            )}
+
+            {from && to && timesValid && (
                 <div className="rounded-2xl bg-slate-50 p-4 text-sm ring-1 ring-slate-200">
-                    <p className="font-semibold text-[#0c1f3d]">Pickup {shortDate(from)} · Return {shortDate(to)} · {days} day{days === 1 ? '' : 's'}</p>
+                    <p className="font-semibold text-[#0c1f3d]">Pickup {shortDate(from)}, {time12(pickupTime)} · Return {shortDate(to)}, {time12(returnTime)} · {days} day{days === 1 ? '' : 's'}</p>
+                    {minutes % 1440 !== 0 && minutes > 1440 && <p className="mt-1 text-xs text-slate-500">That is {duration(minutes)}. A rental day is 24 hours; time past {days} day{days === 1 ? '' : 's'} may count as a late return.</p>}
                     <p role="status" className="mt-2 flex items-center gap-1.5 font-medium">
                         {check.state === 'checking' && <><Loader2 size={15} className="animate-spin" aria-hidden /> Checking…</>}
                         {check.state === 'free' && <span className="flex items-center gap-1.5 text-emerald-700"><BadgeCheck size={16} aria-hidden /> Available</span>}
@@ -273,7 +368,7 @@ function InquirePanel({ model, chat, initialFrom = '', initialTo = '' }: { model
             )}
 
             {check.state === 'free' && chat ? (
-                <a href={chatLink(chat, model.name, from, to, check.days, check.estimate_cents)} target="_blank" rel="noreferrer" aria-label={`Inquire about the ${model.name} on Messenger`} className={cn(BTN_NAVY, 'w-full')}><MessageCircle size={17} aria-hidden /> Inquire on Messenger</a>
+                <a href={chatLink(chat, model.name, `${from} ${pickupTime}`, `${to} ${returnTime}`, check.days, check.estimate_cents)} target="_blank" rel="noreferrer" aria-label={`Inquire about the ${model.name} on Messenger`} className={cn(BTN_NAVY, 'w-full')}><MessageCircle size={17} aria-hidden /> Inquire on Messenger</a>
             ) : (
                 <button type="button" disabled className={cn(BTN_NAVY, 'w-full cursor-not-allowed opacity-40')}><MessageCircle size={17} aria-hidden /> Inquire on Messenger</button>
             )}

@@ -6,6 +6,7 @@ use App\Support\AdminCategory;
 use App\Domain\Availability\RoomConflict;
 use App\Domain\Bookings\BookingService;
 use App\Domain\Finance\FinanceService;
+use App\Domain\Finance\RoomExpenses;
 use App\Http\Controllers\Controller;
 use App\Models\Booking;
 use App\Models\BookingCharge;
@@ -21,57 +22,130 @@ use App\Support\Money;
 use App\Support\SystemNotice;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 
 class MaintenanceController extends Controller
 {
+    /** Priority labels and their order: red for High and Urgent so staff see what needs action first. */
+    public const PRIORITIES = ['critical' => 'Urgent', 'high' => 'High', 'normal' => 'Normal', 'low' => 'Low'];
+
+    private const PENDING = ['open', 'in_progress'];
+
+    private const SOURCES = ['staff' => 'Staff', 'guest_complaint' => 'Guest complaint', 'inspection' => 'Inspection'];
+
     public function workOrders(Request $request)
     {
         $user = $request->user();
         $manager = $user->can('maintenance.manage');
-        $rows = AdminCategory::workOrders(WorkOrder::query())->with(['room:id,name', 'assignee:id,name', 'vendor:id,name'])
-            ->when(! $manager, fn ($q) => $q->where('assigned_to', $user->id))
-            ->orderByRaw("FIELD(status,'open','in_progress','resolved','closed')")->orderByDesc('safety_block')->orderByDesc('id')->paginate(15);
+        $f = $request->validate([
+            'view' => 'nullable|in:pending,completed,all',
+            'priority' => 'nullable|in:critical,high,normal,low,urgent',
+            'room' => 'nullable|integer',
+        ]);
+        $view = $f['view'] ?? 'pending';
+        $mine = fn ($q) => AdminCategory::workOrders($q)->when(! $manager, fn ($w) => $w->where('assigned_to', $user->id));
+
+        $rows = $mine(WorkOrder::query())->with(['room:id,name,unit_code', 'assignee:id,name', 'vendor:id,name', 'booking:id,reference'])
+            ->when($view === 'pending', fn ($q) => $q->whereIn('status', self::PENDING))
+            ->when($view === 'completed', fn ($q) => $q->whereNotIn('status', self::PENDING))
+            ->when(($f['priority'] ?? null) === 'urgent', fn ($q) => $q->whereIn('severity', ['critical', 'high']))
+            ->when(in_array($f['priority'] ?? null, ['critical', 'high', 'normal', 'low'], true), fn ($q) => $q->where('severity', $f['priority']))
+            ->when($f['room'] ?? null, fn ($q, $v) => $q->where('room_id', $v))
+            // Pending first, then the reddest, then what is due soonest.
+            ->orderByRaw("CASE WHEN status IN ('open','in_progress') THEN 0 ELSE 1 END")
+            ->orderByRaw("FIELD(severity,'critical','high','normal','low')")
+            ->orderByDesc('safety_block')
+            ->orderByRaw('due_on IS NULL')->orderBy('due_on')
+            ->orderByDesc('id')->paginate(20)->withQueryString();
+
+        $pending = $mine(WorkOrder::query())->whereIn('status', self::PENDING);
+        $monthStart = Local::now()->startOfMonth();
+        // Which jobs are already in Room costs, in a few queries rather than one per row.
+        $expenses = app(RoomExpenses::class);
+        $pageIds = $rows->getCollection()->pluck('id')->all();
+        $recordedIds = $expenses->recordedIds('work_order_id', $pageIds);
+        $byIncident = Incident::whereIn('work_order_id', $pageIds)->pluck('work_order_id', 'id')->all();
+        $incidentRecorded = [];
+        foreach (array_keys($expenses->recordedIds('incident_id', array_keys($byIncident))) as $incidentId) {
+            $incidentRecorded[(int) $byIncident[$incidentId]] = true;
+        }
+        $categories = User::permission('maintenance.own')->where('is_active', true)->get()->map(fn ($u) => ['value' => $u->id, 'label' => $u->name])->all();
 
         return Inertia::render('Admin/Resource', [
             'title' => 'Maintenance',
-            'subtitle' => 'A safety block stops the room being assigned or marked ready until resolved. Capital vs routine is a review label for the owner or accountant, not an accounting entry.',
+            'subtitle' => 'Room issues and guest complaints. Red means High or Urgent: handle these first. Mark a job completed when it is fixed, and record what it cost so it counts in Room costs. A safety block stops the room being assigned or marked ready until resolved.',
             'tabs' => $user->can('incidents.view') ? [['label' => 'Work orders', 'href' => '/admin/work-orders'], ['label' => 'Damage & incidents', 'href' => '/admin/incidents']] : [],
-            'columns' => [
-                ['key' => 'title', 'label' => 'Work order'], ['key' => 'room', 'label' => 'Room'], ['key' => 'severity', 'label' => 'Severity', 'type' => 'status'],
-                ['key' => 'safety', 'label' => 'Safety block'], ['key' => 'status', 'label' => 'Status', 'type' => 'status'], ['key' => 'assignee', 'label' => 'Assigned'],
-                ['key' => 'classification', 'label' => 'Review class'], ['key' => 'cost_cents', 'label' => 'Cost', 'type' => 'money'], ['key' => 'due_on', 'label' => 'Due', 'type' => 'date'],
+            'stats' => [
+                ['label' => 'Urgent & high, pending', 'value' => (clone $pending)->whereIn('severity', ['critical', 'high'])->count()],
+                ['label' => 'Pending', 'value' => (clone $pending)->count()],
+                ['label' => 'Completed this month', 'value' => $mine(WorkOrder::query())->whereNotIn('status', self::PENDING)->where('resolved_at', '>=', $monthStart->utc())->count()],
+                ['label' => 'Overdue', 'value' => (clone $pending)->whereNotNull('due_on')->where('due_on', '<', Local::today())->count()],
             ],
-            'rows' => $rows->through(fn ($w) => [
-                'id' => $w->id,
-                'title' => $w->title,
-                'room' => $w->room?->name ?? 'Property-wide',
-                'severity' => $w->severity,
-                'safety' => $w->safety_block ? 'Yes' : 'No',
-                'status' => $w->status,
-                'assignee' => $w->assignee?->name,
-                'classification' => str_replace('_', ' ', $w->classification),
-                'cost_cents' => $w->cost_cents === null ? null : (int) $w->cost_cents,
-                'due_on' => $w->due_on?->toDateString(),
-                '_actions' => [[
-                    'label' => 'Update',
-                    'url' => "/admin/work-orders/{$w->id}/status",
-                    'fields' => array_values(array_filter([
-                        ['name' => 'status', 'label' => 'Status', 'type' => 'select', 'required' => true, 'default' => $w->status, 'options' => $this->opts(['open', 'in_progress', 'resolved', 'closed'])],
-                        ['name' => 'cost', 'label' => 'Cost (PHP)', 'type' => 'money', 'default' => Money::pesos($w->cost_cents === null ? null : (int) $w->cost_cents)],
-                        $manager ? ['name' => 'classification', 'label' => 'Review class', 'type' => 'select', 'default' => $w->classification, 'options' => $this->opts(['unclassified', 'routine', 'capex_candidate'])] : null,
-                    ])),
-                ]],
-            ]),
-            'create' => $manager ? ['label' => 'New work order', 'url' => '/admin/work-orders', 'fields' => [
-                ['name' => 'title', 'label' => 'Title', 'type' => 'text', 'required' => true],
+            'filters' => [
+                ['name' => 'view', 'label' => 'Show', 'value' => $view, 'options' => [['value' => 'pending', 'label' => 'Pending'], ['value' => 'completed', 'label' => 'Completed'], ['value' => 'all', 'label' => 'All']]],
+                ['name' => 'priority', 'label' => 'Priority', 'value' => $f['priority'] ?? null, 'options' => [['value' => 'urgent', 'label' => 'Red only (Urgent + High)'], ...collect(self::PRIORITIES)->map(fn ($l, $v) => ['value' => $v, 'label' => $l])->values()->all()]],
+                ['name' => 'room', 'label' => 'Room', 'value' => $f['room'] ?? null, 'options' => $this->rooms()],
+            ],
+            'columns' => [
+                ['key' => 'priority', 'label' => 'Priority', 'type' => 'status'], ['key' => 'title', 'label' => 'Issue'], ['key' => 'room', 'label' => 'Room'],
+                ['key' => 'source', 'label' => 'Reported by'], ['key' => 'status', 'label' => 'Status', 'type' => 'status'], ['key' => 'assignee', 'label' => 'Assigned'],
+                ['key' => 'due_on', 'label' => 'Due', 'type' => 'date'], ['key' => 'cost_cents', 'label' => 'Cost', 'type' => 'money'], ['key' => 'expense', 'label' => 'In room costs'],
+            ],
+            'rows' => $rows->through(function ($w) use ($manager, $user, $recordedIds, $incidentRecorded) {
+                $pending = in_array($w->status, self::PENDING, true);
+                $recorded = isset($recordedIds[$w->id]) || isset($incidentRecorded[$w->id]);
+                $canAct = $manager || $w->assigned_to === $user->id;
+                $actions = [];
+                if ($canAct && $pending) {
+                    $actions[] = [
+                        'label' => 'Mark completed', 'url' => "/admin/work-orders/{$w->id}/complete", 'variant' => 'primary',
+                        'fields' => array_values(array_filter([
+                            ['name' => 'note', 'label' => 'What was done', 'type' => 'text', 'help' => 'For example: cleaned the AC filter and coils.'],
+                            ['name' => 'cost', 'label' => 'Cost (PHP)', 'type' => 'money', 'default' => Money::pesos($w->cost_cents === null ? null : (int) $w->cost_cents), 'help' => 'Leave blank if it cost nothing.'],
+                            $user->can('expenses.manage') && ! $recorded && $w->room_id ? ['name' => 'record_expense', 'label' => 'Add this cost to the room\'s expenses (Room costs)', 'type' => 'checkbox', 'default' => true] : null,
+                            $user->can('expenses.manage') && ! $recorded && $w->room_id ? ['name' => 'vendor', 'label' => 'Paid to (optional)', 'type' => 'text'] : null,
+                        ])),
+                    ];
+                }
+                if ($canAct) {
+                    $actions[] = [
+                        'label' => $pending ? 'Update' : 'Reopen or edit',
+                        'url' => "/admin/work-orders/{$w->id}/status",
+                        'fields' => array_values(array_filter([
+                            ['name' => 'status', 'label' => 'Status', 'type' => 'select', 'required' => true, 'default' => $w->status, 'options' => $this->opts(['open', 'in_progress', 'resolved', 'closed'])],
+                            $manager ? ['name' => 'severity', 'label' => 'Priority', 'type' => 'select', 'required' => true, 'default' => $w->severity, 'options' => $this->priorityOptions()] : null,
+                            ['name' => 'cost', 'label' => 'Cost (PHP)', 'type' => 'money', 'default' => Money::pesos($w->cost_cents === null ? null : (int) $w->cost_cents)],
+                            $manager ? ['name' => 'classification', 'label' => 'Review class', 'type' => 'select', 'default' => $w->classification, 'options' => $this->opts(['unclassified', 'routine', 'capex_candidate'])] : null,
+                        ])),
+                    ];
+                }
+
+                return [
+                    'id' => $w->id,
+                    'priority' => self::PRIORITIES[$w->severity] ?? ucfirst($w->severity),
+                    'title' => $w->title.($w->description ? ' — '.$w->description : '').($w->safety_block ? ' (safety block)' : ''),
+                    'room' => $w->room ? "{$w->room->name} ({$w->room->unit_code})" : 'Property-wide',
+                    'source' => (self::SOURCES[$w->source] ?? 'Staff').($w->booking ? " · {$w->booking->reference}" : ''),
+                    'status' => $w->status,
+                    'assignee' => $w->assignee?->name,
+                    'due_on' => $w->due_on?->toDateString(),
+                    'cost_cents' => $w->cost_cents === null ? null : (int) $w->cost_cents,
+                    'expense' => $recorded ? 'Yes' : ($w->cost_cents ? 'Not yet' : '—'),
+                    '_actions' => $actions,
+                ];
+            }),
+            'create' => $manager ? ['label' => 'Report an issue', 'url' => '/admin/work-orders', 'fields' => [
+                ['name' => 'title', 'label' => 'Issue', 'type' => 'text', 'required' => true, 'help' => 'For example: AC not cooling, needs cleaning.'],
                 ['name' => 'room_id', 'label' => 'Room', 'type' => 'select', 'options' => $this->rooms()],
-                ['name' => 'category', 'label' => 'Category', 'type' => 'select', 'default' => 'general', 'options' => $this->opts(['general', 'plumbing', 'ac', 'appliance', 'furniture', 'electrical', 'preventive', 'renovation'])],
-                ['name' => 'severity', 'label' => 'Severity', 'type' => 'select', 'default' => 'normal', 'options' => $this->opts(['low', 'normal', 'high', 'critical'])],
-                ['name' => 'safety_block', 'label' => 'Safety block: stop this room being assigned or marked ready', 'type' => 'checkbox'],
-                ['name' => 'assigned_to', 'label' => 'Assign to', 'type' => 'select', 'options' => User::permission('maintenance.own')->where('is_active', true)->get()->map(fn ($u) => ['value' => $u->id, 'label' => $u->name])->all()],
+                ['name' => 'severity', 'label' => 'Priority', 'type' => 'select', 'required' => true, 'default' => 'normal', 'options' => $this->priorityOptions(), 'help' => 'High and Urgent show in red at the top of the list.'],
+                ['name' => 'source', 'label' => 'Reported by', 'type' => 'select', 'required' => true, 'default' => 'staff', 'options' => collect(self::SOURCES)->map(fn ($l, $v) => ['value' => $v, 'label' => $l])->values()->all()],
+                ['name' => 'booking_reference', 'label' => 'Booking reference (for a guest complaint)', 'type' => 'text', 'help' => 'Optional, for example UQ-2611-AB12C. Links the complaint to the stay.'],
+                ['name' => 'category', 'label' => 'Type', 'type' => 'select', 'default' => 'general', 'options' => $this->opts(['general', 'ac', 'plumbing', 'electrical', 'appliance', 'furniture', 'cleaning', 'preventive', 'renovation'])],
+                ['name' => 'assigned_to', 'label' => 'Assign to', 'type' => 'select', 'options' => $categories],
                 ['name' => 'due_on', 'label' => 'Due', 'type' => 'date'],
-                ['name' => 'description', 'label' => 'Description', 'type' => 'textarea'],
+                ['name' => 'safety_block', 'label' => 'Safety block: stop this room being assigned or marked ready', 'type' => 'checkbox'],
+                ['name' => 'description', 'label' => 'Details', 'type' => 'textarea'],
             ]] : null,
         ]);
     }
@@ -83,6 +157,8 @@ class MaintenanceController extends Controller
             'room_id' => 'nullable|exists:rooms,id',
             'category' => 'nullable|string|max:40',
             'severity' => 'required|in:low,normal,high,critical',
+            'source' => 'nullable|in:staff,guest_complaint,inspection',
+            'booking_reference' => 'nullable|string|max:40',
             'safety_block' => 'nullable|boolean',
             'assigned_to' => 'nullable|exists:users,id',
             'due_on' => 'nullable|date_format:Y-m-d',
@@ -92,38 +168,117 @@ class MaintenanceController extends Controller
         if ($data['safety_block'] && empty($data['room_id'])) {
             throw new RoomConflict('A safety block must name a room.');
         }
-        $order = WorkOrder::create($data + ['created_by' => $request->user()->id, 'category' => $data['category'] ?? 'general']);
-        Audit::log('work_order.created', $order, ['safety_block' => $order->safety_block]);
+        // A guest complaint names the stay it came from; its room fills in when none was chosen.
+        $booking = null;
+        if (! empty($data['booking_reference'])) {
+            $booking = Booking::with('activeRooms')->where('reference', trim($data['booking_reference']))->first();
+            if (! $booking) {
+                throw ValidationException::withMessages(['booking_reference' => 'No booking has that reference.']);
+            }
+            $data['room_id'] ??= $booking->activeRooms->first()?->room_id ?? $this->lastRoomId($booking);
+            $data['source'] ??= 'guest_complaint';
+        }
+        unset($data['booking_reference']);
+        $order = WorkOrder::create($data + [
+            'created_by' => $request->user()->id,
+            'category' => $data['category'] ?? 'general',
+            'source' => $data['source'] ?? 'staff',
+            'booking_id' => $booking?->id,
+        ]);
+        Audit::log('work_order.created', $order, ['safety_block' => $order->safety_block, 'severity' => $order->severity, 'source' => $order->source]);
+        $label = self::PRIORITIES[$order->severity];
         if ($order->assigned_to) {
-            User::find($order->assigned_to)?->notify(new SystemNotice("Work order assigned: {$order->title}", '/admin/work-orders'));
+            User::find($order->assigned_to)?->notify(new SystemNotice("{$label} work order assigned: {$order->title}", '/admin/work-orders'));
+        }
+        if (in_array($order->severity, ['critical', 'high'], true)) {
+            SystemNotice::toPermission('maintenance.manage', "{$label}: {$order->title}", '/admin/work-orders?priority=urgent', 'maintenance');
         }
 
-        return back()->with('success', 'Work order created.');
+        return back()->with('success', in_array($order->severity, ['critical', 'high'], true) ? "{$label} issue reported. It shows in red at the top of Maintenance." : 'Issue reported.');
     }
 
     public function updateWorkOrder(Request $request, WorkOrder $order)
     {
         $user = $request->user();
         abort_unless($user->can('maintenance.manage') || $order->assigned_to === $user->id, 403);
-        $data = $request->validate(['status' => 'required|in:open,in_progress,resolved,closed', 'cost' => ['nullable', Money::RULE], 'classification' => 'nullable|in:unclassified,routine,capex_candidate']);
+        $data = $request->validate(['status' => 'required|in:open,in_progress,resolved,closed', 'severity' => 'nullable|in:low,normal,high,critical', 'cost' => ['nullable', Money::RULE], 'classification' => 'nullable|in:unclassified,routine,capex_candidate']);
 
         $update = ['status' => $data['status'], 'cost_cents' => Money::cents($data['cost'] ?? null) ?? $order->cost_cents];
         if ($user->can('maintenance.manage') && ! empty($data['classification'])) {
             $update['classification'] = $data['classification'];
         }
+        if ($user->can('maintenance.manage') && ! empty($data['severity'])) {
+            $update['severity'] = $data['severity'];
+        }
         if (in_array($data['status'], ['resolved', 'closed'], true) && ! $order->resolved_at) {
-            $update['resolved_at'] = now();
+            $update += ['resolved_at' => now(), 'completed_by' => $user->id];
+        }
+        // Reopened: it is pending again, so it is not counted as completed.
+        if (in_array($data['status'], self::PENDING, true)) {
+            $update += ['resolved_at' => null, 'completed_by' => null];
         }
         $order->update($update);
-        Audit::log('work_order.updated', $order, ['status' => $data['status']]);
+        Audit::log('work_order.updated', $order, ['status' => $data['status'], 'severity' => $order->severity]);
 
         return back()->with('success', 'Work order updated.');
+    }
+
+    /** One step from pending to done: what was done, what it cost, and optionally the room expense. */
+    public function completeWorkOrder(Request $request, WorkOrder $order, RoomExpenses $expenses)
+    {
+        $user = $request->user();
+        abort_unless($user->can('maintenance.manage') || $order->assigned_to === $user->id, 403);
+        $data = $request->validate(['note' => 'nullable|string|max:255', 'cost' => ['nullable', Money::RULE], 'record_expense' => 'nullable|boolean', 'vendor' => 'nullable|string|max:120']);
+
+        // Locked and re-read, so a double click cannot complete it, or record its cost, twice.
+        $outcome = DB::transaction(function () use ($order, $data, $user, $expenses) {
+            $order = WorkOrder::lockForUpdate()->findOrFail($order->id);
+            if (! in_array($order->status, self::PENDING, true)) {
+                return 'done';
+            }
+            $cents = Money::cents($data['cost'] ?? null) ?? ($order->cost_cents === null ? null : (int) $order->cost_cents);
+            $record = ! empty($data['record_expense']) && $cents > 0 && $order->room_id && $user->can('expenses.manage') && ! $expenses->alreadyCounted($order);
+            $order->update([
+                'status' => 'resolved', 'resolved_at' => now(), 'completed_by' => $user->id,
+                'completion_note' => $data['note'] ?? null, 'cost_cents' => $cents,
+            ]);
+            $expense = $record ? $expenses->record($order, $cents, 'paid', null, $data['vendor'] ?? null) : null;
+            Audit::log('work_order.completed', $order, ['cost_cents' => $cents, 'expense' => $record]);
+
+            return $expense ? $expense->status : 'plain';
+        });
+
+        return back()->with('success', match ($outcome) {
+            'done' => 'This work order is already completed.',
+            'paid' => 'Completed. The cost was added to the room expenses.',
+            'incurred' => 'Completed. The cost was added to the room expenses as incurred: it needs approval before it is marked paid.',
+            default => 'Completed.',
+        });
+    }
+
+    private function priorityOptions(): array
+    {
+        return collect(self::PRIORITIES)->map(fn ($l, $v) => ['value' => $v, 'label' => $l])->values()->all();
+    }
+
+    private function lastRoomId(Booking $booking): ?int
+    {
+        return $booking->bookingRooms()->orderByDesc('id')->value('room_id');
     }
 
     public function incidents(Request $request)
     {
         $user = $request->user();
         $rows = AdminCategory::whereHasProperty(Incident::query(), 'room')->with(['room:id,name', 'booking:id,reference', 'guest:id,full_name', 'evidence:id,incident_id'])->orderByDesc('id')->paginate(15);
+        // Already in Room costs, through the incident or the work order made for it: one query each, not one per row.
+        $expenses = app(RoomExpenses::class);
+        $incidentRecorded = $expenses->recordedIds('incident_id', $rows->getCollection()->pluck('id')->all());
+        $orderRecorded = $expenses->recordedIds('work_order_id', $rows->getCollection()->pluck('work_order_id')->filter()->all());
+        foreach ($rows->getCollection() as $i) {
+            if ($i->work_order_id && isset($orderRecorded[$i->work_order_id])) {
+                $incidentRecorded[$i->id] = true;
+            }
+        }
 
         return Inertia::render('Admin/Resource', [
             'title' => 'Damage & incidents',
@@ -134,12 +289,13 @@ class MaintenanceController extends Controller
                 ['key' => 'guest', 'label' => 'Guest'], ['key' => 'item', 'label' => 'Item'], ['key' => 'estimated_cents', 'label' => 'Estimated', 'type' => 'money'],
                 ['key' => 'approved_cents', 'label' => 'Approved', 'type' => 'money'], ['key' => 'status', 'label' => 'Status', 'type' => 'status'], ['key' => 'evidence', 'label' => 'Evidence'],
             ],
-            'rows' => $rows->through(function ($i) use ($user) {
+            'rows' => $rows->through(function ($i) use ($user, $incidentRecorded) {
                 $actions = [];
                 if ($user->can('incidents.manage') && ! in_array($i->status, ['closed'], true)) {
                     $actions[] = ['label' => 'Update', 'url' => "/admin/incidents/{$i->id}/status", 'fields' => [
                         ['name' => 'status', 'label' => 'Status', 'type' => 'select', 'required' => true, 'default' => in_array($i->status, ['reported', 'evidence_pending', 'under_review', 'disputed', 'resolved'], true) ? $i->status : null, 'options' => $this->opts(['reported', 'evidence_pending', 'under_review', 'disputed', 'resolved', 'closed'])],
-                        ['name' => 'repair_cost', 'label' => 'Repair cost (PHP)', 'type' => 'money'],
+                        ['name' => 'repair_cost', 'label' => 'Repair or replacement cost (PHP)', 'type' => 'money', 'default' => Money::pesos($i->repair_cost_cents === null ? null : (int) $i->repair_cost_cents)],
+                        ...($user->can('expenses.manage') && ! isset($incidentRecorded[$i->id]) ? [['name' => 'record_expense', 'label' => 'Add this cost to the room expenses (Room costs)', 'type' => 'checkbox', 'default' => true]] : []),
                         ['name' => 'closure_notes', 'label' => 'Notes', 'type' => 'textarea'],
                         ['name' => 'evidence', 'label' => 'Add evidence', 'type' => 'file'],
                     ]];
@@ -263,16 +419,28 @@ class MaintenanceController extends Controller
 
     public function updateIncident(Request $request, Incident $incident)
     {
-        $data = $request->validate(['status' => 'required|in:reported,evidence_pending,under_review,disputed,resolved,closed', 'repair_cost' => ['nullable', Money::RULE], 'closure_notes' => 'nullable|string|max:2000', 'evidence' => 'nullable|file|mimes:jpg,jpeg,png,webp,pdf|max:10240']);
-        $incident->update([
-            'status' => $data['status'],
-            'repair_cost_cents' => Money::cents($data['repair_cost'] ?? null) ?? $incident->repair_cost_cents,
-            'closure_notes' => $data['closure_notes'] ?? $incident->closure_notes,
-        ]);
-        $this->saveEvidence($request, $incident);
-        Audit::log('incident.updated', $incident, ['status' => $data['status']]);
+        $data = $request->validate(['status' => 'required|in:reported,evidence_pending,under_review,disputed,resolved,closed', 'repair_cost' => ['nullable', Money::RULE], 'record_expense' => 'nullable|boolean', 'closure_notes' => 'nullable|string|max:2000', 'evidence' => 'nullable|file|mimes:jpg,jpeg,png,webp,pdf|max:10240']);
+        $expenses = app(RoomExpenses::class);
+        // The replacement cost becomes the room's expense once; what the guest is charged stays a separate decision.
+        $record = DB::transaction(function () use ($incident, $data, $expenses, $request) {
+            $incident = Incident::lockForUpdate()->findOrFail($incident->id);
+            $cost = Money::cents($data['repair_cost'] ?? null) ?? ($incident->repair_cost_cents === null ? null : (int) $incident->repair_cost_cents);
+            $record = ! empty($data['record_expense']) && $cost > 0 && $request->user()->can('expenses.manage') && ! $expenses->alreadyCounted($incident);
+            $incident->update([
+                'status' => $data['status'],
+                'repair_cost_cents' => $cost,
+                'closure_notes' => $data['closure_notes'] ?? $incident->closure_notes,
+            ]);
+            if ($record) {
+                $expenses->record($incident, $cost);
+            }
+            $this->saveEvidence($request, $incident);
+            Audit::log('incident.updated', $incident, ['status' => $data['status'], 'expense' => $record]);
 
-        return back()->with('success', 'Incident updated.');
+            return $record;
+        });
+
+        return back()->with('success', $record ? 'Incident updated. The cost was added to the room expenses.' : 'Incident updated.');
     }
 
     /** The only path that turns an incident into money, and it can be undone with history kept. */
