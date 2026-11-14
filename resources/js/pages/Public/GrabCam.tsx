@@ -1,6 +1,6 @@
 import { Head } from '@inertiajs/react';
 import {
-    ArrowRight, BadgeCheck, CalendarCheck, Camera, ChevronDown, ChevronLeft, ChevronRight, Clock, HandCoins, IdCard, Loader2, Lock, MessageCircle, PackageCheck, Plane,
+    ArrowRight, BadgeCheck, CalendarCheck, CalendarDays, Camera, ChevronDown, ChevronLeft, ChevronRight, Clock, HandCoins, IdCard, Loader2, Lock, MessageCircle, PackageCheck, Plane,
     ShieldAlert, ShieldCheck, Sparkles, TimerReset, X,
 } from 'lucide-react';
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
@@ -23,7 +23,7 @@ type Model = { free_day_from: number; name: string; slug: string; brand: string 
 type Busy = { from: string; to: string };
 type Check = { state: 'idle' | 'checking' | 'free' | 'taken'; message?: string; retry?: boolean; days?: number; estimate_cents?: number; daily_cents?: number; free_day?: boolean; extra_minutes?: number };
 
-const WIDTH = 'mx-auto w-full max-w-6xl px-4 sm:px-6';
+const WIDTH = 'mx-auto w-full max-w-6xl px-4 sm:px-6 2xl:max-w-7xl';
 const DISPLAY = "font-['Montserrat',ui-sans-serif,system-ui,sans-serif]";
 const BTN = 'inline-flex min-h-12 items-center justify-center gap-2 rounded-full px-7 text-sm font-semibold transition duration-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white';
 const BTN_LIGHT = cn(BTN, 'bg-white text-[#0c1f3d] shadow-[0_10px_30px_-10px_rgba(255,255,255,0.6)] hover:-translate-y-0.5 hover:bg-[#f4ecdc]');
@@ -181,7 +181,7 @@ function Wordmark() {
     return (
         <span className={cn(DISPLAY, 'leading-none text-white')}>
             <span className="text-lg tracking-tight sm:text-xl"><span className="font-normal">grab</span><span className="font-extrabold">cam</span></span>
-            <span className="mt-1 block text-[9px] font-medium tracking-[0.55em] text-white/80">RENTAL</span>
+            <span className="mt-1 block text-[10px] font-medium tracking-[0.5em] text-white/80">RENTAL</span>
         </span>
     );
 }
@@ -289,6 +289,7 @@ function InquirePanel({ model, chat, initialFrom = '', initialTo = '' }: { model
     const blocking = timesValid ? clashes(model.busy, `${from} ${pickupTime}`, `${to} ${returnTime}`) : [];
 
     const [attempt, setAttempt] = useState(0);
+    const todayOpen = nextPickupToday() !== null;
 
     // Waits until the renter stops typing a time, then asks the server; one quiet retry before showing a problem.
     useEffect(() => {
@@ -351,7 +352,8 @@ function InquirePanel({ model, chat, initialFrom = '', initialTo = '' }: { model
                 <div className="grid grid-cols-7 gap-1">
                     {monthCells(month).map((date, i) => {
                         if (!date) return <span key={`b${i}`} />;
-                        const past = date < today;
+                        // Today counts as past once the last pickup slot has gone (store closes at 6 PM).
+                        const past = date < today || (date === today && !todayOpen);
                         const isTaken = taken.has(date);
                         const partly = !isTaken && busyOn(model.busy, date).length > 0;
                         // A fully booked day has no free minute; a partly booked day can still work at the right time.
@@ -387,7 +389,7 @@ function InquirePanel({ model, chat, initialFrom = '', initialTo = '' }: { model
                         );
                     })}
                     {to && (
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 gap-3 min-[340px]:grid-cols-2">
                             <label className="text-sm font-medium text-[#0c1f3d]">Pickup time
                                 <input type="time" min={OPENS} max={CLOSES} step={900} value={pickupTime} onChange={(e) => { const value = e.target.value; setPickupTime(value); if (returnTime === pickupTime) setReturnTime(value); }} className="mt-1 block min-h-11 w-full rounded-lg border border-slate-300 px-3 text-base" />
                             </label>
@@ -438,12 +440,13 @@ function Sheet({ title, onClose, children }: { title: string; onClose: () => voi
     useEffect(() => { ref.current?.showModal(); }, []);
 
     return (
-        <dialog ref={ref} onClose={onClose} onClick={(e) => e.target === ref.current && ref.current?.close()} className="m-auto w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-3xl bg-white p-0 shadow-2xl backdrop:bg-[#06142b]/70 backdrop:backdrop-blur-sm">
-            <header className="flex items-center justify-between gap-3 bg-[#0c1f3d] px-5 py-4 text-white">
-                <h2 className={cn(DISPLAY, 'text-base font-bold')}>{title}</h2>
-                <button type="button" aria-label="Close" onClick={() => ref.current?.close()} className="flex size-10 items-center justify-center rounded-full hover:bg-white/10"><X size={18} /></button>
+        <dialog ref={ref} onClose={onClose} onClick={(e) => e.target === ref.current && ref.current?.close()}
+            className="m-auto w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-3xl bg-white p-0 shadow-2xl backdrop:bg-[#06142b]/70 backdrop:backdrop-blur-sm max-sm:mb-0 max-sm:w-full max-sm:max-w-none max-sm:rounded-b-none">
+            <header className="flex items-center justify-between gap-3 bg-[#0c1f3d] px-4 py-3.5 text-white sm:px-5 sm:py-4">
+                <h2 className={cn(DISPLAY, 'min-w-0 text-[15px] font-bold text-balance sm:text-base')}>{title}</h2>
+                <button type="button" aria-label="Close" onClick={() => ref.current?.close()} className="flex size-11 shrink-0 items-center justify-center rounded-full hover:bg-white/10"><X size={18} /></button>
             </header>
-            <div className="max-h-[80vh] overflow-y-auto p-5">{children}</div>
+            <div className="max-h-[calc(88dvh-4rem)] overflow-y-auto overscroll-contain p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:max-h-[80vh] sm:p-5">{children}</div>
         </dialog>
     );
 }
@@ -460,9 +463,9 @@ function CameraCard({ model, month, from, to, onInquire }: { model: Model; month
                 {model.brand && <span className="absolute top-4 left-4 rounded-full bg-[#0c1f3d] px-3 py-1 text-[10px] font-bold tracking-[0.2em] text-white uppercase">{model.brand}</span>}
                 {model.units > 1 && <span className="absolute top-4 right-4 rounded-full bg-white/90 px-2.5 py-1 text-[10px] font-semibold text-[#0c1f3d] shadow-sm">{model.units} units</span>}
             </div>
-            <div className="flex flex-1 flex-col gap-4 p-5 sm:p-6">
+            <div className="flex flex-1 flex-col gap-4 p-4 min-[380px]:p-5 sm:p-6">
                 <div>
-                    <h3 className={cn(DISPLAY, 'text-lg leading-tight font-extrabold tracking-tight text-[#0c1f3d] uppercase')}>{model.name}</h3>
+                    <h3 className={cn(DISPLAY, 'text-[clamp(1rem,4.5vw,1.125rem)] leading-tight font-extrabold tracking-tight text-balance text-[#0c1f3d] uppercase')}>{model.name}</h3>
                     {model.specs && <p className="mt-0.5 text-sm text-slate-500">{model.specs}</p>}
                 </div>
                 <RateDots rates={model.rates} freeFrom={model.free_day_from} />
@@ -475,12 +478,31 @@ function CameraCard({ model, month, from, to, onInquire }: { model: Model; month
     );
 }
 
+/** Always reads as a field (label, the chosen day or "Any day", an icon) at any width; the native date picker opens on tap. */
+function DateField({ label, value, min, onChange }: { label: string; value: string; min: string; onChange: (value: string) => void }) {
+    return (
+        <label className="group relative flex min-h-14 min-w-0 cursor-pointer items-center gap-3 rounded-2xl bg-white/[0.07] px-4 py-2 ring-1 ring-white/15 transition focus-within:ring-2 focus-within:ring-white/70 hover:bg-white/10">
+            <CalendarDays size={18} className="shrink-0 text-[#f3e6c9]" aria-hidden />
+            <span className="flex min-w-0 flex-col">
+                <span className="text-[11px] font-semibold tracking-[0.12em] text-white/55 uppercase">{label}</span>
+                <span className={cn('truncate text-sm font-semibold', value ? 'text-white' : 'text-white/45')}>{value ? shortDate(value) : 'Any day'}</span>
+            </span>
+            <input
+                type="date" min={min} value={value} aria-label={label}
+                onChange={(e) => onChange(e.target.value)}
+                onClick={(e) => { try { (e.currentTarget as any).showPicker?.(); } catch { /* older browsers open it themselves */ } }}
+                className="absolute inset-0 size-full cursor-pointer opacity-0 [color-scheme:dark]"
+            />
+        </label>
+    );
+}
+
 function Heading({ eyebrow, bold, light, center, children }: { eyebrow?: string; bold: string; light?: string; center?: boolean; children?: ReactNode }) {
     return (
         <div className={cn('max-w-3xl', center && 'mx-auto text-center')}>
             {eyebrow && <p className="mb-3 text-xs font-semibold tracking-[0.35em] text-[#f3e6c9] uppercase">{eyebrow}</p>}
-            <h2 className={cn(DISPLAY, 'text-3xl leading-[1.05] text-white uppercase sm:text-5xl')}><span className="font-extrabold">{bold}</span>{light && <span className="block font-light">{light}</span>}</h2>
-            {children && <p className="mt-4 text-base leading-relaxed text-white/70 sm:text-lg">{children}</p>}
+            <h2 className={cn(DISPLAY, 'text-[clamp(1.75rem,6.5vw,3rem)] leading-[1.05] text-balance text-white uppercase')}><span className="font-extrabold">{bold}</span>{light && <span className="block font-light">{light}</span>}</h2>
+            {children && <p className="mt-4 text-[15px] leading-relaxed text-pretty text-white/70 sm:text-lg">{children}</p>}
         </div>
     );
 }
@@ -503,7 +525,6 @@ export default function GrabCam({ models, brands, grabcam, seo, faqs = [] }: { m
     useEffect(() => { if (from) setMonth(from.slice(0, 7)); }, [from]);
 
     const shown = models.filter((m) => (!brand || m.brand === brand) && (!chosen || datesAreFree(m, from, to)));
-    const field = 'w-full min-w-0 rounded-xl border-0 bg-white/10 px-4 py-3 text-sm text-white ring-1 ring-white/15 [color-scheme:dark] focus:ring-2 focus:ring-white/60 focus:outline-none sm:w-44';
 
     return (
         <div className="min-h-dvh overflow-x-clip bg-[#0b1d3a] font-['Poppins',ui-sans-serif,system-ui,sans-serif] text-white antialiased">
@@ -519,12 +540,12 @@ export default function GrabCam({ models, brands, grabcam, seo, faqs = [] }: { m
 
             {/* Header */}
             <header className="sticky top-0 z-30 border-b border-white/10 bg-[#0b1d3a]/75 backdrop-blur-xl">
-                <div className={cn(WIDTH, 'flex h-16 items-center justify-between gap-4 sm:h-20')}>
-                    <a href="#top" aria-label="Grab Cam Rental" className="flex items-center gap-2.5"><img src="/brand/grabcam-logo.png" alt="" width={256} height={256} className="size-10 sm:size-12" /><Wordmark /></a>
+                <div className={cn(WIDTH, 'flex h-16 items-center justify-between gap-3 sm:h-20')}>
+                    <a href="#top" aria-label="Grab Cam Rental" className="flex min-w-0 items-center gap-2.5"><img src="/brand/grabcam-logo.png" alt="" width={256} height={256} className="size-9 shrink-0 sm:size-12" /><Wordmark /></a>
                     <nav aria-label="Sections" className="hidden items-center gap-7 text-sm text-white/70 md:flex">
                         {[['Cameras', '#cameras'], ['How it works', '#how'], ['Terms', '#terms'], ...(faqs.length ? [['FAQ', '#faq']] : [])].map(([label, href]) => <a key={href} href={href} className="transition hover:text-white">{label}</a>)}
                     </nav>
-                    {chat && <a href={messengerUrl(chat)} target="_blank" rel="noreferrer" className={cn(BTN_LIGHT, 'min-h-10 px-5 text-xs sm:min-h-11 sm:text-sm')}><MessageCircle size={16} aria-hidden /> Message us</a>}
+                    {chat && <a href={messengerUrl(chat)} target="_blank" rel="noreferrer" aria-label="Message us on Messenger" className={cn(BTN_LIGHT, 'min-h-10 shrink-0 px-4 text-xs sm:min-h-11 sm:px-5 sm:text-sm')}><MessageCircle size={16} aria-hidden /> <span className="max-[359px]:sr-only">Message us</span></a>}
                 </div>
             </header>
 
@@ -533,30 +554,30 @@ export default function GrabCam({ models, brands, grabcam, seo, faqs = [] }: { m
                 <BrandArcs className="-top-40 -right-56 -z-10 size-[900px] text-white/[0.035]" />
                 <div aria-hidden className="absolute inset-0 -z-10 bg-[radial-gradient(60%_50%_at_75%_35%,rgba(120,160,230,0.28),transparent_70%),radial-gradient(40%_40%_at_10%_90%,rgba(243,230,201,0.10),transparent_70%)]" />
                 <div aria-hidden className="absolute top-1/3 -left-20 -z-10 h-px w-[140%] -rotate-12 bg-gradient-to-r from-transparent via-white/40 to-transparent blur-[1px]" />
-                <div className={cn(WIDTH, 'grid items-center gap-12 py-14 sm:py-20 lg:grid-cols-[1.05fr_1fr] lg:py-28')}>
+                <div className={cn(WIDTH, 'grid items-center gap-10 py-12 sm:gap-12 sm:py-20 lg:grid-cols-[1.05fr_1fr] lg:py-28')}>
                     <Reveal>
                         <p className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-4 py-1.5 text-xs font-medium tracking-wide text-white/80"><span className="size-1.5 rounded-full bg-emerald-400" aria-hidden /> Open daily, 8:00 AM – 6:00 PM</p>
-                        <h1 className={cn(DISPLAY, 'text-[2.6rem] leading-[1.02] uppercase sm:text-6xl lg:text-7xl')}>
+                        <h1 className={cn(DISPLAY, 'text-[clamp(2.1rem,9vw,4.5rem)] leading-[1.02] text-balance uppercase')}>
                             <span className="block font-extrabold">Rent the camera.</span>
                             <span className="block font-light text-white/90">Keep the moments.</span>
                         </h1>
-                        <p className="mt-6 max-w-lg text-base leading-relaxed text-white/70 sm:text-lg">Canon, Fujifilm, Ricoh, iPhone and DJI, ready for your trip, event or everyday content. The longer you rent, the less you pay per day{freeFrom > 0 ? `, and from ${freeFrom} days you get 1 day free` : ''}.</p>
-                        <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+                        <p className="mt-5 max-w-lg text-[15px] leading-relaxed text-pretty text-white/70 sm:mt-6 sm:text-lg">Canon, Fujifilm, Ricoh, iPhone and DJI, ready for your trip, event or everyday content. The longer you rent, the less you pay per day{freeFrom > 0 ? `, and from ${freeFrom} days you get 1 day free` : ''}.</p>
+                        <div className="mt-7 grid gap-3 min-[420px]:grid-cols-2 sm:mt-8 sm:flex">
                             <a href="#cameras" className={BTN_LIGHT}>Browse cameras <ArrowRight size={16} aria-hidden /></a>
                             <a href="#terms" className={BTN_GHOST}>Rental terms</a>
                         </div>
-                        <dl className="mt-10 grid max-w-lg grid-cols-3 gap-4 border-t border-white/10 pt-6">
+                        <dl className="mt-9 grid max-w-lg grid-cols-3 gap-3 border-t border-white/10 pt-6 sm:mt-10 sm:gap-4">
                             {[[`${models.length}`, 'cameras & devices'], [Number.isFinite(lowest) ? pesoWhole(lowest) : '—', 'per day, from'], ['₱0', 'security deposit']].map(([value, label]) => (
-                                <div key={label}><dt className="sr-only">{label}</dt><dd className={cn(DISPLAY, 'text-2xl font-extrabold sm:text-3xl')}>{value}</dd><p className="mt-0.5 text-xs text-white/55">{label}</p></div>
+                                <div key={label} className="min-w-0"><dt className="sr-only">{label}</dt><dd className={cn(DISPLAY, 'text-[clamp(1.25rem,5.5vw,1.875rem)] font-extrabold')}>{value}</dd><p className="mt-0.5 text-[11px] leading-snug text-white/55 sm:text-xs">{label}</p></div>
                             ))}
                         </dl>
                     </Reveal>
-                    <Reveal delay={150} className="relative mx-auto h-[340px] w-full max-w-[520px] sm:h-[440px]">
+                    <Reveal delay={150} className="relative mx-auto h-[clamp(280px,88vw,440px)] w-full max-w-[520px]">
                         <Print shots={shots} offset={0} caption="point & shoot" className="absolute top-10 left-0 w-[42%] -rotate-[8deg] hover:-rotate-[4deg]" />
                         <Print shots={shots} offset={4} caption="on the go" className="absolute top-14 right-0 w-[42%] rotate-[7deg] hover:rotate-[3deg]" />
                         <Print shots={shots} offset={2} caption="grab cam" className="absolute top-0 left-1/2 z-10 w-[48%] -translate-x-1/2 -rotate-1 hover:rotate-0" />
                         <Paperclip className="absolute top-[-14px] right-[30%] z-20 h-24 w-8 rotate-12 drop-shadow" />
-                        <div className="absolute inset-x-6 bottom-0 z-20 rounded-2xl border border-white/10 bg-[#0c1f3d]/80 p-4 backdrop-blur-md sm:inset-x-10">
+                        <div className="absolute inset-x-2 bottom-0 z-20 rounded-2xl border border-white/10 bg-[#0c1f3d]/85 p-3.5 backdrop-blur-md min-[400px]:inset-x-6 sm:inset-x-10 sm:p-4">
                             <p className="text-xs font-semibold tracking-[0.25em] text-[#f3e6c9] uppercase">Rates per day</p>
                             <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-white/75">
                                 {['1–2 days', '3–5 days', '6 days or more'].map((label, i) => <span key={label} className="inline-flex items-center gap-1.5"><span className={cn('size-2.5 rounded-full', TIER_DOT[i])} aria-hidden />{label}</span>)}
@@ -571,37 +592,39 @@ export default function GrabCam({ models, brands, grabcam, seo, faqs = [] }: { m
                 <div className={WIDTH}>
                     <Reveal><Heading eyebrow="The lineup" bold="Our cameras" light="& availability">Crossed-out days are fully booked. Pick your days to see only the cameras free for all of them.</Heading></Reveal>
 
-                    <Reveal delay={100} className="mt-8 rounded-3xl border border-white/10 bg-white/[0.04] p-4 backdrop-blur sm:p-5">
-                        <div className="flex flex-wrap items-end gap-3">
-                            <label className="flex min-w-0 flex-1 flex-col gap-1.5 text-[11px] font-semibold tracking-[0.2em] text-white/60 uppercase sm:flex-none">Pickup
-                                <input type="date" min={today} value={from} onChange={(e) => { setFrom(e.target.value); if (to && e.target.value >= to) setTo(''); }} className={field} />
-                            </label>
-                            <label className="flex min-w-0 flex-1 flex-col gap-1.5 text-[11px] font-semibold tracking-[0.2em] text-white/60 uppercase sm:flex-none">Return
-                                <input type="date" min={from ? addDays(from, 1) : today} value={to} onChange={(e) => setTo(e.target.value)} className={field} />
-                            </label>
-                            <div className="ml-auto flex items-center rounded-full bg-white/5 ring-1 ring-white/10">
-                                <button type="button" aria-label="Previous month" disabled={month <= today.slice(0, 7)} onClick={() => setMonth(shiftMonth(month, -1))} className="flex size-11 items-center justify-center rounded-full hover:bg-white/10 disabled:opacity-30"><ChevronLeft size={18} /></button>
-                                <p className="min-w-32 text-center text-sm font-semibold" aria-live="polite">{monthLabel(month)}</p>
-                                <button type="button" aria-label="Next month" onClick={() => setMonth(shiftMonth(month, 1))} className="flex size-11 items-center justify-center rounded-full hover:bg-white/10"><ChevronRight size={18} /></button>
+                    <Reveal delay={100} className="mt-8 rounded-[28px] border border-white/10 bg-white/[0.04] p-3 backdrop-blur sm:p-4">
+                        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                            <div className="grid grid-cols-2 gap-3 md:contents">
+                                <DateField label="Pickup" min={today} value={from} onChange={(v) => { setFrom(v); if (to && v >= to) setTo(''); }} />
+                                <DateField label="Return" min={from ? addDays(from, 1) : today} value={to} onChange={setTo} />
+                            </div>
+                            <div className="flex min-h-14 items-center justify-between rounded-2xl bg-white/[0.07] px-1 ring-1 ring-white/15 md:min-w-64">
+                                <button type="button" aria-label="Previous month" disabled={month <= today.slice(0, 7)} onClick={() => setMonth(shiftMonth(month, -1))} className="flex size-11 items-center justify-center rounded-xl hover:bg-white/10 disabled:opacity-30"><ChevronLeft size={18} /></button>
+                                <p className="text-center text-sm font-semibold" aria-live="polite"><span className="block text-[11px] font-semibold tracking-[0.12em] text-white/55 uppercase">Showing</span>{monthLabel(month)}</p>
+                                <button type="button" aria-label="Next month" onClick={() => setMonth(shiftMonth(month, 1))} className="flex size-11 items-center justify-center rounded-xl hover:bg-white/10"><ChevronRight size={18} /></button>
                             </div>
                         </div>
-                        <div role="radiogroup" aria-label="Brand" className="mt-4 flex gap-2 overflow-x-auto pb-1">
+                        {/* Scrolls sideways on a phone with no visible bar and a soft fade at the edge; wraps on wider screens. */}
+                        <div role="radiogroup" aria-label="Brand" className="-mx-3 mt-3 flex snap-x gap-2 overflow-x-auto px-3 pb-0.5 [scrollbar-width:none] [mask-image:linear-gradient(to_right,black_85%,transparent)] sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 sm:[mask-image:none] [&::-webkit-scrollbar]:hidden">
                             {['', ...brands].map((b) => (
                                 <button key={b || 'all'} type="button" role="radio" aria-checked={brand === b} onClick={() => setBrand(b)}
-                                    className={cn('min-h-10 shrink-0 rounded-full px-5 text-sm font-medium transition', brand === b ? 'bg-white text-[#0c1f3d]' : 'bg-white/5 text-white/75 ring-1 ring-white/15 hover:bg-white/10 hover:text-white')}>
+                                    className={cn('min-h-10 shrink-0 snap-start rounded-full px-4 text-sm font-medium transition sm:px-5', brand === b ? 'bg-white text-[#0c1f3d] shadow-[0_8px_20px_-10px_rgba(255,255,255,0.7)]' : 'bg-white/5 text-white/75 ring-1 ring-white/15 hover:bg-white/10 hover:text-white')}>
                                     {b || 'All brands'}
                                 </button>
                             ))}
-                            {(from || to || brand) && <button type="button" onClick={() => { setFrom(''); setTo(''); setBrand(''); }} className="min-h-10 shrink-0 px-3 text-sm font-medium text-[#f3e6c9] underline-offset-4 hover:underline">Clear</button>}
+                            <span aria-hidden className="w-6 shrink-0 sm:hidden" />
                         </div>
                     </Reveal>
 
-                    <p role="status" className="mt-6 text-sm text-white/60">{shown.length} camera{shown.length === 1 ? '' : 's'}{chosen ? ` free from ${shortDate(from)} to ${shortDate(to)}` : ''}</p>
+                    <div className="mt-5 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                        <p role="status" className="text-sm text-white/65"><strong className="font-semibold text-white">{shown.length}</strong> camera{shown.length === 1 ? '' : 's'}{chosen ? ` free from ${shortDate(from)} to ${shortDate(to)}` : brand ? ` by ${brand}` : ''}</p>
+                        {(from || to || brand) && <button type="button" onClick={() => { setFrom(''); setTo(''); setBrand(''); }} className="inline-flex min-h-10 items-center gap-1.5 text-sm font-medium text-[#f3e6c9] underline-offset-4 hover:underline"><X size={14} aria-hidden /> Clear filters</button>}
+                    </div>
 
                     {shown.length === 0 ? (
                         <p className="mt-4 rounded-3xl border border-white/10 bg-white/5 p-10 text-center text-white/70">{models.length === 0 ? 'Our cameras will be listed here soon.' : 'No camera is free for all of those days. Please try other days.'}</p>
                     ) : (
-                        <div className="mt-4 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                        <div className="mt-4 grid gap-5 min-[620px]:grid-cols-2 sm:gap-6 lg:grid-cols-3">
                             {shown.map((m, i) => <Reveal key={m.slug} delay={(i % 3) * 80} className="h-full"><CameraCard model={m} month={month} from={chosen ? from : undefined} to={chosen ? to : undefined} onInquire={() => setOpen(m)} /></Reveal>)}
                         </div>
                     )}
@@ -613,11 +636,11 @@ export default function GrabCam({ models, brands, grabcam, seo, faqs = [] }: { m
                 <BrandArcs className="-bottom-72 -left-72 -z-10 size-[760px] text-white/[0.03]" />
                 <div className={WIDTH}>
                     <Reveal><Heading eyebrow="Easy as 1, 2, 3" bold="How renting" light="works" center /></Reveal>
-                    <ol className="mt-12 grid gap-5 md:grid-cols-3">
+                    <ol className="mt-10 grid gap-4 sm:mt-12 sm:gap-5 md:grid-cols-3">
                         {STEPS.map(([title, body, Icon], i) => (
                             <li key={title}>
                                 <Reveal delay={i * 100} className="h-full">
-                                    <div className="relative h-full rounded-3xl border border-white/10 bg-gradient-to-b from-white/[0.07] to-white/[0.02] p-7">
+                                    <div className="relative h-full rounded-3xl border border-white/10 bg-gradient-to-b from-white/[0.07] to-white/[0.02] p-6 sm:p-7">
                                         <span className={cn(DISPLAY, 'absolute top-5 right-6 text-5xl font-black text-white/[0.06]')} aria-hidden>0{i + 1}</span>
                                         <span className="flex size-12 items-center justify-center rounded-2xl bg-white text-[#0c1f3d]"><Icon size={22} aria-hidden /></span>
                                         <h3 className={cn(DISPLAY, 'mt-5 text-lg font-bold')}>{title}</h3>
@@ -635,10 +658,10 @@ export default function GrabCam({ models, brands, grabcam, seo, faqs = [] }: { m
                 <BrandArcs className="-top-40 -right-64 -z-10 size-[800px] text-white/[0.03]" />
                 <div className={WIDTH}>
                     <Reveal><Heading eyebrow="Before you rent" bold="Terms & conditions" center>Simple rules that keep every camera ready for the next renter.</Heading></Reveal>
-                    <div className="mt-12 columns-1 gap-5 md:columns-2 [&>*]:mb-5">
+                    <div className="mt-10 columns-1 gap-5 sm:mt-12 md:columns-2 [&>*]:mb-4 sm:[&>*]:mb-5">
                         {TERMS.map((t, i) => (
                             <Reveal key={t.title} delay={(i % 2) * 80} className="break-inside-avoid">
-                                <article className="rounded-[28px] bg-white p-6 text-[#0c1f3d] shadow-[0_25px_50px_-30px_rgba(0,0,0,0.7)] sm:p-7">
+                                <article className="rounded-[28px] bg-white p-5 text-[15px] text-[#0c1f3d] shadow-[0_25px_50px_-30px_rgba(0,0,0,0.7)] min-[380px]:p-6 sm:p-7 sm:text-base">
                                     <div className="flex items-start justify-between gap-4">
                                         <h3 className={cn(DISPLAY, 'text-base font-extrabold tracking-wide uppercase sm:text-lg')}>{t.title}</h3>
                                         <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-[#0c1f3d]/5"><t.icon size={22} strokeWidth={1.75} aria-hidden /></span>
@@ -681,12 +704,12 @@ export default function GrabCam({ models, brands, grabcam, seo, faqs = [] }: { m
             {/* Closing call */}
             <section className="pb-16 sm:pb-24">
                 <div className={WIDTH}>
-                    <Reveal className="relative isolate overflow-hidden rounded-[36px] bg-white px-6 py-14 text-center text-[#0c1f3d] sm:px-12">
+                    <Reveal className="relative isolate overflow-hidden rounded-[32px] bg-white px-5 py-12 text-center text-[#0c1f3d] sm:rounded-[36px] sm:px-12 sm:py-14">
                         <BrandArcs className="-top-32 -right-40 -z-10 size-[520px] text-[#0c1f3d]/[0.05]" />
                         <ShieldCheck size={36} className="mx-auto" aria-hidden />
-                        <h2 className={cn(DISPLAY, 'mx-auto mt-4 max-w-2xl text-3xl leading-tight uppercase sm:text-5xl')}><span className="font-extrabold">Your next shot</span> <span className="font-light">starts with a message.</span></h2>
+                        <h2 className={cn(DISPLAY, 'mx-auto mt-4 max-w-2xl text-[clamp(1.6rem,6.5vw,3rem)] leading-tight text-balance uppercase')}><span className="font-extrabold">Your next shot</span> <span className="font-light">starts with a message.</span></h2>
                         <p className="mx-auto mt-4 max-w-md text-slate-500">Tell us the camera and the days. We reply on Facebook and confirm your pickup time.</p>
-                        <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
+                        <div className="mx-auto mt-8 flex max-w-sm flex-col justify-center gap-3 sm:max-w-none sm:flex-row">
                             {chat && <a href={messengerUrl(chat)} target="_blank" rel="noreferrer" className={BTN_NAVY}><MessageCircle size={17} aria-hidden /> Message Grab Cam</a>}
                             <a href="#cameras" className={cn(BTN, 'border border-[#0c1f3d]/20 hover:border-[#0c1f3d]/50')}>See cameras</a>
                         </div>
@@ -696,7 +719,7 @@ export default function GrabCam({ models, brands, grabcam, seo, faqs = [] }: { m
 
             <footer className="border-t border-white/10 py-10">
                 <div className={cn(WIDTH, 'flex flex-col items-center justify-between gap-5 text-sm text-white/55 sm:flex-row')}>
-                    <div className="flex items-center gap-3"><img src="/brand/grabcam-logo.png" alt="" width={256} height={256} className="size-12" /><Wordmark /><span className="hidden border-l border-white/15 pl-3 sm:inline">Open daily, 8:00 AM – 6:00 PM</span></div>
+                    <div className="flex flex-col items-center gap-3 text-center sm:flex-row sm:text-left"><span className="flex items-center gap-3"><img src="/brand/grabcam-logo.png" alt="" width={256} height={256} className="size-11" /><Wordmark /></span><span className="sm:border-l sm:border-white/15 sm:pl-3">Open daily, 8:00 AM – 6:00 PM</span></div>
                     {grabcam.facebook_url && <a href={grabcam.facebook_url} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center gap-2 transition hover:text-white">Grab Cam Rental on Facebook <ArrowRight size={14} aria-hidden /></a>}
                 </div>
             </footer>
