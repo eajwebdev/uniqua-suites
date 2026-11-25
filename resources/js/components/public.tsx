@@ -421,13 +421,30 @@ export function useSuiteFilters() {
 
 const FILTER_LABEL = 'flex min-w-0 flex-col gap-1.5 text-xs font-medium tracking-[0.14em] text-muted uppercase [&>*]:font-normal [&>*]:tracking-normal [&>*]:normal-case';
 
-export function SuiteFilterPanel({ stay, filters, setFilter, properties, types, className }: { stay: ReturnType<typeof useStayDates>; filters: SuiteFilters; setFilter: (key: keyof SuiteFilters, value: string | boolean) => void; properties: any[]; types: any[]; className?: string }) {
+/** The suites' addresses as tabs, so The Loop or Mesaverte is one tap from the list. */
+export function LocationTabs({ value, onChange, properties, counts, className }: { value: string; onChange: (slug: string) => void; properties: any[]; counts: Record<string, number>; className?: string }) {
+    const options = [{ slug: '', name: 'All locations' }, ...properties.filter((p: any) => counts[p.slug])];
+
+    return (
+        <div role="group" aria-label="Location" className={cn('flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none]', className)}>
+            {options.map((p: any) => {
+                const on = value === p.slug;
+
+                return (
+                    <button key={p.slug || 'all'} type="button" aria-pressed={on} onClick={() => onChange(p.slug)} className={cn('flex min-h-11 shrink-0 items-center gap-2 border px-4 text-xs font-medium tracking-[0.14em] whitespace-nowrap uppercase transition-colors', on ? 'border-chocolate bg-chocolate text-ivory' : 'border-line bg-white text-chocolate hover:border-bronze hover:text-bronze')}>
+                        {p.name}
+                        <span className={cn('text-[0.7rem] tracking-normal', on ? 'text-gold' : 'text-muted')}>{p.slug ? counts[p.slug] : counts['']}</span>
+                    </button>
+                );
+            })}
+        </div>
+    );
+}
+
+export function SuiteFilterPanel({ stay, filters, setFilter, types, className }: { stay: ReturnType<typeof useStayDates>; filters: SuiteFilters; setFilter: (key: keyof SuiteFilters, value: string | boolean) => void; types: any[]; className?: string }) {
     return (
         <div className={cn('grid grid-cols-2 items-end gap-x-3 gap-y-4 border border-line bg-white p-4 sm:flex sm:flex-wrap sm:gap-x-5 sm:p-5', className)}>
             <DateFilter stay={stay} bare />
-            <label className={FILTER_LABEL}>Location
-                <Select className="w-full sm:w-auto sm:min-w-44" placeholder="Any" options={properties.map((p: any) => ({ value: p.slug, label: p.name }))} value={filters.location} onChange={(e) => setFilter('location', e.target.value)} />
-            </label>
             <label className={FILTER_LABEL}>Type
                 <Select className="w-full sm:w-auto sm:min-w-36" placeholder="Any" options={types.map((t: any) => ({ value: t.slug, label: t.name }))} value={filters.type} onChange={(e) => setFilter('type', e.target.value)} />
             </label>

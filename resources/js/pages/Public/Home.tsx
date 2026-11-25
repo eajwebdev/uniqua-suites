@@ -1,7 +1,7 @@
 import { Link } from '@inertiajs/react';
 import { CalendarCheck, CalendarX, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { AmenityIcon, BookNow, DateFilter, datesAreFree, Eyebrow, MessageButton, monthLabel, MonthGrid, PAGE_WIDTH, RoomCard, roomMatches, shiftMonth, SuiteFilterPanel, SuitePhoto, SWIPE_CARD, SWIPE_ROW, SwipeHint, todayInManila, useStayDates, useSuiteFilters } from '@/components/public';
+import { AmenityIcon, BookNow, DateFilter, datesAreFree, Eyebrow, LocationTabs, MessageButton, monthLabel, MonthGrid, PAGE_WIDTH, RoomCard, roomMatches, shiftMonth, SuiteFilterPanel, SuitePhoto, SWIPE_CARD, SWIPE_ROW, SwipeHint, todayInManila, useStayDates, useSuiteFilters } from '@/components/public';
 import { cn } from '@/components/ui';
 import { shortDate } from '@/lib/format';
 import PublicLayout from '@/layouts/PublicLayout';
@@ -112,6 +112,12 @@ export default function Home({ rooms, amenities, properties, types, faqs = [] }:
     const hero = photoOf(rooms, 'paris');
     const closing = photoOf(rooms, 'tokyo');
     const narrowed = active || stay.chosen;
+    // What each location tab would show with the other filters and dates as they are.
+    const fitsAllButLocation = everything.filter((room: any) => roomMatches(room, { ...filters, location: '' }) && (!stay.chosen || datesAreFree(room, stay.checkIn, stay.checkOut)));
+    const locationCounts: Record<string, number> = { '': fitsAllButLocation.length };
+    fitsAllButLocation.forEach((room: any) => { locationCounts[room.location_slug] = (locationCounts[room.location_slug] ?? 0) + 1; });
+    // A location with suites keeps its tab at 0, so it does not vanish while dates are chosen.
+    rooms.forEach((room: any) => { locationCounts[room.location_slug] ??= 0; });
 
     const clearAll = () => {
         clearFilters();
@@ -121,7 +127,8 @@ export default function Home({ rooms, amenities, properties, types, faqs = [] }:
     // The same list, narrowed where the guest already is: no trip to another page.
     const showLocation = (slug: string) => {
         setFilter('location', slug);
-        document.getElementById(SUITES_ID)?.scrollIntoView();
+        const smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        document.getElementById(SUITES_ID)?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto' });
     };
 
     return (
@@ -142,11 +149,12 @@ export default function Home({ rooms, amenities, properties, types, faqs = [] }:
 
             <section id={SUITES_ID} className="scroll-mt-16 py-12 sm:py-24">
                 <div className={PAGE_WIDTH}>
-                    <Eyebrow className="mb-3">Our suites</Eyebrow>
+                    <Eyebrow className="mb-3">Our rooms</Eyebrow>
                     <h2 className="font-serif text-4xl font-light sm:text-6xl">Find your suite</h2>
-                    <p className="mt-3 max-w-2xl leading-relaxed text-muted">Choose your dates and only the suites free for your whole stay will show.</p>
+                    <p className="mt-3 max-w-2xl leading-relaxed text-muted">Pick a location, then choose your dates and only the suites free for your whole stay will show.</p>
 
-                    {rooms.length > 0 && <SuiteFilterPanel stay={stay} filters={filters} setFilter={setFilter} properties={properties} types={types} className="mt-6 sm:mt-8" />}
+                    {rooms.length > 0 && <LocationTabs value={filters.location} onChange={(slug) => setFilter('location', slug)} properties={properties} counts={locationCounts} className="mt-6 sm:mt-8" />}
+                    {rooms.length > 0 && <SuiteFilterPanel stay={stay} filters={filters} setFilter={setFilter} types={types} className="mt-3" />}
 
                     {rooms.length > 0 && (
                         <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">

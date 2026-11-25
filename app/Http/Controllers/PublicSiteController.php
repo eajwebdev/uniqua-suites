@@ -77,7 +77,7 @@ class PublicSiteController extends Controller
             'checkoutTime' => Settings::get('pricing.standard_check_out'),
             'telephone' => $contact['phone'] ?? null,
             'email' => $contact['email'] ?? null,
-            'sameAs' => array_values(array_filter([$contact['facebook_url'] ?? null, $contact['instagram_url'] ?? null])) ?: null,
+            'sameAs' => array_values(array_filter([$contact['facebook_url'] ?? null, $contact['instagram_url'] ?? null, $contact['tiktok_url'] ?? null])) ?: null,
             'containsPlace' => $cards->map(fn ($c) => ['@type' => 'Suite', 'name' => $c['name'], 'url' => Seo::url("/suites/{$c['slug']}"), 'occupancy' => ['@type' => 'QuantitativeValue', 'maxValue' => $c['max_guests']]])->values()->all(),
         ], fn ($v) => $v !== null && $v !== []);
     }

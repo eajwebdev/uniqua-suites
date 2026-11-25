@@ -10,6 +10,7 @@ return [
     'contact' => [
         'messenger_url' => env('UNIQA_MESSENGER_URL', 'https://m.me/uniqasuitescdo'),
         'instagram_url' => env('UNIQA_INSTAGRAM_URL'),
+        'tiktok_url' => env('UNIQA_TIKTOK_URL'),
         'facebook_url' => env('UNIQA_FACEBOOK_URL', 'https://www.facebook.com/uniqasuitescdo'),
         'phone' => env('UNIQA_CONTACT_PHONE'),
         'email' => env('UNIQA_CONTACT_EMAIL'),

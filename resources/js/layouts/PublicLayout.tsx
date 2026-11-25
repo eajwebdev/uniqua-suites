@@ -1,29 +1,109 @@
 import { Head, Link, usePage } from '@inertiajs/react';
 import { ChevronRight, Menu, X } from 'lucide-react';
-import { ReactNode, useEffect, useRef, useState } from 'react';
+import { MouseEvent, ReactNode, useEffect, useRef, useState } from 'react';
 import { MessageButton, PAGE_WIDTH } from '@/components/public';
 import { cn } from '@/components/ui';
 
-const NAV = [
-    { label: 'Suites', href: '/#availability' },
-    { label: 'The Loop', href: '/?location=the-loop#availability' },
-    { label: 'Mesaverte', href: '/?location=mesaverte#availability' },
+type NavItem = { label: string; href: string; section?: string };
+
+// A `section` item is a part of the home page: on the home page it scrolls there, elsewhere it opens the home page at it.
+const NAV: NavItem[] = [
+    { label: 'Availability', href: '/#availability', section: 'availability' },
+    { label: 'Our Rooms', href: '/#suites', section: 'suites' },
     { label: 'Policies & FAQ', href: '/policies' },
 ];
+
+const SECTIONS = NAV.flatMap((n) => (n.section ? [n.section] : []));
+const HEADER_PX = 64;
 
 const FOCUSABLE = 'a[href], button:not([disabled])';
 const SWIPE_TO_CLOSE_PX = 60;
 const DESKTOP_MENU = '(min-width: 64rem)';
 
+const pathOf = (url: string) => url.split(/[?#]/)[0] || '/';
+
+/**
+ * The menu item for where the guest is now. On the home page it follows the section being read:
+ * the one crossing a line a third of the way down the screen. A suite's own page belongs to Our Rooms.
+ */
+function useActiveNav(): string | null {
+    const path = pathOf(usePage().url);
+    const [section, setSection] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (path !== '/') {
+            setSection(null);
+            return;
+        }
+        const onScroll = () => {
+            const line = HEADER_PX + (window.innerHeight - HEADER_PX) / 3;
+            setSection(SECTIONS.find((id) => {
+                const box = document.getElementById(id)?.getBoundingClientRect();
+                return !!box && box.top <= line && box.bottom > line;
+            }) ?? null);
+        };
+        onScroll();
+        window.addEventListener('scroll', onScroll, { passive: true });
+        window.addEventListener('resize', onScroll);
+
+        return () => {
+            window.removeEventListener('scroll', onScroll);
+            window.removeEventListener('resize', onScroll);
+        };
+    }, [path]);
+
+    if (path === '/') return NAV.find((n) => n.section && n.section === section)?.href ?? null;
+    if (path.startsWith('/suites')) return '/#suites';
+
+    return NAV.find((n) => !n.section && pathOf(n.href) === path)?.href ?? null;
+}
+
+/** Already on the home page, a section link glides there instead of reloading, and keeps the guest's filters in the address. */
+function scrollToSection(e: MouseEvent, item: NavItem, before?: () => void) {
+    before?.();
+    if (!item.section || window.location.pathname !== '/' || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const target = document.getElementById(item.section);
+    if (!target) return;
+    e.preventDefault();
+    const smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // After the side menu has closed and given the page its scrolling back.
+    setTimeout(() => target.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto' }), 0);
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}#${item.section}`);
+}
+
+const ICON = { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true } as const;
+
+const SOCIALS = [
+    { key: 'facebook_url', label: 'Facebook', icon: <svg {...ICON}><path d="M7 10v4h3v7h4v-7h3l1-4h-4V8a1 1 0 0 1 1-1h3V3h-3a5 5 0 0 0-5 5v2H7" /></svg> },
+    { key: 'tiktok_url', label: 'TikTok', icon: <svg {...ICON}><path d="M21 7.917v4.034a9.948 9.948 0 0 1-5-1.951v4.5a6.5 6.5 0 1 1-8-6.326v4.326a2.5 2.5 0 1 0 4 2V3h4.083A6.005 6.005 0 0 0 21 7.917z" /></svg> },
+    { key: 'instagram_url', label: 'Instagram', icon: <svg {...ICON}><rect x="4" y="4" width="16" height="16" rx="4" /><circle cx="12" cy="12" r="3" /><path d="M16.5 7.5v.01" /></svg> },
+] as const;
+
+/** Only the channels set in the environment file appear. */
+function Socials({ contact, className }: { contact: any; className?: string }) {
+    const links = SOCIALS.filter((s) => contact[s.key]);
+    if (links.length === 0) return null;
+
+    return (
+        <ul className={cn('flex items-center', className)}>
+            {links.map((s) => (
+                <li key={s.key}>
+                    <a href={contact[s.key]} target="_blank" rel="noreferrer" aria-label={`UNIQA SUITES on ${s.label}`} title={s.label} className="flex size-11 items-center justify-center transition-colors hover:text-gold">{s.icon}</a>
+                </li>
+            ))}
+        </ul>
+    );
+}
+
 /**
  * Stays mounted so it can slide out as well as in. While closed it is inert, so its links cannot
  * be reached by keyboard or screen reader. The hamburger sits on the right, so it opens from there.
  */
-function SideMenu({ open, onClose, contact }: { open: boolean; onClose: () => void; contact: any }) {
+function SideMenu({ open, onClose, contact, active }: { open: boolean; onClose: () => void; contact: any; active: string | null }) {
     const panel = useRef<HTMLDivElement>(null);
     const closeButton = useRef<HTMLButtonElement>(null);
     const touchStart = useRef<number | null>(null);
-    const current = usePage().url;
+    const home = pathOf(usePage().url) === '/';
 
     useEffect(() => {
         panel.current?.toggleAttribute('inert', !open);
@@ -57,7 +137,7 @@ function SideMenu({ open, onClose, contact }: { open: boolean; onClose: () => vo
             document.removeEventListener('keydown', onKey);
             wide.removeEventListener('change', onWide);
             document.body.style.overflow = '';
-            opener?.focus?.();
+            opener?.focus?.({ preventScroll: true });
         };
     }, [open]);
 
@@ -83,12 +163,13 @@ function SideMenu({ open, onClose, contact }: { open: boolean; onClose: () => vo
                 </div>
                 <nav aria-label="Mobile" className="flex-1 px-5 py-3">
                     <ul className="divide-y divide-gold/15">
-                        {[{ label: 'Home', href: '/' }, ...NAV].map((n) => {
-                            const here = current === n.href;
+                        {[{ label: 'Home', href: '/' } as NavItem, ...NAV].map((n) => {
+                            // Home is lit only at the top of the home page, before any section is reached.
+                            const here = n.href === '/' ? home && active === null : active === n.href;
 
                             return (
                                 <li key={n.href}>
-                                    <Link href={n.href} onClick={onClose} aria-current={here ? 'page' : undefined} className={cn('flex min-h-14 items-center justify-between gap-3 font-serif text-2xl font-light transition-colors active:text-gold', here && 'text-gold')}>
+                                    <Link href={n.href} onClick={(e) => scrollToSection(e, n, onClose)} aria-current={here ? (n.section ? 'location' : 'page') : undefined} className={cn('relative flex min-h-14 items-center justify-between gap-3 font-serif text-2xl font-light transition-colors active:text-gold', here && 'text-gold before:absolute before:inset-y-3 before:-left-5 before:w-0.5 before:bg-gold')}>
                                         {n.label}
                                         <ChevronRight size={18} strokeWidth={1.25} className="shrink-0 text-gold" aria-hidden />
                                     </Link>
@@ -99,12 +180,7 @@ function SideMenu({ open, onClose, contact }: { open: boolean; onClose: () => vo
                 </nav>
                 <div className="space-y-4 border-t border-gold/20 p-5">
                     <div onClick={onClose}><MessageButton hideIfMissing className="w-full" /></div>
-                    {(contact.messenger_url || contact.facebook_url) && (
-                        <div className="flex justify-center gap-6 text-sm text-beige">
-                            {contact.messenger_url && <a href={contact.messenger_url} target="_blank" rel="noreferrer" className="flex min-h-11 items-center">Messenger</a>}
-                            {contact.facebook_url && <a href={contact.facebook_url} target="_blank" rel="noreferrer" className="flex min-h-11 items-center">Facebook</a>}
-                        </div>
-                    )}
+                    <Socials contact={contact} className="justify-center gap-3 text-beige" />
                 </div>
             </div>
         </div>
@@ -142,6 +218,7 @@ function StickyBook({ targetId }: { targetId: string }) {
 export default function PublicLayout({ title, description, stickyBookFor, children }: { title?: string; description: string; stickyBookFor?: string; children: ReactNode }) {
     const { contact, seo } = usePage<any>().props as any;
     const [open, setOpen] = useState(false);
+    const active = useActiveNav();
     // The server's search title and description win, so crawlers and the browser agree.
     const fullTitle = seo?.title ?? (title ? `${title} | UNIQA SUITES` : 'UNIQA SUITES');
     const summary = seo?.description ?? description;
@@ -157,16 +234,25 @@ export default function PublicLayout({ title, description, stickyBookFor, childr
             <header className="sticky top-0 z-30 border-b border-gold/20 bg-chocolate text-ivory">
                 <div className={cn(PAGE_WIDTH, 'flex h-16 items-center justify-between gap-3')}>
                     <Link href="/" aria-label="UNIQA SUITES home" className="flex min-h-11 shrink-0 items-center"><img src="/brand/uniqa-wordmark.png" alt="UNIQA SUITES" className="h-8 w-auto sm:h-12" /></Link>
-                    <nav aria-label="Main" className="hidden items-center gap-8 text-xs font-medium tracking-[0.18em] uppercase lg:flex">
-                        {NAV.map((n) => <Link key={n.href} href={n.href} className="transition-colors hover:text-gold">{n.label}</Link>)}
+                    <nav aria-label="Main" className="hidden h-full items-stretch gap-8 text-xs font-medium tracking-[0.18em] uppercase lg:flex">
+                        {NAV.map((n) => {
+                            const here = active === n.href;
+
+                            return (
+                                <Link key={n.href} href={n.href} onClick={(e) => scrollToSection(e, n)} aria-current={here ? (n.section ? 'location' : 'page') : undefined} className={cn('relative flex items-center transition-colors hover:text-gold after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:origin-center after:bg-gold after:transition-transform after:duration-300', here ? 'text-gold after:scale-x-100' : 'after:scale-x-0')}>
+                                    {n.label}
+                                </Link>
+                            );
+                        })}
                     </nav>
                     <div className="flex items-center gap-2">
+                        <Socials contact={contact} className="-mr-1 text-beige max-lg:hidden" />
                         <MessageButton tone="outline" small hideIfMissing className="max-md:hidden" />
                         <button type="button" className="-mr-2 flex size-11 items-center justify-center lg:hidden" aria-label="Open menu" aria-haspopup="dialog" aria-expanded={open} aria-controls="side-menu" onClick={() => setOpen(true)}><Menu size={24} strokeWidth={1.5} aria-hidden /></button>
                     </div>
                 </div>
             </header>
-            <SideMenu open={open} onClose={() => setOpen(false)} contact={contact} />
+            <SideMenu open={open} onClose={() => setOpen(false)} contact={contact} active={active} />
             <main id="main" tabIndex={-1} className="flex-1 outline-none">{children}</main>
             {stickyBookFor && <StickyBook targetId={stickyBookFor} />}
             <footer className={cn('border-t border-gold/20 bg-chocolate text-beige', stickyBookFor && 'max-md:pb-20')}>
@@ -178,7 +264,7 @@ export default function PublicLayout({ title, description, stickyBookFor, childr
                     <div>
                         <h2 className="mb-3 text-xs font-medium tracking-[0.22em] text-gold uppercase">Explore</h2>
                         <ul className="space-y-2">
-                            {NAV.map((n) => <li key={n.href}><Link href={n.href} className="inline-block transition-colors hover:text-gold pointer-coarse:py-3">{n.label}</Link></li>)}
+                            {NAV.map((n) => <li key={n.href}><Link href={n.href} onClick={(e) => scrollToSection(e, n)} className="inline-block transition-colors hover:text-gold pointer-coarse:py-3">{n.label}</Link></li>)}
                             <li><Link href="/policies#privacy" className="inline-block transition-colors hover:text-gold pointer-coarse:py-3">Privacy notice</Link></li>
                         </ul>
                     </div>
@@ -188,6 +274,7 @@ export default function PublicLayout({ title, description, stickyBookFor, childr
                             {contact.messenger_url && <li><a href={contact.messenger_url} target="_blank" rel="noreferrer" className="inline-block transition-colors hover:text-gold pointer-coarse:py-3">Messenger</a></li>}
                             {contact.instagram_url && <li><a href={contact.instagram_url} target="_blank" rel="noreferrer" className="inline-block transition-colors hover:text-gold pointer-coarse:py-3">Instagram</a></li>}
                             {contact.facebook_url && <li><a href={contact.facebook_url} target="_blank" rel="noreferrer" className="inline-block transition-colors hover:text-gold pointer-coarse:py-3">Facebook</a></li>}
+                            {contact.tiktok_url && <li><a href={contact.tiktok_url} target="_blank" rel="noreferrer" className="inline-block transition-colors hover:text-gold pointer-coarse:py-3">TikTok</a></li>}
                             {contact.phone && <li>{contact.phone}</li>}
                             {contact.email && <li>{contact.email}</li>}
                             {!contact.messenger_url && !contact.phone && !contact.email && <li>Official contact details coming soon.</li>}
