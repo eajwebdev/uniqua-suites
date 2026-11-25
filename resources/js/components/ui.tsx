@@ -75,6 +75,8 @@ export type FieldDef = {
     help?: string;
     default?: any;
     accept?: string;
+    /** File fields only: pick several files at once; the value becomes File[]. */
+    multiple?: boolean;
 };
 
 // 16px on touch screens: iPhones zoom the whole page when focusing anything smaller.
@@ -252,7 +254,15 @@ export function DynamicField({ field, value, error, onChange }: { field: FieldDe
     let control: ReactNode;
     if (type === 'textarea') control = <textarea {...common} rows={3} className={inputClass} value={value ?? ''} onChange={(e) => onChange(e.target.value)} />;
     else if (type === 'select') control = <Select {...common} placeholder={field.required ? 'Select…' : 'None'} options={field.options ?? []} value={value ?? ''} onChange={(e) => onChange(e.target.value)} />;
-    else if (type === 'file') control = <input {...common} type="file" accept={field.accept ?? 'image/*,application/pdf'} className="w-full text-sm" onChange={(e) => onChange(e.target.files?.[0] ?? null)} />;
+    else if (type === 'file' && field.multiple) {
+        const files: File[] = Array.isArray(value) ? value : [];
+        control = (
+            <>
+                <input {...common} type="file" multiple accept={field.accept ?? 'image/*,application/pdf'} className="w-full text-sm" onChange={(e) => onChange(Array.from(e.target.files ?? []))} />
+                {files.length > 0 && <span className="mt-1 block text-xs text-muted">{files.length} file{files.length === 1 ? '' : 's'} selected</span>}
+            </>
+        );
+    } else if (type === 'file') control = <input {...common} type="file" accept={field.accept ?? 'image/*,application/pdf'} className="w-full text-sm" onChange={(e) => onChange(e.target.files?.[0] ?? null)} />;
     else {
         const htmlType = type === 'money' ? 'text' : type === 'datetime' ? 'datetime-local' : type;
         control = <Input {...common} type={htmlType} inputMode={type === 'money' ? 'decimal' : undefined} pattern={type === 'money' ? '\\d+(\\.\\d{1,2})?' : undefined} value={value ?? ''} onChange={(e) => onChange(e.target.value)} />;
@@ -349,6 +359,15 @@ export function confirmDialog(options: ConfirmOptions): Promise<boolean> {
     });
 }
 
+/** A field's error, or the first one for one of its items (images.2 belongs to images). */
+function fieldError(errors: Record<string, string>, name: string): string | undefined {
+    if (errors[name]) return errors[name];
+    const key = Object.keys(errors).find((k) => k.startsWith(`${name}.`));
+    if (!key) return undefined;
+    const index = Number(key.slice(name.length + 1));
+    return Number.isInteger(index) ? `File ${index + 1}: ${errors[key].replace(/^The [\w.\s]+ field/, 'It')}` : errors[key];
+}
+
 /** Server-driven form: fields come from the controller, validation errors come back per field. */
 export function FormModal({ title, url, fields, data, submitLabel, confirm, onClose }: { title: string; url: string; fields: FieldDef[]; data?: Record<string, any>; submitLabel?: string; confirm?: string; onClose: () => void }) {
     const initial = Object.fromEntries(fields.map((f) => [f.name, f.default ?? (f.type === 'checkbox' ? false : '')]));
@@ -377,7 +396,7 @@ export function FormModal({ title, url, fields, data, submitLabel, confirm, onCl
         <Modal open title={title} onClose={onClose}>
             <form ref={formRef} onSubmit={submit} className="space-y-3">
                 {fields.map((f) => (
-                    <DynamicField key={f.name} field={f} value={form.data[f.name]} error={(form.errors as any)[f.name]} onChange={(v) => form.setData(f.name, v)} />
+                    <DynamicField key={f.name} field={f} value={form.data[f.name]} error={fieldError(form.errors as Record<string, string>, f.name)} onChange={(v) => form.setData(f.name, v)} />
                 ))}
                 <div className="flex justify-end gap-2 pt-2">
                     <Button onClick={onClose}>Cancel</Button>

@@ -248,11 +248,24 @@ class RoomController extends Controller
 
     public function addImage(Request $request, Room $room)
     {
-        $data = $request->validate(['image' => 'required|image|mimes:jpg,jpeg,png,webp|max:8192', 'alt_text' => 'required|string|max:160']);
-        $path = $request->file('image')->store("rooms/{$room->id}", 'public');
-        $room->images()->create(['path' => $path, 'alt_text' => $data['alt_text'], 'position' => $room->images()->count()]);
+        // Several photos under one description; a single 'image' is still accepted.
+        $files = $request->file('images') ?? ($request->hasFile('image') ? [$request->file('image')] : null);
+        $data = validator(['images' => $files, 'alt_text' => $request->input('alt_text')], [
+            'images' => 'required|array|min:1|max:20',
+            'images.*' => 'image|mimes:jpg,jpeg,png,webp|max:8192',
+            'alt_text' => 'required|string|max:160',
+        ], [
+            'images.required' => 'Choose at least one photo.',
+            'images.max' => 'Upload up to 20 photos at a time.',
+        ])->validate();
 
-        return back()->with('success', 'Photo added.');
+        $position = $room->images()->count();
+        foreach ($data['images'] as $file) {
+            $room->images()->create(['path' => $file->store("rooms/{$room->id}", 'public'), 'alt_text' => $data['alt_text'], 'position' => $position++]);
+        }
+        $count = count($data['images']);
+
+        return back()->with('success', $count === 1 ? 'Photo added.' : "{$count} photos added.");
     }
 
     public function deleteImage(RoomImage $image)

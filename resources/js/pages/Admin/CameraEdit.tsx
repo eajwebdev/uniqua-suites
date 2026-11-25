@@ -79,9 +79,9 @@ export default function CameraEdit({ room, images, rates, blocks, defaultImage, 
                     </Card>
 
                     <Card title="Photos" action={
-                        <ActionButton action={{ label: 'Add photo', url: `/admin/rooms/${room.id}/images`, fields: [
-                            { name: 'image', label: 'Photo of this camera', type: 'file', required: true, accept: 'image/*' },
-                            { name: 'alt_text', label: 'Description for screen readers', type: 'text', required: true },
+                        <ActionButton action={{ label: 'Add photos', url: `/admin/rooms/${room.id}/images`, fields: [
+                            { name: 'images', label: 'Photos of this camera', type: 'file', multiple: true, required: true, accept: 'image/*', help: 'Select one or more photos (up to 20, 8 MB each).' },
+                            { name: 'alt_text', label: 'Title / description', type: 'text', required: true, help: 'Used for every photo in this upload, e.g. "Front view".' },
                         ] }} />
                     }>
                         {images.length === 0 ? (

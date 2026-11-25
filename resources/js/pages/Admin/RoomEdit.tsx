@@ -154,9 +154,9 @@ export default function RoomEdit({ room, images, rates, overrides, blocks, sourc
                     </Card>
 
                     <Card title="Photos" action={
-                        <ActionButton action={{ label: 'Add photo', url: `/admin/rooms/${room.id}/images`, fields: [
-                            { name: 'image', label: 'Real room photo', type: 'file', required: true, accept: 'image/*' },
-                            { name: 'alt_text', label: 'Description for screen readers', type: 'text', required: true },
+                        <ActionButton action={{ label: 'Add photos', url: `/admin/rooms/${room.id}/images`, fields: [
+                            { name: 'images', label: 'Real room photos', type: 'file', multiple: true, required: true, accept: 'image/*', help: 'Select one or more photos (up to 20, 8 MB each).' },
+                            { name: 'alt_text', label: 'Title / description', type: 'text', required: true, help: 'Used for every photo in this upload, e.g. "Bedroom".' },
                         ] }} />
                     }>
                         {images.length === 0 ? <Empty>No photos. The public page shows no image until real ones are uploaded.</Empty> : (

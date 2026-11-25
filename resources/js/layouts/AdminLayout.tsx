@@ -10,6 +10,10 @@ import { Button, cn, CopyButton, Modal } from '@/components/ui';
 
 const CATEGORIES = [['suites', 'Suites'], ['cameras', 'Cameras']] as const;
 
+// VITE_HIDE_CAMERAS=true in .env hides the Suites/Cameras switch, e.g. for a suites-only recording.
+// Nothing else changes, and the switch still shows while Cameras is selected so you can get back.
+const HIDE_CAMERAS = import.meta.env.VITE_HIDE_CAMERAS === 'true';
+
 // Pages that belong to one business only. They stay, hidden from the menu while the other business is selected.
 // Keep in step with App\Support\AdminCategory.
 const SUITES_ONLY = ['/admin/quotes', '/admin/housekeeping', '/admin/laundry', '/admin/parking', '/admin/inventory', '/admin/advances', '/admin/imports'];
@@ -343,7 +347,7 @@ export default function AdminLayout({ title, heading, subtitle, showSection = tr
 
     const nav = (rail: boolean) => (
         <nav aria-label="Main" className={cn('sidebar-scroll flex-1 overflow-y-auto py-2', rail ? 'sidebar-scroll-hidden px-2' : 'px-3')}>
-            {!rail && <CategorySwitch value={business} />}
+            {!rail && !(HIDE_CAMERAS && business === 'suites') && <CategorySwitch value={business} />}
             {groups.map((g) => (
                 <div key={g.label} className="mb-3 last:mb-0">
                     {groups.length > 1 && (rail ? <div className="mx-2 mb-2 border-t border-espresso first:hidden" aria-hidden /> : <p className="px-3 pb-1 text-[11px] font-medium tracking-wider text-gold uppercase">{g.label}</p>)}
