@@ -34,3 +34,4 @@ Thumbs.db
 # Demo video data (local only)
 /database/seeders/ConflictDemoSeeder.php
 /demo-video-script.md
+/tests/Feature/ConflictDemoSeederScratchTest.php
