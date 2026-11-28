@@ -107,7 +107,7 @@ class FinanceController extends Controller
         }
 
         // The booking row is locked, so two quick clicks are checked one after the other and the second sees the first.
-        DB::transaction(function () use ($request, $data, $cents, $receivedAt, $reference) {
+        $booking = DB::transaction(function () use ($request, $data, $cents, $receivedAt, $reference) {
             // A parking payment belongs to the parking's booking, whatever reference was typed.
             $parking = ! empty($data['parking_assignment_id']) ? \App\Models\ParkingAssignment::findOrFail($data['parking_assignment_id']) : null;
             $bookingId = $parking ? $parking->booking_id : null;
@@ -141,7 +141,14 @@ class FinanceController extends Controller
             if ($warnings) {
                 Audit::log('receipt.warning_confirmed', $receipt, ['warnings' => array_values($warnings)]);
             }
+
+            return $booking;
         });
+
+        // A payment counts only once someone verifies it, so whoever can is told now.
+        \App\Support\SystemNotice::toPermission('payments.verify',
+            Money::format($cents).' '.str_replace('_', ' ', $data['method']).' payment'.($booking ? " for {$booking->reference}" : '').' needs verifying.',
+            '/admin/payments?status=pending', 'approvals', except: $request->user()->id);
 
         return back()->with('success', 'Payment recorded. It counts toward the balance once it is verified.');
     }
@@ -164,7 +171,11 @@ class FinanceController extends Controller
     public function storeRefund(Request $request)
     {
         $data = $request->validate(['booking_id' => 'required|exists:bookings,id', 'amount' => ['required', Money::RULE], 'reason' => 'required|string|max:255']);
-        $this->finance->requestRefund(Booking::findOrFail($data['booking_id']), Money::cents($data['amount']), $data['reason']);
+        $booking = Booking::findOrFail($data['booking_id']);
+        $this->finance->requestRefund($booking, Money::cents($data['amount']), $data['reason']);
+        \App\Support\SystemNotice::toPermission('refunds.approve',
+            'Refund of '.Money::format(Money::cents($data['amount']))." for {$booking->reference} needs approval.",
+            "/admin/bookings/{$booking->id}", 'approvals', except: $request->user()->id);
 
         return back()->with('success', 'Refund requested. It needs owner approval; nothing has been paid.');
     }

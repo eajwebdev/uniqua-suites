@@ -29,85 +29,70 @@ class RoomController extends Controller
     {
     }
 
+    /**
+     * One card per suite or camera, made for a phone or tablet: what it is doing today, its status,
+     * and the everyday actions (publish, block dates, change status) without opening the full editor.
+     */
     public function index(Request $request)
     {
         $user = $request->user();
-        $rooms = AdminCategory::rooms(Room::query())->with(['property:id,name', 'type:id,name', 'rateRules' => fn ($q) => $q->orderByDesc('effective_from')])->orderBy('id')->get();
+        $cameras = AdminCategory::isCameras();
+        $today = Local::today();
+        $rooms = AdminCategory::rooms(Room::query())
+            ->with(['property:id,name', 'type:id,name', 'images:id,room_id,path', 'rateRules' => fn ($q) => $q->orderByDesc('effective_from')])
+            ->orderBy('property_id')->orderBy('id')->get();
+        $states = app(\App\Domain\Rooms\RoomBoard::class)->states($rooms, $today);
 
-        if (AdminCategory::isCameras()) {
-            return Inertia::render('Admin/Resource', [
-                'title' => 'Cameras',
-                'subtitle' => 'Each physical camera is a unit. Open one to add photos or take it out of service. Rates are per model, under Camera Rates.',
-                'headerLink' => ['label' => 'Camera Rates', 'href' => '/admin/camera-rates'],
-                'create' => $user->can('rooms.manage') ? ['label' => 'Add camera unit', 'url' => '/admin/cameras', 'fields' => [
-                    ['name' => 'room_type_id', 'label' => 'Model', 'type' => 'select', 'required' => true, 'options' => \App\Models\RoomType::whereHas('rooms', fn ($r) => $r->cameras())->orderBy('name')->get()->map(fn ($t) => ['value' => $t->id, 'label' => $t->name])->all()],
-                    ['name' => 'unit_code', 'label' => 'Unit code', 'type' => 'text', 'required' => true, 'help' => 'A short label staff use for this physical camera, such as N or O.'],
-                    ['name' => 'specs', 'label' => 'Kit or specs', 'type' => 'text'],
-                ], 'help' => 'For a new model with its own rates, use Add camera model on Camera Rates.'] : null,
-                'columns' => [
-                    ['key' => 'name', 'label' => 'Camera', 'type' => 'link'],
-                    ['key' => 'unit', 'label' => 'Unit'],
-                    ['key' => 'type', 'label' => 'Model'],
-                    ['key' => 'specs', 'label' => 'Kit'],
-                    ['key' => 'photos', 'label' => 'Photos'],
-                    ['key' => 'published', 'label' => 'Public', 'type' => 'status'],
-                    ['key' => 'status', 'label' => 'Status', 'type' => 'status'],
-                ],
-                'rows' => $rooms->loadCount('images')->map(fn ($r) => [
-                    'id' => $r->id,
-                    'name' => $user->can('rooms.manage') ? ['label' => $r->name, 'href' => "/admin/rooms/{$r->id}/edit"] : ['label' => $r->name],
-                    'unit' => $r->unit_code,
-                    'type' => $r->type->name,
-                    'specs' => $r->specs,
-                    'photos' => $r->images_count ?: 'Default image',
-                    'published' => $r->is_published ? 'published' : 'unpublished',
-                    'status' => $r->operational_status,
-                    '_actions' => $user->can('rooms.manage') ? [['label' => $r->is_published ? 'Unpublish' : 'Publish', 'url' => "/admin/rooms/{$r->id}/publish"]] : [],
-                ]),
-            ]);
-        }
-
-        return Inertia::render('Admin/Resource', [
-            'title' => 'Rooms & Properties',
-            'subtitle' => 'Proposed from the room list and suite flyers. Check each room, then approve it before publishing.',
-            'columns' => [
-                ['key' => 'name', 'label' => 'Suite', 'type' => 'link'],
-                ['key' => 'unit', 'label' => 'Unit'],
-                ['key' => 'property', 'label' => 'Location'],
-                ['key' => 'type', 'label' => 'Type'],
-                ['key' => 'capacity', 'label' => 'Incl. / max'],
-                ['key' => 'weekday', 'label' => 'Weekday', 'type' => 'money'],
-                ['key' => 'weekend', 'label' => 'Weekend', 'type' => 'money'],
-                ['key' => 'catalog', 'label' => 'Catalog', 'type' => 'status'],
-                ['key' => 'published', 'label' => 'Public', 'type' => 'status'],
-                ['key' => 'housekeeping', 'label' => 'Housekeeping', 'type' => 'status'],
-            ],
-            'rows' => $rooms->map(function ($r) use ($user) {
-                $rule = $r->rateRules->first(fn ($x) => $x->effective_from->toDateString() <= Local::today());
-                $actions = [];
-                if ($user->can('rooms.manage')) {
-                    if ($r->catalog_status !== 'approved') {
-                        $actions[] = ['label' => 'Approve', 'url' => "/admin/rooms/{$r->id}/approve", 'confirm' => "Approve {$r->name}'s details and rates as current?"];
-                    }
-                    $actions[] = ['label' => $r->is_published ? 'Unpublish' : 'Publish', 'url' => "/admin/rooms/{$r->id}/publish"];
-                }
+        return Inertia::render('Admin/Rooms', [
+            'business' => $cameras ? 'cameras' : 'suites',
+            'rooms' => $rooms->map(function (Room $r) use ($states, $today) {
+                $rule = $r->rateRules->first(fn ($x) => $x->effective_from->toDateString() <= $today);
+                $photo = $r->images->first();
 
                 return [
                     'id' => $r->id,
-                    'name' => $user->can('rooms.manage') ? ['label' => $r->name, 'href' => "/admin/rooms/{$r->id}/edit"] : ['label' => $r->name],
+                    'name' => $r->name,
                     'unit' => $r->unit_code,
                     'property' => $r->property->name,
                     'type' => $r->type->name,
-                    'capacity' => "{$r->included_guests} / {$r->max_guests}",
-                    'weekday' => $rule ? (int) $rule->weekday_cents : null,
-                    'weekend' => $rule ? (int) $rule->weekend_cents : null,
+                    'photo' => $photo ? '/storage/'.$photo->path : null,
+                    'photos' => $r->images->count(),
+                    'specs' => $r->specs,
+                    'included_guests' => $r->included_guests,
+                    'max_guests' => $r->max_guests,
+                    'weekday_cents' => $rule ? (int) $rule->weekday_cents : null,
+                    'weekend_cents' => $rule ? (int) $rule->weekend_cents : null,
                     'catalog' => $r->catalog_status,
-                    'published' => $r->is_published ? 'published' : 'unpublished',
+                    'published' => (bool) $r->is_published,
                     'housekeeping' => $r->housekeeping_status,
-                    '_actions' => $actions,
-                ];
+                    'operational' => $r->operational_status,
+                ] + ($states[$r->id] ?? ['state' => 'vacant', 'stay' => null, 'next' => null]);
             }),
+            'can' => ['manage' => $user->can('rooms.manage'), 'block' => $user->can('bookings.manage'), 'bookings' => $user->can('bookings.view')],
+            'checkOutTime' => \App\Support\Settings::get('pricing.standard_check_out'),
+            'create' => $cameras && $user->can('rooms.manage') ? ['label' => 'Add camera unit', 'url' => '/admin/cameras', 'fields' => [
+                ['name' => 'room_type_id', 'label' => 'Model', 'type' => 'select', 'required' => true, 'options' => \App\Models\RoomType::whereHas('rooms', fn ($r) => $r->cameras())->orderBy('name')->get()->map(fn ($t) => ['value' => $t->id, 'label' => $t->name])->all()],
+                ['name' => 'unit_code', 'label' => 'Unit code', 'type' => 'text', 'required' => true, 'help' => 'A short label staff use for this physical camera, such as N or O. For a new model with its own rates, use Add camera model on Camera Rates.'],
+                ['name' => 'specs', 'label' => 'Kit or specs', 'type' => 'text'],
+            ]] : null,
         ]);
+    }
+
+    /** The one-tap status change from a room's card. The full editor keeps the history the same way. */
+    public function setStatus(Request $request, Room $room)
+    {
+        $data = $request->validate(['operational_status' => 'required|in:active,maintenance,retired']);
+        if ($data['operational_status'] !== $room->operational_status) {
+            RoomStatusEvent::create(['room_id' => $room->id, 'dimension' => 'operational', 'from_status' => $room->operational_status, 'to_status' => $data['operational_status'], 'user_id' => $request->user()->id, 'created_at' => now()]);
+            $room->update($data);
+            Audit::log($room->isCamera() ? 'camera.updated' : 'room.updated', $room, ['operational_status' => $data['operational_status']]);
+        }
+
+        return back()->with('success', match ($data['operational_status']) {
+            'active' => "{$room->name} is back in service.",
+            'maintenance' => "{$room->name} is marked as in maintenance.",
+            default => "{$room->name} is retired.",
+        });
     }
 
     public function edit(Request $request, Room $room)

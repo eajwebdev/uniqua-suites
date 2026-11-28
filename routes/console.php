@@ -28,6 +28,10 @@ Artisan::command('uniqa:expire-holds', function (BookingService $bookings) {
     $this->info("Expired {$count} hold(s).");
 })->purpose('Release lapsed booking holds');
 
+Artisan::command('uniqa:checkout-reminders', function (\App\Domain\Bookings\CheckoutReminders $reminders) {
+    $this->info('Check-out reminders sent: '.$reminders->send());
+})->purpose('Remind staff a few hours before a guest checks out or a camera is due back');
+
 Artisan::command('uniqa:daily-alerts', function () {
     $lead = (int) Settings::get('alerts.arrival_lead_days');
     $when = $lead === 1 ? 'tomorrow' : "in {$lead} days";
@@ -101,6 +105,8 @@ Artisan::command('uniqa:doctor', function () {
     $check('Frontend is built', is_file(public_path('build/manifest.json')), 'Run npm run build.');
     $check('Development server marker is absent', ! is_file(public_path('hot')), 'Delete public/hot.', $production);
     $check('Public storage is linked', file_exists(public_path('storage')), 'Run php artisan storage:link.');
+    $check('Alert keys are set (phone and desktop alerts)', \App\Support\Push::configured(), 'Run php artisan uniqa:push-keys, then php artisan config:clear.', false);
+    $check('This server can encrypt alerts (OpenSSL)', \App\Support\Push::canEncrypt(), 'OpenSSL cannot make keys. On Windows, point OPENSSL_CONF at C:\\xampp\\php\\extras\\ssl\\openssl.cnf and restart Apache.', false);
 
     try {
         DB::connection()->getPdo();
@@ -144,6 +150,41 @@ if (str_ends_with((string) config('database.connections.'.config('database.defau
     require __DIR__.'/simulation-console.php';
 }
 
+Artisan::command('uniqa:push-keys {--force : Replace keys already set. Every device must then turn alerts on again.}', function () {
+    $env = base_path('.env');
+    if (\App\Support\Push::configured() && ! $this->option('force')) {
+        $this->info('Alert keys are already set. Nothing changed.');
+
+        return 0;
+    }
+    if (! \App\Support\Push::canEncrypt()) {
+        $this->error('OpenSSL cannot make keys on this server. On Windows, set OPENSSL_CONF to C:\\xampp\\php\\extras\\ssl\\openssl.cnf and try again.');
+
+        return 1;
+    }
+    $keys = \Minishlink\WebPush\VAPID::createVapidKeys();
+    $lines = ['VAPID_PUBLIC_KEY' => $keys['publicKey'], 'VAPID_PRIVATE_KEY' => $keys['privateKey']];
+
+    if (! is_writable($env)) {
+        $this->warn('.env cannot be written here. Add these two lines to it yourself:');
+        foreach ($lines as $name => $value) {
+            $this->line("{$name}={$value}");
+        }
+
+        return 0;
+    }
+    $text = file_get_contents($env);
+    foreach ($lines as $name => $value) {
+        $text = preg_match("/^{$name}=.*$/m", $text)
+            ? preg_replace("/^{$name}=.*$/m", "{$name}={$value}", $text)
+            : rtrim($text)."\n{$name}={$value}\n";
+    }
+    file_put_contents($env, $text);
+    $this->info('Alert keys saved to .env. Run php artisan config:clear if the configuration is cached.');
+
+    return 0;
+})->purpose('Make the keys that sign alerts sent to staff phones, tablets and computers');
+
 Artisan::command('uniqa:subscription-check', function () {
     Subscription::ensureBill(); // the next month's bill always exists before anyone is reminded
     $sent = Subscription::remind();
@@ -151,6 +192,7 @@ Artisan::command('uniqa:subscription-check', function () {
 })->purpose('Remind the Owner and Administrator in the bell before and after the subscription ends');
 
 Schedule::command('uniqa:expire-holds')->everyMinute()->withoutOverlapping();
+Schedule::command('uniqa:checkout-reminders')->everyFiveMinutes()->withoutOverlapping();
 Schedule::command('uniqa:subscription-check')->dailyAt('07:05')->timezone(config('uniqa.display_timezone'));
 Schedule::command('uniqa:daily-alerts')->dailyAt('07:00')->timezone(config('uniqa.display_timezone'));
 Schedule::command('uniqa:month-end')->monthlyOn(1, '07:30')->timezone(config('uniqa.display_timezone'));

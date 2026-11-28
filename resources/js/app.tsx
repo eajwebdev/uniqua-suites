@@ -1,6 +1,8 @@
 import { createInertiaApp, router } from '@inertiajs/react';
 import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers';
 import { createRoot } from 'react-dom/client';
+// Listens from the first moment for the browser's one-time offer to install the staff app.
+import '@/lib/pwa';
 
 // Page changes here happen without a reload, so screen reader and keyboard users are moved
 // to the new content. Filters that stay on the same page keep focus where it is.

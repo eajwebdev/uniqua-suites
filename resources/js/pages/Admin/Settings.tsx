@@ -196,6 +196,7 @@ export default function Settings({ settings: s, decisions, templates, placeholde
         house_rules: s.house_rules ?? '',
         cancellation: s.cancellation ?? '',
         arrival_lead_days: s.arrival_lead_days,
+        checkout_lead_hours: s.checkout_lead_hours,
     });
     const e = form.errors as any;
     const set = (k: string) => (ev: any) => form.setData(k, ev.target.value);
@@ -231,6 +232,7 @@ export default function Settings({ settings: s, decisions, templates, placeholde
                         <Field label="Minimum stay (nights)" error={e.min_nights} help="Blank means no minimum. A room can set its own."><Input type="number" min={1} value={form.data.min_nights} onChange={set('min_nights')} /></Field>
                         <Field label="Book at most this many days ahead" error={e.max_advance_days} help="Blank means no limit. A room can set its own."><Input type="number" min={1} value={form.data.max_advance_days} onChange={set('max_advance_days')} /></Field>
                         <Field label="Arrival reminder (days before)" error={e.arrival_lead_days}><Input type="number" min={1} max={14} value={form.data.arrival_lead_days} onChange={set('arrival_lead_days')} /></Field>
+                        <Field label="Check-out reminder (hours before)" error={e.checkout_lead_hours} help="Front desk and housekeeping get an alert this long before a guest checks out or a camera is due back."><Input type="number" min={1} max={12} value={form.data.checkout_lead_hours} onChange={set('checkout_lead_hours')} /></Field>
                     </div>
                     <div className="grid gap-3 lg:grid-cols-2">
                         <Field label="Cancellation policy" error={e.cancellation} help="Shown on the public policies page once written. Blank shows nothing."><textarea rows={3} className="w-full rounded-md border border-line px-3 py-2 text-sm pointer-coarse:text-base" value={form.data.cancellation} onChange={set('cancellation')} /></Field>

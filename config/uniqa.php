@@ -16,6 +16,15 @@ return [
         'email' => env('UNIQA_CONTACT_EMAIL'),
     ],
 
+    // Alerts on staff phones, tablets and computers (Web Push). Make the keys once with: php artisan uniqa:push-keys
+    // Changing the keys stops every device's alerts until each person turns them on again.
+    'push' => [
+        'public_key' => env('VAPID_PUBLIC_KEY'),
+        'private_key' => env('VAPID_PRIVATE_KEY'),
+        // Push services contact this if alerts misbehave: an https:// address or mailto:.
+        'subject' => env('VAPID_SUBJECT'),
+    ],
+
     // Who the client pays for the system, shown on the locked screen and the subscription page.
     'vendor' => [
         'name' => 'EAJ Web Development Services',

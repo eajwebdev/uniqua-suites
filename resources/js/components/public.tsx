@@ -2,6 +2,7 @@ import { Link, usePage } from '@inertiajs/react';
 import { AirVent, ArrowRight, Bath, BedDouble, BriefcaseMedical, CalendarCheck, CalendarX, Check, ChevronLeft, ChevronRight, CookingPot, Dices, Dumbbell, Loader2, MessageCircle, Shirt, Sun, Tv, Users, Waves, Wifi, Wind } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn, Input, Modal, Select } from '@/components/ui';
+import { reportBookClick } from '@/lib/bookClick';
 import { pesoWhole, shortDate, time12 } from '@/lib/format';
 
 export const PAGE_WIDTH = 'mx-auto w-full max-w-7xl px-5 sm:px-8';
@@ -298,7 +299,7 @@ export function BookingPanel({ room, initialIn = '', initialOut = '', guests }: 
             </div>
 
             {result.state === 'free' && chat ? (
-                <a href={chatAboutDates(chat, room.name, checkIn, checkOut, guests)} target="_blank" rel="noreferrer" aria-label={`Book ${room.name} now on Messenger`} className={cn(linkButton('dark'), 'mt-3 w-full')}>
+                <a href={chatAboutDates(chat, room.name, checkIn, checkOut, guests)} target="_blank" rel="noreferrer" aria-label={`Book ${room.name} now on Messenger`} onClick={() => reportBookClick({ kind: 'suite', slug: room.slug, from: checkIn, to: checkOut, guests: Number(guests) > 0 ? Number(guests) : undefined })} className={cn(linkButton('dark'), 'mt-3 w-full')}>
                     <MessageCircle size={17} strokeWidth={1.5} aria-hidden /> Book Now
                 </a>
             ) : (

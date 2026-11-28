@@ -32,6 +32,7 @@ class Settings
         'policy.house_rules' => null, // shown publicly only once written
         'policy.cancellation' => null,
         'alerts.arrival_lead_days' => 1,
+        'alerts.checkout_lead_hours' => 2, // staff are reminded this long before a check-out or camera return
     ];
 
     public static function get(string $key, mixed $default = null): mixed

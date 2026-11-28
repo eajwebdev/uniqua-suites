@@ -1,5 +1,5 @@
-import { router, useForm } from '@inertiajs/react';
-import { Eye, EyeOff, Trash2 } from 'lucide-react';
+import { Link, router, useForm } from '@inertiajs/react';
+import { ChevronLeft, Eye, EyeOff, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { ActionButton, Button, Card, confirmDialog, Empty, Field, Input, Select, StatusChip } from '@/components/ui';
 import { dateOnly, peso } from '@/lib/format';
@@ -58,19 +58,27 @@ export default function RoomEdit({ room, images, rates, overrides, blocks, sourc
     const set = (k: string) => (ev: any) => form.setData(k, ev.target.value);
     const area = 'w-full rounded-md border border-line px-3 py-2 text-sm pointer-coarse:text-base';
 
+    const sections = [['details', 'Details'], ['rates', 'Rates'], ['overrides', 'Promos'], ['blocks', 'Blocks'], ['photos', 'Photos'], ...((can.secretsReveal || can.secretsManage) ? [['wifi', 'Wi-Fi']] : [])];
+
     return (
         <AdminLayout title={`${room.name} · ${room.unit_code}`}>
-            <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
+            <Link href="/admin/rooms" className="-mt-2 mb-2 inline-flex min-h-11 items-center gap-1 text-sm font-medium text-bronze lg:min-h-0"><ChevronLeft size={16} aria-hidden /> All rooms</Link>
+            <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
                 <span className="text-muted">{room.property} · {room.type}</span>
                 <StatusChip value={room.catalog_status} />
                 <StatusChip value={room.is_published ? 'published' : 'unpublished'} />
                 <StatusChip value={room.housekeeping_status} />
             </div>
+            {/* On a phone the sections are a long way apart: jump straight to one. */}
+            <nav aria-label="Sections" className="sticky top-14 z-20 -mx-4 mb-4 flex gap-1.5 overflow-x-auto border-b border-line/70 bg-ivory/95 px-4 py-2 backdrop-blur [scrollbar-width:none] sm:-mx-6 sm:px-6 lg:hidden">
+                {sections.map(([id, label]) => <a key={id} href={`#${id}`} className="flex min-h-10 shrink-0 items-center rounded-full border border-line bg-white px-3.5 text-sm whitespace-nowrap">{label}</a>)}
+            </nav>
             <div className="grid gap-4 lg:grid-cols-3">
                 <div className="space-y-4 lg:col-span-2">
+                    <section id="details" className="scroll-mt-32 lg:scroll-mt-20">
                     <Card title="Room details">
                         <form onSubmit={(ev) => { ev.preventDefault(); form.post(`/admin/rooms/${room.id}`, { preserveScroll: true }); }} className="space-y-3">
-                            <div className="grid gap-3 sm:grid-cols-3">
+                            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                                 <Field label="Bedrooms" error={e.bedrooms}><Input type="number" min={0} value={form.data.bedrooms} onChange={set('bedrooms')} /></Field>
                                 <Field label="AC units" error={e.ac_count}><Input type="number" min={0} value={form.data.ac_count} onChange={set('ac_count')} /></Field>
                                 <Field label="Bathrooms" error={e.bathrooms}><Input type="number" min={0} value={form.data.bathrooms} onChange={set('bathrooms')} /></Field>
@@ -92,10 +100,16 @@ export default function RoomEdit({ room, images, rates, overrides, blocks, sourc
                             <Field label="Amenities" error={e.amenities_text} help="Comma-separated. Shown publicly; enter only what is confirmed."><Input value={form.data.amenities_text} onChange={set('amenities_text')} /></Field>
                             <Field label="Room policies" error={e.policies}><textarea rows={2} className={area} value={form.data.policies} onChange={set('policies')} /></Field>
                             <Field label="Internal notes" error={e.operational_notes} help="Never shown publicly."><textarea rows={2} className={area} value={form.data.operational_notes} onChange={set('operational_notes')} /></Field>
-                            <Button type="submit" variant="primary" disabled={form.processing}>Save room</Button>
+                            {/* Stays within thumb reach while the form scrolls on a phone, above the bottom tabs. */}
+                            <div className="sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] z-10 -mx-5 -mb-5 flex items-center justify-between gap-3 rounded-b-xl border-t border-line/80 bg-white/95 px-5 py-3 backdrop-blur lg:static lg:mx-0 lg:mb-0 lg:border-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none">
+                                <span className="text-xs text-muted" aria-live="polite">{form.isDirty ? 'Unsaved changes' : ''}</span>
+                                <Button type="submit" variant="primary" disabled={form.processing}>{form.processing ? 'Saving…' : 'Save room'}</Button>
+                            </div>
                         </form>
                     </Card>
+                    </section>
 
+                    <section id="rates" className="scroll-mt-32 lg:scroll-mt-20">
                     <Card title="Effective-dated rates" action={can.rates ? (
                         <ActionButton action={{ label: 'Add new rate', url: `/admin/rooms/${room.id}/rates`, fields: [
                             { name: 'effective_from', label: 'Effective from', type: 'date', required: true },
@@ -114,7 +128,9 @@ export default function RoomEdit({ room, images, rates, overrides, blocks, sourc
                         </table>
                         <p className="mt-2 text-xs text-muted">Adding a rate never changes a confirmed booking's price.</p>
                     </Card>
+                    </section>
 
+                    <section id="overrides" className="scroll-mt-32 lg:scroll-mt-20">
                     <Card title="Season, promo and channel overrides" action={can.rates ? (
                         <ActionButton action={{ label: 'Add override', url: `/admin/rooms/${room.id}/overrides`, fields: [
                             { name: 'label', label: 'Label', type: 'text', required: true },
@@ -130,9 +146,11 @@ export default function RoomEdit({ room, images, rates, overrides, blocks, sourc
                             </ul>
                         )}
                     </Card>
+                    </section>
                 </div>
 
                 <div className="space-y-4">
+                    <section id="blocks" className="scroll-mt-32 lg:scroll-mt-20">
                     <Card title="Room blocks" action={
                         <ActionButton action={{ label: 'Block dates', url: `/admin/rooms/${room.id}/blocks`, fields: [
                             { name: 'start_date', label: 'From', type: 'date', required: true },
@@ -152,7 +170,9 @@ export default function RoomEdit({ room, images, rates, overrides, blocks, sourc
                             </ul>
                         )}
                     </Card>
+                    </section>
 
+                    <section id="photos" className="scroll-mt-32 lg:scroll-mt-20">
                     <Card title="Photos" action={
                         <ActionButton action={{ label: 'Add photos', url: `/admin/rooms/${room.id}/images`, fields: [
                             { name: 'images', label: 'Real room photos', type: 'file', multiple: true, required: true, accept: 'image/*', help: 'Select one or more photos (up to 20, 8 MB each).' },
@@ -160,18 +180,19 @@ export default function RoomEdit({ room, images, rates, overrides, blocks, sourc
                         ] }} />
                     }>
                         {images.length === 0 ? <Empty>No photos. The public page shows no image until real ones are uploaded.</Empty> : (
-                            <div className="grid grid-cols-2 gap-2">
+                            <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-2">
                                 {images.map((i: any) => (
                                     <figure key={i.id} className="relative">
-                                        <img src={i.url} alt={i.alt} className="aspect-[4/3] w-full rounded object-cover" />
-                                        <button aria-label="Delete photo" className="absolute top-1 right-1 rounded bg-white/90 p-1" onClick={async () => { if (await confirmDialog({ title: 'Delete this photo?', message: 'It will be removed from this suite, including on the public website.', confirmLabel: 'Delete photo', danger: true })) router.post(`/admin/room-images/${i.id}/delete`, {}, { preserveScroll: true }); }}><Trash2 size={13} /></button>
+                                        <img src={i.url} alt={i.alt} loading="lazy" className="aspect-[4/3] w-full rounded object-cover" />
+                                        <button aria-label="Delete photo" className="absolute top-1 right-1 flex size-8 items-center justify-center rounded bg-white/90 pointer-coarse:size-10" onClick={async () => { if (await confirmDialog({ title: 'Delete this photo?', message: 'It will be removed from this suite, including on the public website.', confirmLabel: 'Delete photo', danger: true })) router.post(`/admin/room-images/${i.id}/delete`, {}, { preserveScroll: true }); }}><Trash2 size={13} /></button>
                                     </figure>
                                 ))}
                             </div>
                         )}
                     </Card>
+                    </section>
 
-                    {(can.secretsReveal || can.secretsManage) && <SecretCard room={room} secret={secret} can={can} />}
+                    {(can.secretsReveal || can.secretsManage) && <section id="wifi" className="scroll-mt-32 lg:scroll-mt-20"><SecretCard room={room} secret={secret} can={can} /></section>}
                 </div>
             </div>
         </AdminLayout>

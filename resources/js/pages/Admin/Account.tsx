@@ -3,6 +3,7 @@ import axios from 'axios';
 import { QRCodeSVG } from 'qrcode.react';
 import { KeyRound, ShieldCheck } from 'lucide-react';
 import { FormEvent, useState } from 'react';
+import { AppAlertsCard } from '@/components/AppAlerts';
 import { PasswordMeter, passwordChecks } from '@/components/PasswordStrength';
 import { Button, Card, confirmDialog, CopyButton, Empty, Field, Input, PasswordInput } from '@/components/ui';
 import { dateTime } from '@/lib/format';
@@ -129,7 +130,7 @@ function NotificationPrefs({ prefs }: any) {
                 {Object.entries(prefs.categories).map(([key, label]: any) => (
                     <label key={key} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!form.data.muted.includes(key)} onChange={(ev) => toggle(key, ev.target.checked)} /> {label}</label>
                 ))}
-                <p className="text-xs text-muted">These appear only inside this system, so nothing interrupts you off shift. Work assigned directly to you always shows.</p>
+                <p className="text-xs text-muted">These go to the bell, and to your phone or computer if you turned alerts on there. Work assigned directly to you always shows.</p>
                 <Button type="submit" disabled={form.processing}>Save choices</Button>
             </form>
         </Card>
@@ -200,7 +201,7 @@ function PasswordCard({ user }: { user: any }) {
     );
 }
 
-export default function Account({ notifications, twoFactor, notificationPrefs }: any) {
+export default function Account({ notifications, twoFactor, notificationPrefs, devices = [] }: any) {
     const { auth } = usePage<any>().props as any;
 
     return (
@@ -208,6 +209,7 @@ export default function Account({ notifications, twoFactor, notificationPrefs }:
             <div className="grid gap-4 lg:grid-cols-2">
                 <PasswordCard user={auth.user} />
                 <TwoFactorCard state={twoFactor} />
+                <AppAlertsCard devices={devices} />
                 <NotificationPrefs prefs={notificationPrefs} />
                 <section id="notifications" className="scroll-mt-20">
                     <Card title="Notifications" action={auth.user.unread > 0 ? <Button small onClick={() => router.post('/admin/notifications/read', {}, { preserveScroll: true })}>Mark all read</Button> : undefined}>

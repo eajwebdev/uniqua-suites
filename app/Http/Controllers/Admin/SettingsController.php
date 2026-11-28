@@ -47,6 +47,7 @@ class SettingsController extends Controller
                 'house_rules' => $s['policy.house_rules'],
                 'cancellation' => $s['policy.cancellation'],
                 'arrival_lead_days' => $s['alerts.arrival_lead_days'],
+                'checkout_lead_hours' => $s['alerts.checkout_lead_hours'] ?? \App\Domain\Bookings\CheckoutReminders::DEFAULT_HOURS,
             ],
             'taxes' => TaxRule::orderByDesc('effective_from')->orderByDesc('id')->get()->map(fn ($t) => ['id' => $t->id, 'name' => $t->name, 'percent' => number_format($t->rate_basis_points / 100, 2, '.', ''), 'from' => $t->effective_from->toDateString(), 'to' => $t->effective_to?->toDateString()]),
             // Setup notes are for the Administrator. Not sent at all to anyone else, including the Owner.
@@ -92,6 +93,7 @@ class SettingsController extends Controller
             'house_rules' => 'nullable|string|max:4000',
             'cancellation' => 'nullable|string|max:4000',
             'arrival_lead_days' => 'nullable|integer|min:1|max:14',
+            'checkout_lead_hours' => 'nullable|integer|min:1|max:12',
         ]);
 
         // An empty list stays "pending": no weekend pricing is a decision the owner has to make explicitly.
@@ -118,6 +120,7 @@ class SettingsController extends Controller
             'policy.house_rules' => $d['house_rules'] ?? null,
             'policy.cancellation' => $d['cancellation'] ?? null,
             'alerts.arrival_lead_days' => (int) ($d['arrival_lead_days'] ?? 1),
+            'alerts.checkout_lead_hours' => (int) ($d['checkout_lead_hours'] ?? \App\Domain\Bookings\CheckoutReminders::DEFAULT_HOURS),
         ];
         $before = Settings::all();
         $changed = [];

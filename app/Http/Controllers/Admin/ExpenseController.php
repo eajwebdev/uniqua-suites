@@ -136,6 +136,13 @@ class ExpenseController extends Controller
             'created_by' => $request->user()->id,
         ]);
         Audit::log('expense.recorded', $expense, ['amount_cents' => $expense->amount_cents]);
+        // Over the approval amount it cannot be paid until someone approves it.
+        $threshold = \App\Support\Settings::get('finance.expense_approval_threshold_cents');
+        if ($expense->status === 'incurred' && $threshold !== null && $expense->amount_cents >= (int) $threshold) {
+            \App\Support\SystemNotice::toPermission('expenses.approve',
+                Money::format($expense->amount_cents)." expense needs approval: {$expense->description}.",
+                '/admin/expenses', 'approvals', except: $request->user()->id);
+        }
 
         return back()->with('success', 'Expense recorded.');
     }

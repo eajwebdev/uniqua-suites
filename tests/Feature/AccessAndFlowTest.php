@@ -67,7 +67,8 @@ class AccessAndFlowTest extends DomainTestCase
         $this->post('/admin/receipts', [])->assertRedirect('/login');
         $this->get('/admin')->assertRedirect('/login');
 
-        $publicWrites = collect(app('router')->getRoutes())->filter(fn ($r) => ! in_array('GET', $r->methods()) && ! str_starts_with($r->uri(), 'admin') && ! in_array($r->uri(), ['login', 'login/demo/{role}', 'two-factor', 'forgot-password', 'reset-password'], true));
+        // book-click only raises a staff alert (see PushAlertsTest); it stores no booking, guest or payment.
+        $publicWrites = collect(app('router')->getRoutes())->filter(fn ($r) => ! in_array('GET', $r->methods()) && ! str_starts_with($r->uri(), 'admin') && ! in_array($r->uri(), ['login', 'login/demo/{role}', 'two-factor', 'forgot-password', 'reset-password', 'book-click'], true));
         $this->assertCount(0, $publicWrites, 'A public write route exists: '.$publicWrites->map->uri()->join(', '));
     }
 

@@ -21,6 +21,8 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->web(append: [HandleInertiaRequests::class, SecurityHeaders::class]);
+        // Sent as a guest leaves for Messenger, possibly from inside another site's frame. It can only raise an alert.
+        $middleware->validateCsrfTokens(except: ['book-click']);
         $middleware->alias([
             'perm' => PermissionMiddleware::class,
             'role' => RoleMiddleware::class,

@@ -4,15 +4,13 @@ import {
     ScrollText, Settings, Sparkles, Tags, TableProperties, Users, UsersRound, Wallet, Wrench, BarChart3, X,
 } from 'lucide-react';
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { AppAlertsPrompt } from '@/components/AppAlerts';
 import NewBookingHost, { openNewBooking } from '@/components/NewBooking';
+import { forgetSync, registerWorker, syncAlerts } from '@/lib/pwa';
 import QuickFind, { QuickItem } from '@/components/QuickFind';
 import { Button, cn, CopyButton, Modal } from '@/components/ui';
 
 const CATEGORIES = [['suites', 'Suites'], ['cameras', 'Cameras']] as const;
-
-// VITE_HIDE_CAMERAS=true in .env hides the Suites/Cameras switch, e.g. for a suites-only recording.
-// Nothing else changes, and the switch still shows while Cameras is selected so you can get back.
-const HIDE_CAMERAS = import.meta.env.VITE_HIDE_CAMERAS === 'true';
 
 // Pages that belong to one business only. They stay, hidden from the menu while the other business is selected.
 // Keep in step with App\Support\AdminCategory.
@@ -260,6 +258,38 @@ function NotificationsDropdown({ user }: { user: any }) {
     );
 }
 
+/**
+ * The staff app's background part: alerts keep this device signed up for whoever is signed in,
+ * an alert arriving refreshes the bell at once, tapping one opens its page here, and the app
+ * icon shows the unread count where the device supports it.
+ */
+function useStaffApp(userId: number | undefined, pushKey: string | null | undefined, unread: number) {
+    useEffect(() => {
+        if (!userId) return;
+        registerWorker()?.catch(() => undefined);
+        syncAlerts(pushKey, userId);
+        if (!('serviceWorker' in navigator)) return;
+
+        const onMessage = (event: MessageEvent) => {
+            if (event.data?.type === 'uniqa:push') router.reload({ only: ['auth'] });
+            if (event.data?.type === 'uniqa:open' && typeof event.data.url === 'string') router.visit(event.data.url);
+        };
+        navigator.serviceWorker.addEventListener('message', onMessage);
+
+        return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+    }, [userId, pushKey]);
+
+    useEffect(() => {
+        const nav = navigator as any;
+        try {
+            if (unread > 0) nav.setAppBadge?.(unread)?.catch?.(() => undefined);
+            else nav.clearAppBadge?.()?.catch?.(() => undefined);
+        } catch {
+            // Only a convenience.
+        }
+    }, [unread]);
+}
+
 /** Shown once: only the hash is kept, so closing this means making a new one. */
 function CredentialDialog({ credential }: { credential?: { name: string; email: string; password: string } | null }) {
     const [dismissed, setDismissed] = useState<string | null>(null);
@@ -281,7 +311,8 @@ function CredentialDialog({ credential }: { credential?: { name: string; email: 
 }
 
 export default function AdminLayout({ title, heading, subtitle, showSection = true, children, actions }: { title: string; heading?: string; subtitle?: ReactNode; showSection?: boolean; children: ReactNode; actions?: ReactNode }) {
-    const { auth, flash, category, subscription, subscriptionBadge } = usePage<any>().props as any;
+    const { auth, flash, category, subscription, subscriptionBadge, push } = usePage<any>().props as any;
+    useStaffApp(auth.user?.id, push?.key, auth.user?.unread ?? 0);
     const roles: string[] = auth.user?.roles ?? [];
     const business: string = category ?? 'suites';
     const path = usePage().url.split('?')[0];
@@ -347,7 +378,7 @@ export default function AdminLayout({ title, heading, subtitle, showSection = tr
 
     const nav = (rail: boolean) => (
         <nav aria-label="Main" className={cn('sidebar-scroll flex-1 overflow-y-auto py-2', rail ? 'sidebar-scroll-hidden px-2' : 'px-3')}>
-            {!rail && !(HIDE_CAMERAS && business === 'suites') && <CategorySwitch value={business} />}
+            {!rail && <CategorySwitch value={business} />}
             {groups.map((g) => (
                 <div key={g.label} className="mb-3 last:mb-0">
                     {groups.length > 1 && (rail ? <div className="mx-2 mb-2 border-t border-espresso first:hidden" aria-hidden /> : <p className="px-3 pb-1 text-[11px] font-medium tracking-wider text-gold uppercase">{g.label}</p>)}
@@ -415,7 +446,7 @@ export default function AdminLayout({ title, heading, subtitle, showSection = tr
                                 {role && <span className="block text-[11px] text-muted">{role}</span>}
                             </span>
                         </Link>
-                        <button type="button" aria-label="Sign out" title="Sign out" onClick={() => router.post('/admin/logout')} className="flex size-9 items-center justify-center rounded-lg text-muted transition-colors hover:bg-beige hover:text-chocolate pointer-coarse:size-11">
+                        <button type="button" aria-label="Sign out" title="Sign out" onClick={() => { forgetSync(); router.post('/admin/logout'); }} className="flex size-9 items-center justify-center rounded-lg text-muted transition-colors hover:bg-beige hover:text-chocolate pointer-coarse:size-11">
                             <LogOut size={17} strokeWidth={1.75} />
                         </button>
                     </div>
@@ -425,6 +456,7 @@ export default function AdminLayout({ title, heading, subtitle, showSection = tr
                     <FlashMessage flash={flash} />
                     {subscription && path !== '/admin/subscription' && <SubscriptionBanner notice={subscription} />}
                     <LiveNotice notice={auth.user?.latest_notice} />
+                    {path !== '/admin/account' && <AppAlertsPrompt />}
                     <CredentialDialog credential={flash?.credential} />
                     {can('bookings.manage') && <NewBookingHost />}
                     <div className="mb-5 flex flex-wrap items-end justify-between gap-3">

@@ -37,4 +37,10 @@ class User extends Authenticatable
     {
         return $this->two_factor_confirmed_at !== null;
     }
+
+    /** The phones, tablets and computers that show this person's alerts. */
+    public function pushSubscriptions(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(PushSubscription::class);
+    }
 }

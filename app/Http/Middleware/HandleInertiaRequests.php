@@ -35,6 +35,8 @@ class HandleInertiaRequests extends Middleware
                 'credential' => fn () => $request->session()->get('credential'),
             ],
             'contact' => config('uniqa.contact'),
+            // The public half of the alert keys, which a device needs to sign up for alerts. Signed-in staff only.
+            'push' => fn () => $user ? ['key' => \App\Support\Push::configured() ? config('uniqa.push.public_key') : null] : null,
             'category' => fn () => $user ? \App\Support\AdminCategory::current() : null,
             // The banner on admin pages while the subscription is ending, due or locked. Owner and Administrator only.
             'subscription' => fn () => $user && $user->hasAnyRole(\App\Support\Permissions::SUBSCRIPTION_VIEWERS) ? \App\Support\Subscription::banner() : null,

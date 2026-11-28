@@ -1,5 +1,5 @@
 import { Link, router, useForm } from '@inertiajs/react';
-import { Trash2 } from 'lucide-react';
+import { ChevronLeft, Trash2 } from 'lucide-react';
 import { ActionButton, Button, buttonClass, Card, confirmDialog, Empty, Field, Input, Select, StatusChip } from '@/components/ui';
 import { dateOnly, peso } from '@/lib/format';
 import AdminLayout from '@/layouts/AdminLayout';
@@ -18,6 +18,7 @@ export default function CameraEdit({ room, images, rates, blocks, defaultImage, 
 
     return (
         <AdminLayout title={`${room.name} · ${room.unit_code}`}>
+            <Link href="/admin/rooms" className="-mt-2 mb-2 inline-flex min-h-11 items-center gap-1 text-sm font-medium text-bronze lg:min-h-0"><ChevronLeft size={16} aria-hidden /> All cameras</Link>
             <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
                 <span className="text-muted">{room.brand ? `${room.brand} · ` : ''}{room.model}</span>
                 <StatusChip value={room.is_published ? 'published' : 'unpublished'} />

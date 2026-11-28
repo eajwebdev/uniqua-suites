@@ -69,6 +69,10 @@ class AuthController extends Controller
     public function logout(Request $request)
     {
         Audit::log('auth.logout');
+        // A signed-out device stops showing this person's alerts.
+        if ($endpoint = $request->session()->get('push_endpoint')) {
+            $request->user()?->pushSubscriptions()->where('endpoint_hash', $endpoint)->delete();
+        }
         Auth::logout();
         $request->session()->invalidate();
         $request->session()->regenerateToken();
@@ -120,6 +124,8 @@ class AuthController extends Controller
                 'required' => (bool) Settings::get('security.require_two_factor'),
             ],
             'notificationPrefs' => ['categories' => SystemNotice::CATEGORIES, 'muted' => $request->user()->muted_notifications ?? []],
+            'devices' => $request->user()->pushSubscriptions()->latest()->get()
+                ->map(fn ($d) => ['id' => $d->id, 'device' => $d->device ?? 'Device', 'since' => $d->created_at, 'last_sent_at' => $d->last_sent_at, 'this' => $d->endpoint_hash === $request->session()->get('push_endpoint')]),
             'notifications' => $request->user()->notifications()->latest()->limit(30)->get()
                 ->map(fn ($n) => ['id' => $n->id, 'title' => $n->data['title'] ?? '', 'url' => $n->data['url'] ?? null, 'read' => (bool) $n->read_at, 'at' => $n->created_at]),
         ]);

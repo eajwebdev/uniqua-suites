@@ -6,6 +6,7 @@ import {
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { datesAreFree, monthLabel, shiftMonth, takenNights, todayInManila } from '@/components/public';
 import { cn } from '@/components/ui';
+import { reportBookClick } from '@/lib/bookClick';
 import { pesoWhole, shortDate, time12 } from '@/lib/format';
 import { duration } from '@/lib/rental';
 
@@ -425,7 +426,7 @@ function InquirePanel({ model, chat, initialFrom = '', initialTo = '' }: { model
             )}
 
             {check.state === 'free' && chat ? (
-                <a href={chatLink(chat, model.name, `${from} ${pickupTime}`, `${to} ${returnTime}`, check.days, check.estimate_cents)} target="_blank" rel="noreferrer" aria-label={`Inquire about the ${model.name} on Messenger`} className={cn(BTN_NAVY, 'w-full')}><MessageCircle size={17} aria-hidden /> Inquire on Messenger</a>
+                <a href={chatLink(chat, model.name, `${from} ${pickupTime}`, `${to} ${returnTime}`, check.days, check.estimate_cents)} target="_blank" rel="noreferrer" aria-label={`Inquire about the ${model.name} on Messenger`} onClick={() => reportBookClick({ kind: 'camera', slug: model.slug, from, to, pickup_time: pickupTime, return_time: returnTime })} className={cn(BTN_NAVY, 'w-full')}><MessageCircle size={17} aria-hidden /> Inquire on Messenger</a>
             ) : (
                 <button type="button" disabled className={cn(BTN_NAVY, 'w-full cursor-not-allowed opacity-40')}><MessageCircle size={17} aria-hidden /> Inquire on Messenger</button>
             )}

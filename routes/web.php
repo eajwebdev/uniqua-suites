@@ -22,7 +22,9 @@ use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\Admin\RoomController;
 use App\Http\Controllers\Admin\SettingsController;
 use App\Http\Controllers\Admin\TeamController;
+use App\Http\Controllers\Admin\PushController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\BookClickController;
 use App\Http\Controllers\GrabCamController;
 use App\Http\Controllers\PublicSiteController;
 use App\Http\Controllers\TwoFactorController;
@@ -38,6 +40,9 @@ Route::middleware('throttle:public')->group(function () {
     Route::get('/grabcam', [GrabCamController::class, 'index']);
     Route::get('/grabcam/{slug}/check-dates', [GrabCamController::class, 'checkDates']);
 });
+
+// Book Now / Inquire pressed: an alert for front desk. Exempt from CSRF in bootstrap/app.php; see the controller.
+Route::post('/book-click', BookClickController::class)->middleware('throttle:10,1');
 
 Route::middleware('guest')->group(function () {
     Route::get('/login', [AuthController::class, 'loginForm'])->name('login');
@@ -69,6 +74,10 @@ Route::middleware(['auth', 'auth.session', 'active', 'subscription', 'password.c
     });
     Route::post('/account/notifications', [AuthController::class, 'updateNotificationPrefs']);
     Route::post('/notifications/read', [AuthController::class, 'readNotifications']);
+    // Alerts on this phone, tablet or computer. Every signed-in person, whatever their role.
+    Route::post('/push/subscribe', [PushController::class, 'store'])->middleware('throttle:20,1');
+    Route::post('/push/unsubscribe', [PushController::class, 'destroy'])->middleware('throttle:20,1');
+    Route::post('/push/test', [PushController::class, 'test'])->middleware('throttle:5,1');
 
     Route::post('/category', [CategoryController::class, 'update']);
 
@@ -131,6 +140,7 @@ Route::middleware(['auth', 'auth.session', 'active', 'subscription', 'password.c
         Route::post('/rooms/{room}', [RoomController::class, 'update']);
         Route::post('/rooms/{room}/approve', [RoomController::class, 'approve']);
         Route::post('/rooms/{room}/publish', [RoomController::class, 'togglePublish']);
+        Route::post('/rooms/{room}/status', [RoomController::class, 'setStatus']);
         Route::post('/rooms/{room}/images', [RoomController::class, 'addImage']);
         Route::post('/room-images/{image}/delete', [RoomController::class, 'deleteImage']);
     });
