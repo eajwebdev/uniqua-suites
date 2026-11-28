@@ -8,7 +8,8 @@ import { pesoWhole, shortDate, time12 } from '@/lib/format';
 export const PAGE_WIDTH = 'mx-auto w-full max-w-7xl px-5 sm:px-8';
 
 /** On a phone: a swipeable row that shows the next card peeking in. From tablet width: an ordinary grid. */
-export const SWIPE_ROW = '-mx-5 flex snap-x snap-mandatory scroll-px-5 gap-4 overflow-x-auto px-5 pb-3 sm:mx-0 sm:grid sm:snap-none sm:overflow-visible sm:px-0 sm:pb-0';
+// Relative, so the row also clips absolutely placed pieces inside it (such as screen-reader text); otherwise they escape and widen the whole page on a phone.
+export const SWIPE_ROW = 'relative -mx-5 flex snap-x snap-mandatory scroll-px-5 gap-4 overflow-x-auto px-5 pb-3 sm:mx-0 sm:grid sm:snap-none sm:overflow-visible sm:px-0 sm:pb-0';
 export const SWIPE_CARD = 'w-[85%] max-w-[22rem] shrink-0 snap-start sm:w-auto sm:max-w-none';
 
 export function SwipeHint({ count }: { count: number }) {
@@ -217,7 +218,8 @@ export function MonthGrid({ room, month, checkIn, checkOut }: { room: any; month
                     const chosen = !!checkIn && !!checkOut && date >= checkIn && date <= checkOut;
 
                     return (
-                        <span key={date} className={cn('py-1.5', past ? 'text-muted/40' : isTaken ? 'bg-beige text-muted line-through' : chosen ? 'bg-gold/40 font-medium' : '', date === today && 'font-semibold')}>
+                        // Relative, so the hidden "not available" text stays inside the day instead of escaping a sideways-scrolling row.
+                        <span key={date} className={cn('relative py-1.5', past ? 'text-muted/40' : isTaken ? 'bg-beige text-muted line-through' : chosen ? 'bg-gold/40 font-medium' : '', date === today && 'font-semibold')}>
                             {Number(date.slice(8))}
                             {!past && isTaken && <span className="sr-only"> not available</span>}
                         </span>

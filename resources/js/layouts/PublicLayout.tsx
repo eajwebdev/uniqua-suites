@@ -255,7 +255,8 @@ export default function PublicLayout({ title, description, stickyBar, bottomBar,
 
     return (
         // Clipped sideways, so nothing can make a phone browser zoom the whole page out. Unlike hidden, clip keeps the sticky header working.
-        <div className="flex min-h-dvh flex-col overflow-x-clip">
+        // Relative, so absolutely placed pieces are clipped too, not only the page's normal content.
+        <div className="relative flex min-h-dvh flex-col overflow-x-clip">
             <a href="#main" className="skip-link">Skip to main content</a>
             <Head title={fullTitle}>
                 <meta name="description" content={summary} />
