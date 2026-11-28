@@ -146,7 +146,8 @@ function SideMenu({ open, onClose, contact, active, onBook }: { open: boolean; o
     }, [open]);
 
     return (
-        <div className={cn('fixed inset-0 z-50 lg:hidden', !open && 'pointer-events-none')}>
+        // Clipped, so the closed panel waiting off the right edge never makes a phone browser treat the page as wider than the screen.
+        <div className={cn('fixed inset-0 z-50 overflow-hidden lg:hidden', !open && 'pointer-events-none')}>
             <div onClick={onClose} aria-hidden className={cn('absolute inset-0 bg-black/60 transition-opacity duration-300', open ? 'opacity-100' : 'opacity-0')} />
             <div
                 ref={panel}
@@ -192,10 +193,6 @@ function SideMenu({ open, onClose, contact, active, onBook }: { open: boolean; o
     );
 }
 
-/**
- * Within thumb reach on a phone from the moment the first screen has gone, and it stays for the rest of the page,
- * so booking is always one tap away. From tablet width the header's Book Now does the same job.
- */
 /** True once the first screen has been scrolled away. */
 function usePastFirstScreen(enabled: boolean): boolean {
     const [past, setPast] = useState(false);
@@ -226,11 +223,13 @@ function useInert<T extends HTMLElement>(hidden: boolean) {
     return ref;
 }
 
-function StickyBar({ shown, children }: { shown: boolean; children: ReactNode }) {
-    const bar = useInert<HTMLDivElement>(!shown);
-
+/**
+ * Pinned within thumb reach on a phone at every scroll position, from the first screen on, so booking is always one tap away,
+ * as booking apps keep their bottom bar. From tablet width the header's Book Now does the same job.
+ */
+function StickyBar({ children }: { children: ReactNode }) {
     return (
-        <div ref={bar} className={cn('fixed inset-x-0 bottom-0 z-30 border-t border-gold/20 bg-chocolate/95 px-4 pt-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] text-ivory shadow-[0_-8px_24px_rgb(0_0_0/0.18)] backdrop-blur transition-transform duration-300 md:hidden', shown ? 'translate-y-0' : 'invisible translate-y-full')}>
+        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-gold/20 bg-chocolate/95 px-4 pt-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] text-ivory shadow-[0_-8px_24px_rgb(0_0_0/0.18)] backdrop-blur md:hidden">
             {children}
         </div>
     );
@@ -246,8 +245,7 @@ export default function PublicLayout({ title, description, stickyBar, bottomBar,
     const { contact, seo } = usePage<any>().props as any;
     const [open, setOpen] = useState(false);
     const active = useActiveNav();
-    const scrolled = usePastFirstScreen(!!stickyBar || !!headerSearch);
-    const compact = !!headerSearch && scrolled;
+    const compact = usePastFirstScreen(!!headerSearch);
     const searchSlot = useInert<HTMLDivElement>(!compact);
     // The menu links give way to the search; the side menu and footer still carry them.
     const mainNav = useInert<HTMLElement>(compact);
@@ -256,7 +254,8 @@ export default function PublicLayout({ title, description, stickyBar, bottomBar,
     const summary = seo?.description ?? description;
 
     return (
-        <div className="flex min-h-dvh flex-col">
+        // Clipped sideways, so nothing can make a phone browser zoom the whole page out. Unlike hidden, clip keeps the sticky header working.
+        <div className="flex min-h-dvh flex-col overflow-x-clip">
             <a href="#main" className="skip-link">Skip to main content</a>
             <Head title={fullTitle}>
                 <meta name="description" content={summary} />
@@ -291,7 +290,7 @@ export default function PublicLayout({ title, description, stickyBar, bottomBar,
             </header>
             <SideMenu open={open} onClose={() => setOpen(false)} contact={contact} active={active} onBook={onBook} />
             <main id="main" tabIndex={-1} className="flex-1 outline-none">{children}</main>
-            {stickyBar && <StickyBar shown={scrolled}>{stickyBar === true ? <MessageButton hideIfMissing onClick={onBook} className="w-full" /> : stickyBar}</StickyBar>}
+            {stickyBar && <StickyBar>{stickyBar === true ? <MessageButton hideIfMissing onClick={onBook} className="w-full" /> : stickyBar}</StickyBar>}
             {bottomBar && <div className="fixed inset-x-0 bottom-0 z-30 lg:hidden">{bottomBar}</div>}
             <footer className={cn('border-t border-gold/20 bg-chocolate text-beige', !!stickyBar && 'max-md:pb-20', !!bottomBar && 'max-lg:pb-20')}>
                 {/* On a phone: the brand on one line, then both link lists side by side, so the footer is about half a screen. */}

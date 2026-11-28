@@ -1,8 +1,9 @@
-import { MessageButton } from '@/components/public';
+import { MessageButton, useChatLink } from '@/components/public';
 import { time12 } from '@/lib/format';
 import PublicLayout from '@/layouts/PublicLayout';
 
 export default function Policies({ policy, faqs: added = [] }: any) {
+    const canBook = !!useChatLink();
     const standard = [
         ['How do I book?', 'Press Book Now on any suite and choose free dates. Taken dates cannot be chosen. It then opens a Messenger chat with us, where our staff send your quotation. Your dates are reserved only when staff confirm them in the chat, and payment is arranged there, not on this website.'],
         ['How much does a suite cost?', 'It depends on the suite, your dates and your party size, so our staff quote it for you when you message us.'],
@@ -22,7 +23,7 @@ export default function Policies({ policy, faqs: added = [] }: any) {
     ];
 
     return (
-        <PublicLayout title="Policies & FAQ" description="How to book with UNIQA SUITES, check-in, early arrival, extra guests and parking, plus our privacy notice.">
+        <PublicLayout title="Policies & FAQ" description="How to book with UNIQA SUITES, check-in, early arrival, extra guests and parking, plus our privacy notice." stickyBar={canBook}>
             <div className="mx-auto w-full max-w-3xl px-5 py-8 sm:px-8 sm:py-12">
                 <h1 className="mb-6 text-[1.75rem] leading-tight font-semibold tracking-tight sm:text-4xl">Policies &amp; FAQ</h1>
                 <div className="divide-y divide-line border-y border-line">
