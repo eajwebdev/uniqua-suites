@@ -16,7 +16,11 @@ const NAV: NavItem[] = [
 const SECTIONS = NAV.flatMap((n) => (n.section ? [n.section] : []));
 const HEADER_PX = 64;
 
-const FOCUSABLE = 'a[href], button:not([disabled])';
+const FOOTER_HEADING = 'mb-1 text-sm font-semibold text-ivory sm:mb-2';
+// Tall enough to tap on a phone without a full 48px row each.
+const FOOTER_LINK = 'inline-flex min-h-10 items-center transition-colors hover:text-gold sm:min-h-8';
+
+const FOCUSABLE ='a[href], button:not([disabled])';
 const SWIPE_TO_CLOSE_PX = 60;
 const DESKTOP_MENU = '(min-width: 64rem)';
 
@@ -99,7 +103,7 @@ function Socials({ contact, className }: { contact: any; className?: string }) {
  * Stays mounted so it can slide out as well as in. While closed it is inert, so its links cannot
  * be reached by keyboard or screen reader. The hamburger sits on the right, so it opens from there.
  */
-function SideMenu({ open, onClose, contact, active }: { open: boolean; onClose: () => void; contact: any; active: string | null }) {
+function SideMenu({ open, onClose, contact, active, onBook }: { open: boolean; onClose: () => void; contact: any; active: string | null; onBook?: () => void }) {
     const panel = useRef<HTMLDivElement>(null);
     const closeButton = useRef<HTMLButtonElement>(null);
     const touchStart = useRef<number | null>(null);
@@ -169,7 +173,7 @@ function SideMenu({ open, onClose, contact, active }: { open: boolean; onClose: 
 
                             return (
                                 <li key={n.href}>
-                                    <Link href={n.href} onClick={(e) => scrollToSection(e, n, onClose)} aria-current={here ? (n.section ? 'location' : 'page') : undefined} className={cn('relative flex min-h-14 items-center justify-between gap-3 font-serif text-2xl font-light transition-colors active:text-gold', here && 'text-gold before:absolute before:inset-y-3 before:-left-5 before:w-0.5 before:bg-gold')}>
+                                    <Link href={n.href} onClick={(e) => scrollToSection(e, n, onClose)} aria-current={here ? (n.section ? 'location' : 'page') : undefined} className={cn('relative flex min-h-14 items-center justify-between gap-3 text-lg font-medium transition-colors active:text-gold', here && 'text-gold before:absolute before:inset-y-3 before:-left-5 before:w-0.5 before:bg-gold')}>
                                         {n.label}
                                         <ChevronRight size={18} strokeWidth={1.25} className="shrink-0 text-gold" aria-hidden />
                                     </Link>
@@ -179,7 +183,8 @@ function SideMenu({ open, onClose, contact, active }: { open: boolean; onClose: 
                     </ul>
                 </nav>
                 <div className="space-y-4 border-t border-gold/20 p-5">
-                    <div onClick={onClose}><MessageButton hideIfMissing className="w-full" /></div>
+                    {/* Closing first gives the page its scrolling and focus back before the booking sheet opens. */}
+                    <div onClick={onClose}><MessageButton hideIfMissing onClick={onBook && (() => setTimeout(onBook, 0))} className="w-full" /></div>
                     <Socials contact={contact} className="justify-center gap-3 text-beige" />
                 </div>
             </div>
@@ -187,38 +192,65 @@ function SideMenu({ open, onClose, contact, active }: { open: boolean; onClose: 
     );
 }
 
-/** Within thumb reach once the first screen has gone. It steps aside while the dates are already on screen. */
-function StickyBook({ targetId }: { targetId: string }) {
-    const [scrolled, setScrolled] = useState(false);
-    const [targetVisible, setTargetVisible] = useState(false);
+/**
+ * Within thumb reach on a phone from the moment the first screen has gone, and it stays for the rest of the page,
+ * so booking is always one tap away. From tablet width the header's Book Now does the same job.
+ */
+/** True once the first screen has been scrolled away. */
+function usePastFirstScreen(enabled: boolean): boolean {
+    const [past, setPast] = useState(false);
 
     useEffect(() => {
-        const onScroll = () => setScrolled(window.scrollY > window.innerHeight * 0.7);
+        if (!enabled) return;
+        const onScroll = () => setPast(window.scrollY > window.innerHeight * 0.6);
         onScroll();
         window.addEventListener('scroll', onScroll, { passive: true });
-        const target = document.getElementById(targetId);
-        const observer = target ? new IntersectionObserver(([entry]) => setTargetVisible(entry.isIntersecting), { rootMargin: '-20% 0px -20% 0px' }) : null;
-        if (target) observer?.observe(target);
+        window.addEventListener('resize', onScroll);
 
         return () => {
             window.removeEventListener('scroll', onScroll);
-            observer?.disconnect();
+            window.removeEventListener('resize', onScroll);
         };
-    }, [targetId]);
+    }, [enabled]);
 
-    const shown = scrolled && !targetVisible;
+    return enabled && past;
+}
+
+/** Keeps a hidden piece out of the keyboard order and away from screen readers. */
+function useInert<T extends HTMLElement>(hidden: boolean) {
+    const ref = useRef<T>(null);
+    useEffect(() => {
+        ref.current?.toggleAttribute('inert', hidden);
+    }, [hidden]);
+
+    return ref;
+}
+
+function StickyBar({ shown, children }: { shown: boolean; children: ReactNode }) {
+    const bar = useInert<HTMLDivElement>(!shown);
 
     return (
-        <div aria-hidden={!shown} className={cn('fixed inset-x-0 bottom-0 z-30 border-t border-gold/20 bg-chocolate/95 px-4 pt-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] backdrop-blur transition-transform duration-300 md:hidden', shown ? 'translate-y-0' : 'invisible translate-y-full')}>
-            <MessageButton hideIfMissing className="w-full" />
+        <div ref={bar} className={cn('fixed inset-x-0 bottom-0 z-30 border-t border-gold/20 bg-chocolate/95 px-4 pt-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] text-ivory shadow-[0_-8px_24px_rgb(0_0_0/0.18)] backdrop-blur transition-transform duration-300 md:hidden', shown ? 'translate-y-0' : 'invisible translate-y-full')}>
+            {children}
         </div>
     );
 }
 
-export default function PublicLayout({ title, description, stickyBookFor, children }: { title?: string; description: string; stickyBookFor?: string; children: ReactNode }) {
+/**
+ * `stickyBar` is what the page keeps pinned to the bottom of a phone screen; the bar shows plain Book Now when it is `true`.
+ * `headerSearch` takes the menu's place in the header once the page's own search has scrolled away, as booking sites do.
+ * `onBook` lets the page open its own date picker from every Book Now in the header and menu, instead of jumping away.
+ * `bottomBar` stays pinned to the bottom of the screen at every scroll position until desktop width, styled by the page.
+ */
+export default function PublicLayout({ title, description, stickyBar, bottomBar, headerSearch, onBook, children }: { title?: string; description: string; stickyBar?: ReactNode; bottomBar?: ReactNode; headerSearch?: ReactNode; onBook?: () => void; children: ReactNode }) {
     const { contact, seo } = usePage<any>().props as any;
     const [open, setOpen] = useState(false);
     const active = useActiveNav();
+    const scrolled = usePastFirstScreen(!!stickyBar || !!headerSearch);
+    const compact = !!headerSearch && scrolled;
+    const searchSlot = useInert<HTMLDivElement>(!compact);
+    // The menu links give way to the search; the side menu and footer still carry them.
+    const mainNav = useInert<HTMLElement>(compact);
     // The server's search title and description win, so crawlers and the browser agree.
     const fullTitle = seo?.title ?? (title ? `${title} | UNIQA SUITES` : 'UNIQA SUITES');
     const summary = seo?.description ?? description;
@@ -232,9 +264,14 @@ export default function PublicLayout({ title, description, stickyBookFor, childr
                 <meta property="og:description" content={summary} />
             </Head>
             <header className="sticky top-0 z-30 border-b border-gold/20 bg-chocolate text-ivory">
-                <div className={cn(PAGE_WIDTH, 'flex h-16 items-center justify-between gap-3')}>
+                <div className={cn(PAGE_WIDTH, 'relative flex h-16 items-center justify-between gap-3')}>
                     <Link href="/" aria-label="UNIQA SUITES home" className="flex min-h-11 shrink-0 items-center"><img src="/brand/uniqa-wordmark.png" alt="UNIQA SUITES" className="h-8 w-auto sm:h-12" /></Link>
-                    <nav aria-label="Main" className="hidden h-full items-stretch gap-8 text-xs font-medium tracking-[0.18em] uppercase lg:flex">
+                    {headerSearch && (
+                        <div ref={searchSlot} className={cn('absolute inset-y-0 left-1/2 hidden -translate-x-1/2 items-center transition-[opacity,transform] duration-300 md:flex', compact ? 'translate-y-0 opacity-100' : 'pointer-events-none -translate-y-2 opacity-0')}>
+                            {headerSearch}
+                        </div>
+                    )}
+                    <nav ref={mainNav} aria-label="Main" className={cn('hidden h-full items-stretch gap-8 text-[0.9375rem] font-medium transition-opacity duration-300 lg:flex', compact && 'pointer-events-none opacity-0')}>
                         {NAV.map((n) => {
                             const here = active === n.href;
 
@@ -247,38 +284,45 @@ export default function PublicLayout({ title, description, stickyBookFor, childr
                     </nav>
                     <div className="flex items-center gap-2">
                         <Socials contact={contact} className="-mr-1 text-beige max-lg:hidden" />
-                        <MessageButton tone="outline" small hideIfMissing className="max-md:hidden" />
+                        <MessageButton small hideIfMissing onClick={onBook} className="max-md:hidden" />
                         <button type="button" className="-mr-2 flex size-11 items-center justify-center lg:hidden" aria-label="Open menu" aria-haspopup="dialog" aria-expanded={open} aria-controls="side-menu" onClick={() => setOpen(true)}><Menu size={24} strokeWidth={1.5} aria-hidden /></button>
                     </div>
                 </div>
             </header>
-            <SideMenu open={open} onClose={() => setOpen(false)} contact={contact} active={active} />
+            <SideMenu open={open} onClose={() => setOpen(false)} contact={contact} active={active} onBook={onBook} />
             <main id="main" tabIndex={-1} className="flex-1 outline-none">{children}</main>
-            {stickyBookFor && <StickyBook targetId={stickyBookFor} />}
-            <footer className={cn('border-t border-gold/20 bg-chocolate text-beige', stickyBookFor && 'max-md:pb-20')}>
-                <div className={cn(PAGE_WIDTH, 'grid gap-10 py-14 text-sm sm:grid-cols-3')}>
-                    <div>
-                        <img src="/brand/uniqa-monogram.png" alt="" className="mb-3 h-14 w-auto" />
-                        <p className="max-w-xs leading-relaxed">Suites in Cagayan de Oro, at The Loop, Limketkai and Mesaverte Residences.</p>
+            {stickyBar && <StickyBar shown={scrolled}>{stickyBar === true ? <MessageButton hideIfMissing onClick={onBook} className="w-full" /> : stickyBar}</StickyBar>}
+            {bottomBar && <div className="fixed inset-x-0 bottom-0 z-30 lg:hidden">{bottomBar}</div>}
+            <footer className={cn('border-t border-gold/20 bg-chocolate text-beige', !!stickyBar && 'max-md:pb-20', !!bottomBar && 'max-lg:pb-20')}>
+                {/* On a phone: the brand on one line, then both link lists side by side, so the footer is about half a screen. */}
+                <div className={cn(PAGE_WIDTH, 'grid gap-6 py-8 text-sm sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)] sm:gap-10 sm:py-12')}>
+                    <div className="flex items-center gap-4 sm:block">
+                        <img src="/brand/uniqa-monogram.png" alt="" className="h-10 w-auto shrink-0 sm:mb-3 sm:h-14" />
+                        <p className="max-w-xs text-xs leading-relaxed sm:text-sm">Suites in Cagayan de Oro, at The Loop, Limketkai and Mesaverte Residences.</p>
                     </div>
-                    <div>
-                        <h2 className="mb-3 text-xs font-medium tracking-[0.22em] text-gold uppercase">Explore</h2>
-                        <ul className="space-y-2">
-                            {NAV.map((n) => <li key={n.href}><Link href={n.href} onClick={(e) => scrollToSection(e, n)} className="inline-block transition-colors hover:text-gold pointer-coarse:py-3">{n.label}</Link></li>)}
-                            <li><Link href="/policies#privacy" className="inline-block transition-colors hover:text-gold pointer-coarse:py-3">Privacy notice</Link></li>
-                        </ul>
+                    <div className="grid grid-cols-2 gap-6 sm:contents">
+                        <div className="min-w-0">
+                            <h2 className={FOOTER_HEADING}>Explore</h2>
+                            <ul>
+                                {NAV.map((n) => <li key={n.href}><Link href={n.href} onClick={(e) => scrollToSection(e, n)} className={FOOTER_LINK}>{n.label}</Link></li>)}
+                                <li><Link href="/policies#privacy" className={FOOTER_LINK}>Privacy notice</Link></li>
+                            </ul>
+                        </div>
+                        <div className="min-w-0">
+                            <h2 className={FOOTER_HEADING}>Contact</h2>
+                            <ul>
+                                {contact.messenger_url && <li><a href={contact.messenger_url} target="_blank" rel="noreferrer" className={FOOTER_LINK}>Messenger</a></li>}
+                                {contact.phone && <li><a href={`tel:${String(contact.phone).replace(/[^\d+]/g, '')}`} className={FOOTER_LINK}>{contact.phone}</a></li>}
+                                {contact.email && <li><a href={`mailto:${contact.email}`} className={cn(FOOTER_LINK, 'break-all')}>{contact.email}</a></li>}
+                                {!contact.messenger_url && !contact.phone && !contact.email && <li className="py-2">Official contact details coming soon.</li>}
+                            </ul>
+                        </div>
                     </div>
-                    <div>
-                        <h2 className="mb-3 text-xs font-medium tracking-[0.22em] text-gold uppercase">Contact</h2>
-                        <ul className="space-y-2">
-                            {contact.messenger_url && <li><a href={contact.messenger_url} target="_blank" rel="noreferrer" className="inline-block transition-colors hover:text-gold pointer-coarse:py-3">Messenger</a></li>}
-                            {contact.instagram_url && <li><a href={contact.instagram_url} target="_blank" rel="noreferrer" className="inline-block transition-colors hover:text-gold pointer-coarse:py-3">Instagram</a></li>}
-                            {contact.facebook_url && <li><a href={contact.facebook_url} target="_blank" rel="noreferrer" className="inline-block transition-colors hover:text-gold pointer-coarse:py-3">Facebook</a></li>}
-                            {contact.tiktok_url && <li><a href={contact.tiktok_url} target="_blank" rel="noreferrer" className="inline-block transition-colors hover:text-gold pointer-coarse:py-3">TikTok</a></li>}
-                            {contact.phone && <li>{contact.phone}</li>}
-                            {contact.email && <li>{contact.email}</li>}
-                            {!contact.messenger_url && !contact.phone && !contact.email && <li>Official contact details coming soon.</li>}
-                        </ul>
+                </div>
+                <div className="border-t border-gold/15">
+                    <div className={cn(PAGE_WIDTH, 'flex items-center justify-between gap-4 py-2 text-xs')}>
+                        <p>© {new Date().getFullYear()} UNIQA SUITES</p>
+                        <Socials contact={contact} className="-mr-3 text-beige" />
                     </div>
                 </div>
             </footer>

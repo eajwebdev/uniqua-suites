@@ -274,7 +274,8 @@ export function DynamicField({ field, value, error, onChange }: { field: FieldDe
     );
 }
 
-export function Modal({ open, onClose, title, children, wide }: { open: boolean; onClose: () => void; title: string; children: ReactNode; wide?: boolean }) {
+/** `footer` sits under the scrolling body, so whatever it holds stays in view however far the content is scrolled. */
+export function Modal({ open, onClose, title, children, wide, footer }: { open: boolean; onClose: () => void; title: string; children: ReactNode; wide?: boolean; footer?: ReactNode }) {
     const ref = useRef<HTMLDialogElement>(null);
     useEffect(() => {
         if (open && !ref.current?.open) ref.current?.showModal();
@@ -289,6 +290,7 @@ export function Modal({ open, onClose, title, children, wide }: { open: boolean;
                 </Button>
             </header>
             <div className="max-h-[75vh] overflow-y-auto p-5">{children}</div>
+            {footer}
         </dialog>
     );
 }

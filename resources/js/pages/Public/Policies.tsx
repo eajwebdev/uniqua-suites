@@ -23,19 +23,19 @@ export default function Policies({ policy, faqs: added = [] }: any) {
 
     return (
         <PublicLayout title="Policies & FAQ" description="How to book with UNIQA SUITES, check-in, early arrival, extra guests and parking, plus our privacy notice.">
-            <div className="mx-auto max-w-3xl px-4 py-10">
-                <h1 className="mb-6 font-serif text-4xl font-medium">Policies &amp; FAQ</h1>
-                <div className="space-y-5">
+            <div className="mx-auto w-full max-w-3xl px-5 py-8 sm:px-8 sm:py-12">
+                <h1 className="mb-6 text-[1.75rem] leading-tight font-semibold tracking-tight sm:text-4xl">Policies &amp; FAQ</h1>
+                <div className="divide-y divide-line border-y border-line">
                     {faqs.map(([q, a]) => (
-                        <section key={q}>
-                            <h2 className="font-serif text-xl font-semibold">{q}</h2>
+                        <section key={q} className="py-4">
+                            <h2 className="text-base font-semibold">{q}</h2>
                             <p className="mt-1 text-base whitespace-pre-line text-muted sm:text-sm">{a}</p>
                         </section>
                     ))}
                 </div>
                 <div className="mt-8"><MessageButton tone="dark" /></div>
-                <section id="privacy" className="mt-10 border-t border-line pt-6">
-                    <h2 className="mb-2 font-serif text-2xl font-medium">Privacy notice</h2>
+                <section id="privacy" className="mt-10 scroll-mt-20">
+                    <h2 className="mb-2 text-xl font-semibold tracking-tight">Privacy notice</h2>
                     <p className="text-base text-muted sm:text-sm">This website does not ask for your details or take payments. Details you share when you message us are used to respond to your inquiry and manage your stay, and are accessible only to authorized staff.</p>
                 </section>
             </div>

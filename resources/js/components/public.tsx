@@ -36,8 +36,11 @@ export function AmenityIcon({ name, size = 22, className }: { name: string; size
 }
 
 export function Eyebrow({ children, light, className }: { children: React.ReactNode; light?: boolean; className?: string }) {
-    return <p className={cn('text-xs font-medium tracking-[0.3em] uppercase', light ? 'text-gold' : 'text-bronze', className)}>{children}</p>;
+    return <p className={cn('text-sm font-medium', light ? 'text-gold' : 'text-bronze', className)}>{children}</p>;
 }
+
+/** Suite names are stored in capitals; on the page they read as ordinary words, like "New York". */
+export const suiteName = (name: string) => String(name ?? '').toLowerCase().replace(/(^|[\s-])\p{L}/gu, (c) => c.toUpperCase());
 
 /** Guests cannot book on this site: booking happens in a Messenger chat with staff. Null until the owner supplies the link. */
 export function useChatLink(): string | null {
@@ -54,7 +57,7 @@ function chatAboutDates(url: string, room: string, checkIn: string, checkOut: st
     return `${url}${url.includes('?') ? '&' : '?'}text=${encodeURIComponent(text)}`;
 }
 
-const BUTTON = 'inline-flex items-center justify-center gap-2.5 text-[0.8125rem] font-medium tracking-[0.18em] whitespace-nowrap uppercase transition-colors duration-200';
+const BUTTON = 'inline-flex items-center justify-center gap-2 rounded-lg text-[0.9375rem] font-semibold whitespace-nowrap transition-colors duration-200';
 
 const BUTTON_TONES = {
     gold: 'bg-gold text-chocolate hover:bg-ivory active:bg-ivory',
@@ -67,8 +70,11 @@ export function linkButton(tone: keyof typeof BUTTON_TONES = 'gold', small?: boo
     return cn(BUTTON, BUTTON_TONES[tone], small ? 'min-h-10 px-4 pointer-coarse:min-h-11' : 'min-h-12 px-7');
 }
 
-/** With no suite chosen yet, Book Now leads to the taken dates. Only a suite's own panel opens the chat, and only with free dates. */
-export function MessageButton({ label = 'Book Now', tone = 'gold', small, hideIfMissing, className }: { label?: string; tone?: keyof typeof BUTTON_TONES; small?: boolean; hideIfMissing?: boolean; className?: string }) {
+/**
+ * With no suite chosen yet, Book Now leads to the taken dates. Only a suite's own panel opens the chat, and only with free dates.
+ * A page that has its own date picker passes `onClick`, so Book Now opens it in place instead of leaving the guest's spot.
+ */
+export function MessageButton({ label = 'Book Now', tone = 'gold', small, hideIfMissing, className, onClick }: { label?: string; tone?: keyof typeof BUTTON_TONES; small?: boolean; hideIfMissing?: boolean; className?: string; onClick?: () => void }) {
     const url = useChatLink();
 
     if (!url) {
@@ -76,13 +82,24 @@ export function MessageButton({ label = 'Book Now', tone = 'gold', small, hideIf
     }
 
     return (
-        <a href="/#availability" aria-label="Book now: choose a suite and dates" className={cn(linkButton(tone, small), className)}>
+        <a
+            href="/#availability"
+            aria-label="Book now: choose a suite and dates"
+            aria-haspopup={onClick ? 'dialog' : undefined}
+            onClick={onClick && ((e) => {
+                // Modified clicks keep their usual meaning, such as opening a new tab.
+                if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                e.preventDefault();
+                onClick();
+            })}
+            className={cn(linkButton(tone, small), className)}
+        >
             <MessageCircle size={small ? 15 : 17} strokeWidth={1.5} aria-hidden /> {label}
         </a>
     );
 }
 
-const addDays = (date: string, days: number) => new Date(Date.parse(`${date}T00:00:00Z`) + days * 86400000).toISOString().slice(0, 10);
+export const addDays = (date: string, days: number) => new Date(Date.parse(`${date}T00:00:00Z`) + days * 86400000).toISOString().slice(0, 10);
 
 export const todayInManila = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date());
 
@@ -129,7 +146,7 @@ export function useStayDates() {
 /** The guest's dates. Whatever lists suites beside it filters itself as soon as both are chosen. */
 export function DateFilter({ stay, className, bare }: { stay: ReturnType<typeof useStayDates>; className?: string; bare?: boolean }) {
     const today = todayInManila();
-    const label = 'flex flex-col gap-1.5 text-xs font-medium tracking-[0.14em] text-muted uppercase';
+    const label = 'flex flex-col gap-1.5 text-xs font-semibold text-chocolate';
     const input = 'w-full min-w-0 font-normal tracking-normal normal-case sm:w-44';
 
     return (
@@ -215,7 +232,13 @@ export function MonthGrid({ room, month, checkIn, checkOut }: { room: any; month
  * Three checks stand between a guest and the chat: taken dates cannot be picked here, the server
  * re-reads live inventory before Book Now unlocks, and staff are still refused any overlap when they enter it.
  */
-export function BookingPanel({ room, initialIn = '', initialOut = '', guests }: { room: any; initialIn?: string; initialOut?: string; guests?: string }) {
+// Written out in full so Tailwind finds both classes.
+const PINNED_HIDE = { md: 'max-md:hidden', lg: 'max-lg:hidden' } as const;
+
+export type BookingStatus = { checkIn: string; checkOut: string; state: 'idle' | 'checking' | 'free' | 'taken'; href: string | null; track: () => void };
+
+/** `pinnedButton`: below this width a pinned bar already carries Book Now, so the panel's own button would only repeat it. */
+export function BookingPanel({ room, initialIn = '', initialOut = '', guests, onStatus, pinnedButton }: { room: any; initialIn?: string; initialOut?: string; guests?: string; onStatus?: (status: BookingStatus) => void; pinnedButton?: 'md' | 'lg' }) {
     const today = todayInManila();
     const chat = useChatLink();
     const taken = useMemo(() => takenNights(room), [room]);
@@ -249,6 +272,14 @@ export function BookingPanel({ room, initialIn = '', initialOut = '', guests }: 
 
         return () => request.abort();
     }, [checkIn, checkOut, room.slug]);
+
+    // The chat opens only for dates the server has just confirmed free, wherever the button that opens it sits.
+    const href = result.state === 'free' && chat ? chatAboutDates(chat, room.name, checkIn, checkOut, guests) : null;
+    const track = () => reportBookClick({ kind: 'suite', slug: room.slug, from: checkIn, to: checkOut, guests: Number(guests) > 0 ? Number(guests) : undefined });
+
+    useEffect(() => {
+        onStatus?.({ checkIn, checkOut, state: result.state, href, track });
+    }, [checkIn, checkOut, result.state, href]);
 
     const pick = (date: string) => {
         if (!checkIn || checkOut || date <= checkIn) {
@@ -298,12 +329,12 @@ export function BookingPanel({ room, initialIn = '', initialOut = '', guests }: 
                 {result.state === 'taken' && <p className="flex items-start gap-2 text-sm font-medium text-red-900"><CalendarX size={16} className="mt-0.5 shrink-0" aria-hidden /> {result.message}</p>}
             </div>
 
-            {result.state === 'free' && chat ? (
-                <a href={chatAboutDates(chat, room.name, checkIn, checkOut, guests)} target="_blank" rel="noreferrer" aria-label={`Book ${room.name} now on Messenger`} onClick={() => reportBookClick({ kind: 'suite', slug: room.slug, from: checkIn, to: checkOut, guests: Number(guests) > 0 ? Number(guests) : undefined })} className={cn(linkButton('dark'), 'mt-3 w-full')}>
+            {href ? (
+                <a href={href} target="_blank" rel="noreferrer" aria-label={`Book ${room.name} now on Messenger`} onClick={track} className={cn(linkButton('dark'), 'mt-3 w-full', pinnedButton && PINNED_HIDE[pinnedButton])}>
                     <MessageCircle size={17} strokeWidth={1.5} aria-hidden /> Book Now
                 </a>
             ) : (
-                <button type="button" disabled className={cn(linkButton('dark'), 'mt-3 w-full cursor-not-allowed opacity-40')}><MessageCircle size={17} strokeWidth={1.5} aria-hidden /> Book Now</button>
+                <button type="button" disabled className={cn(linkButton('dark'), 'mt-3 w-full cursor-not-allowed opacity-40', pinnedButton && PINNED_HIDE[pinnedButton])}><MessageCircle size={17} strokeWidth={1.5} aria-hidden /> Book Now</button>
             )}
             <p className="mt-3 text-xs leading-relaxed text-muted">Book Now opens a Messenger chat with us. Your dates are reserved only when our staff confirm them there. No payment happens on this website.</p>
         </div>
@@ -320,7 +351,7 @@ export function BookNow({ room, initialIn, initialOut, guests, small = true, ton
             <button type="button" aria-label={`Book ${room.name} now: choose your dates`} onClick={() => setOpen(true)} className={cn(linkButton(tone, small), className)}>
                 <MessageCircle size={small ? 15 : 17} strokeWidth={1.5} aria-hidden /> Book Now
             </button>
-            {open && <Modal open title={`Book ${room.name}`} onClose={() => setOpen(false)}><BookingPanel room={room} initialIn={initialIn} initialOut={initialOut} guests={guests} /></Modal>}
+            {open && <Modal open title={`Book ${suiteName(room.name)}`} onClose={() => setOpen(false)}><BookingPanel room={room} initialIn={initialIn} initialOut={initialOut} guests={guests} /></Modal>}
         </>
     );
 }
@@ -356,8 +387,8 @@ export function RoomRate({ room, large, className }: { room: any; large?: boolea
 
     return (
         <div className={cn('flex flex-wrap items-baseline gap-x-2 gap-y-0.5', className)}>
-            {rate.weekday !== rate.weekend && <span className="text-xs tracking-[0.14em] text-muted uppercase">From</span>}
-            <span className={cn('font-serif font-normal text-chocolate', large ? 'text-4xl' : 'text-2xl')}>{pesoWhole(low)}</span>
+            {rate.weekday !== rate.weekend && <span className="text-sm text-muted">From</span>}
+            <span className={cn('font-semibold text-chocolate', large ? 'text-3xl' : 'text-xl')}>{pesoWhole(low)}</span>
             <span className="text-sm text-muted">/ night</span>
             {rate.weekday !== rate.weekend && (
                 <span className="w-full text-xs text-muted">Weekdays {pesoWhole(rate.weekday)} · Weekends {pesoWhole(rate.weekend)}</span>
@@ -371,7 +402,7 @@ export function SuitePhoto({ image, name, className, eager }: { image?: { url: s
     if (!image) {
         return (
             <div className={cn('flex items-center justify-center bg-chocolate', className)}>
-                <span className="font-serif text-3xl font-light tracking-[0.2em] text-ivory uppercase">{name}</span>
+                <span className="text-2xl font-semibold text-ivory">{suiteName(name)}</span>
             </div>
         );
     }
@@ -420,31 +451,34 @@ export function useSuiteFilters() {
     };
 }
 
-const FILTER_LABEL = 'flex min-w-0 flex-col gap-1.5 text-xs font-medium tracking-[0.14em] text-muted uppercase [&>*]:font-normal [&>*]:tracking-normal [&>*]:normal-case';
+const FILTER_LABEL = 'flex min-w-0 flex-col gap-1.5 text-xs font-semibold text-chocolate [&>*]:font-normal';
 
 /** The suites' addresses as tabs, so The Loop or Mesaverte is one tap from the list. */
-export function LocationTabs({ value, onChange, properties, counts, className }: { value: string; onChange: (slug: string) => void; properties: any[]; counts: Record<string, number>; className?: string }) {
+/** `extra` joins the end of the row, such as a Filters button, and wraps along with the tabs. */
+export function LocationTabs({ value, onChange, properties, counts, className, extra }: { value: string; onChange: (slug: string) => void; properties: any[]; counts: Record<string, number>; className?: string; extra?: React.ReactNode }) {
     const options = [{ slug: '', name: 'All locations' }, ...properties.filter((p: any) => counts[p.slug])];
 
     return (
-        <div role="group" aria-label="Location" className={cn('flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none]', className)}>
+        // Wraps instead of scrolling sideways, so every location is visible without hunting for it.
+        <div role="group" aria-label="Location" className={cn('flex flex-wrap gap-2', className)}>
             {options.map((p: any) => {
                 const on = value === p.slug;
 
                 return (
-                    <button key={p.slug || 'all'} type="button" aria-pressed={on} onClick={() => onChange(p.slug)} className={cn('flex min-h-11 shrink-0 items-center gap-2 border px-4 text-xs font-medium tracking-[0.14em] whitespace-nowrap uppercase transition-colors', on ? 'border-chocolate bg-chocolate text-ivory' : 'border-line bg-white text-chocolate hover:border-bronze hover:text-bronze')}>
+                    <button key={p.slug || 'all'} type="button" aria-pressed={on} onClick={() => onChange(p.slug)} className={cn('flex min-h-10 items-center gap-1.5 rounded-full border px-4 text-sm font-medium whitespace-nowrap transition-colors pointer-coarse:min-h-11', on ? 'border-chocolate bg-chocolate text-ivory' : 'border-line bg-white text-chocolate hover:border-chocolate')}>
                         {p.name}
-                        <span className={cn('text-[0.7rem] tracking-normal', on ? 'text-gold' : 'text-muted')}>{p.slug ? counts[p.slug] : counts['']}</span>
+                        <span className={cn('text-xs font-normal', on ? 'text-gold' : 'text-muted')}>{p.slug ? counts[p.slug] : counts['']}</span>
                     </button>
                 );
             })}
+            {extra}
         </div>
     );
 }
 
 export function SuiteFilterPanel({ stay, filters, setFilter, types, className }: { stay: ReturnType<typeof useStayDates>; filters: SuiteFilters; setFilter: (key: keyof SuiteFilters, value: string | boolean) => void; types: any[]; className?: string }) {
     return (
-        <div className={cn('grid grid-cols-2 items-end gap-x-3 gap-y-4 border border-line bg-white p-4 sm:flex sm:flex-wrap sm:gap-x-5 sm:p-5', className)}>
+        <div className={cn('grid grid-cols-2 items-end gap-x-3 gap-y-4 rounded-xl border border-line bg-white p-4 sm:flex sm:flex-wrap sm:gap-x-5 sm:p-5', className)}>
             <DateFilter stay={stay} bare />
             <label className={FILTER_LABEL}>Type
                 <Select className="w-full sm:w-auto sm:min-w-36" placeholder="Any" options={types.map((t: any) => ({ value: t.slug, label: t.name }))} value={filters.type} onChange={(e) => setFilter('type', e.target.value)} />
@@ -482,7 +516,7 @@ function PhotoViewer({ images, name }: { images: { url: string; alt: string }[];
                     if (many && Math.abs(moved) > SWIPE_PHOTO_PX) step(moved < 0 ? 1 : -1);
                 }}
             >
-                <SuitePhoto key={images[index].url} image={images[index]} name={name} eager className="aspect-[3/2]" />
+                <SuitePhoto key={images[index].url} image={images[index]} name={name} eager className="aspect-[3/2] rounded-xl" />
                 {many && (
                     <>
                         <button type="button" onClick={() => step(-1)} aria-label="Previous photo" className="absolute top-1/2 left-2 flex size-11 -translate-y-1/2 items-center justify-center rounded-full bg-chocolate/70 text-ivory transition-colors hover:bg-chocolate"><ChevronLeft size={22} strokeWidth={1.5} aria-hidden /></button>
@@ -506,30 +540,74 @@ function PhotoViewer({ images, name }: { images: { url: string; alt: string }[];
     );
 }
 
+/**
+ * The bar a booking site keeps pinned under a listing on a phone: the price, the dates chosen so far, and Book Now.
+ * Book Now opens the chat once the panel has confirmed the dates are free; until then it brings the calendar into view.
+ */
+export function PinnedBook({ room, status, onChoose, className }: { room: any; status: BookingStatus | null; onChoose: () => void; className?: string }) {
+    const low = room.rate ? Math.min(room.rate.weekday, room.rate.weekend) : null;
+    const dated = !!status?.checkIn && !!status?.checkOut;
+
+    return (
+        <div className={cn('flex items-center justify-between gap-3 bg-white', className)}>
+            <div className="min-w-0 leading-tight">
+                {low !== null && <p className="truncate"><span className="text-base font-semibold">{pesoWhole(low)}</span> <span className="text-sm text-muted">/ night</span></p>}
+                <button type="button" onClick={onChoose} className="max-w-full truncate text-xs font-medium underline underline-offset-2 pointer-coarse:min-h-8">
+                    {dated ? `${shortDate(status!.checkIn)} – ${shortDate(status!.checkOut)}` : 'Choose your dates'}
+                </button>
+                {status?.state === 'taken' && <p className="truncate text-xs text-red-900">Not free, please change dates</p>}
+            </div>
+            {status?.href ? (
+                <a href={status.href} target="_blank" rel="noreferrer" aria-label={`Book ${room.name} now on Messenger`} onClick={status.track} className={cn(linkButton('dark', true), 'shrink-0')}>
+                    <MessageCircle size={15} strokeWidth={1.5} aria-hidden /> Book Now
+                </a>
+            ) : (
+                <button type="button" onClick={onChoose} disabled={status?.state === 'checking'} className={cn(linkButton('dark', true), 'shrink-0 disabled:opacity-60')}>
+                    {status?.state === 'checking' ? <Loader2 size={15} className="animate-spin" aria-hidden /> : <MessageCircle size={15} strokeWidth={1.5} aria-hidden />} Book Now
+                </button>
+            )}
+        </div>
+    );
+}
+
 /** Everything about a suite, without leaving the list. */
 function SuiteDetails({ room, checkIn, checkOut, guests, onClose }: { room: any; checkIn?: string; checkOut?: string; guests?: string; onClose: () => void }) {
     const { policy } = usePage<any>().props as any;
+    const chat = useChatLink();
+    const [status, setStatus] = useState<BookingStatus | null>(null);
+    const panel = useRef<HTMLElement>(null);
+
+    // On a phone the booking panel sits below the photos and details, so its calendar is brought into view on demand.
+    const toPanel = () => {
+        const smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        panel.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start' });
+    };
+
+    const footer = chat && !room.closed && (
+        // Pinned under the details: the price and Book Now never scroll away. From tablet width the panel sits beside the details instead.
+        <PinnedBook room={room} status={status} onChoose={toPanel} className="border-t border-line/70 px-5 py-3 md:hidden" />
+    );
 
     return (
-        <Modal open wide title={room.name} onClose={onClose}>
+        <Modal open wide title={suiteName(room.name)} onClose={onClose} footer={footer}>
             <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_20rem]">
                 <div className="min-w-0 space-y-5">
                     <PhotoViewer images={room.images ?? []} name={room.name} />
                     <div>
-                        <Eyebrow className="mb-2 tracking-[0.22em]">{room.location}</Eyebrow>
-                        {room.description && <p className="font-serif text-xl leading-snug font-light sm:text-2xl">{room.description}</p>}
+                        <Eyebrow className="mb-1">{room.location}</Eyebrow>
+                        {room.description && <p className="text-base leading-relaxed">{room.description}</p>}
                     </div>
                     <RoomRate room={room} />
                     <RoomFacts room={room} className="gap-x-5 border-y border-line py-3" />
                     {room.inclusions && (
                         <section>
-                            <h3 className="mb-1 font-serif text-xl font-normal">Beds and inclusions</h3>
+                            <h3 className="mb-1 text-base font-semibold">Beds and inclusions</h3>
                             <p className="text-sm leading-relaxed whitespace-pre-line text-muted">{room.inclusions}</p>
                         </section>
                     )}
                     {room.amenities?.length > 0 && (
                         <section>
-                            <h3 className="mb-2 font-serif text-xl font-normal">Amenities</h3>
+                            <h3 className="mb-2 text-base font-semibold">Amenities</h3>
                             <ul className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
                                 {room.amenities.map((name: string) => <li key={name} className="flex items-center gap-2"><AmenityIcon name={name} size={18} className="shrink-0 text-bronze" /> {name}</li>)}
                             </ul>
@@ -537,16 +615,16 @@ function SuiteDetails({ room, checkIn, checkOut, guests, onClose }: { room: any;
                     )}
                     {policy && (
                         <section>
-                            <h3 className="mb-1 font-serif text-xl font-normal">Check-in</h3>
+                            <h3 className="mb-1 text-base font-semibold">Check-in</h3>
                             <p className="text-sm leading-relaxed text-muted">Standard check-in: {time12(policy.standard_check_in)}{policy.standard_check_out ? ` · Check-out: ${time12(policy.standard_check_out)}` : ''}. Need to arrive earlier? Please ask us.</p>
                             {room.policies && <p className="mt-1 text-sm whitespace-pre-line text-muted">{room.policies}</p>}
                         </section>
                     )}
                 </div>
-                <aside className="min-w-0 md:sticky md:top-0 md:self-start">
-                    <div className="border border-line bg-ivory/40 p-4">
-                        <h3 className="mb-2 font-serif text-xl font-normal">Check dates and book</h3>
-                        <BookingPanel room={room} initialIn={checkIn} initialOut={checkOut} guests={guests} />
+                <aside ref={panel} className="min-w-0 scroll-mt-2 md:sticky md:top-0 md:self-start">
+                    <div className="rounded-xl border border-line bg-ivory/40 p-4">
+                        <h3 className="mb-2 text-lg font-semibold">Check dates and book</h3>
+                        <BookingPanel room={room} initialIn={checkIn} initialOut={checkOut} guests={guests} onStatus={setStatus} pinnedButton={footer ? 'md' : undefined} />
                     </div>
                 </aside>
             </div>
@@ -560,19 +638,20 @@ export function RoomCard({ room, feature, checkIn, checkOut, guests }: { room: a
     return (
         <article className={cn('group flex flex-1 flex-col', feature && 'lg:grid lg:grid-cols-12 lg:items-center lg:gap-14')}>
             <button type="button" onClick={() => setViewing(true)} aria-label={`See ${room.name} photos and details`} className={cn('block w-full text-left', feature && 'lg:col-span-8')}>
-                <SuitePhoto image={room.images?.[0]} name={room.name} className={feature ? 'aspect-[3/2] lg:aspect-[16/9]' : 'aspect-[3/2]'} />
+                <SuitePhoto image={room.images?.[0]} name={room.name} className={cn('rounded-xl', feature ? 'aspect-[3/2] lg:aspect-[16/9]' : 'aspect-[3/2]')} />
             </button>
-            <div className={cn('flex flex-1 flex-col pt-5', feature && 'lg:col-span-4 lg:pt-0')}>
-                <Eyebrow className="mb-2 tracking-[0.22em]">{room.location}</Eyebrow>
-                <h3 className={cn('font-serif font-normal tracking-[0.08em] uppercase', feature ? 'text-4xl sm:text-5xl' : 'text-3xl')}>
-                    <button type="button" onClick={() => setViewing(true)} className="text-left tracking-[inherit] uppercase transition-colors hover:text-bronze pointer-coarse:py-1">{room.name}</button>
+            <div className={cn('flex flex-1 flex-col pt-4', feature && 'lg:col-span-4 lg:pt-0')}>
+                <Eyebrow className="mb-0.5">{room.location}</Eyebrow>
+                <h3 className={cn('font-semibold tracking-tight', feature ? 'text-2xl sm:text-3xl' : 'text-lg')}>
+                    <button type="button" onClick={() => setViewing(true)} className="text-left transition-colors hover:text-bronze pointer-coarse:py-1">{suiteName(room.name)}</button>
                 </h3>
-                {room.description && <p className={cn('mt-2 text-muted', feature ? 'text-base leading-relaxed' : 'text-sm leading-relaxed')}>{room.description}</p>}
+                {/* The whole description is one tap away in View room, so the list stays short. */}
+                {room.description && <p className={cn('mt-1.5 text-muted', feature ? 'text-base leading-relaxed' : 'line-clamp-2 text-sm leading-relaxed')}>{room.description}</p>}
                 <RoomFacts room={room} className="mt-3 text-muted" />
-                <RoomRate room={room} className="mt-4 border-t border-line pt-4" />
-                <div className="mt-auto flex flex-wrap items-center gap-x-6 gap-y-2 pt-5">
+                <RoomRate room={room} className="mt-3 border-t border-line pt-3" />
+                <div className="mt-auto flex flex-wrap items-center gap-x-6 gap-y-2 pt-4">
                     <BookNow key={`${checkIn}-${checkOut}`} room={room} initialIn={checkIn} initialOut={checkOut} guests={guests} />
-                    <button type="button" onClick={() => setViewing(true)} aria-label={`View ${room.name} room`} className="inline-flex items-center gap-1.5 text-[0.8125rem] font-medium tracking-[0.14em] uppercase transition-colors hover:text-bronze pointer-coarse:min-h-11">
+                    <button type="button" onClick={() => setViewing(true)} aria-label={`View ${room.name} room`} className="inline-flex items-center gap-1.5 text-[0.9375rem] font-semibold underline underline-offset-4 transition-colors hover:text-bronze pointer-coarse:min-h-11">
                         View room <ArrowRight size={14} strokeWidth={1.5} aria-hidden />
                     </button>
                 </div>
